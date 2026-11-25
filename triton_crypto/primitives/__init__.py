@@ -26,7 +26,7 @@ The two domains in use:
 
 from __future__ import annotations
 
-from . import keccak, ntt, sponge
+from . import keccak, ntt, sha2, sponge
 from .ntt import (
     DILITHIUM,
     KYBER,
@@ -37,6 +37,15 @@ from .ntt import (
     negacyclic_conv_np,
     ntt_np,
     ntt_torch,
+)
+from .sha2 import (
+    IV256,
+    IV512,
+    K256,
+    K512,
+    compress_np,
+    hash_np,
+    sha_absorb,
 )
 from .sponge import (
     DOMAIN_SHA3,
@@ -61,6 +70,10 @@ __all__ = [
     "DOMAIN_SHA3",
     "DOMAIN_SHAKE",
     "HASHES",
+    "IV256",
+    "IV512",
+    "K256",
+    "K512",
     "KYBER",
     "SHA3_256",
     "SHA3_512",
@@ -68,7 +81,9 @@ __all__ = [
     "SHAKE256",
     "HashFn",
     "NTTDomain",
+    "compress_np",
     "get_sponge",
+    "hash_np",
     "hash_np_batch",
     "intt_np",
     "intt_torch",
@@ -82,6 +97,8 @@ __all__ = [
     "pad_batch",
     "pad_torch",
     "padded_len",
+    "sha2",
+    "sha_absorb",
     "sponge",
     "sponge_padded",
 ]

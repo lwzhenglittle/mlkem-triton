@@ -27,6 +27,7 @@ variant.
 | `keccak_f_kernel` | `primitives/keccak.py` | primitive | `(cdiv(n, BLOCK),)` | `keccak.py` only (tests, `sponge`) |
 | `sponge_kernel` | `primitives/sponge.py` | primitive | `(cdiv(n, BLOCK),)` | `sponge_padded`, `get_sponge`, `padcat` users |
 | `ntt_kernel` | `primitives/ntt.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
+| `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
 | `_gemm_modq_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
 | `padcat2_kernel` | `kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
@@ -111,6 +112,27 @@ by `(iteration, row)`.
 Montgomery form and the reduction is `t = (a*b * QINV) mod 2³²; r = (a*b - t*Q) >> 32`, which is
 bit-identical to the reference and 1.92× faster than the naive int64 modulo. `MONT=True` switches
 the same reduction on for a narrow `q` (1.66× on ML-KEM's q = 3329).
+
+### `sha_kernel(HIN, KT, MSG, OUT, rows, NW, NOUT, BLOCK)` — `primitives/sha2.py`
+
+SHA-256 / SHA-512 compression, absorbing `nblocks` fixed-size blocks from a given input state.
+Generated per `(bits, nblocks)`; the round loop is rolled (one body, `KT` from a tensor) so the
+source stays short.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `HIN` | `[8]` | `int32`/`int64` | state to start from (`sha2.iv_tensor` for a fresh hash, or the state after a constant prefix) |
+| `KT` | `[64]`/`[80]` | same | round constants |
+| `MSG` | `[rows, nblocks*16]` | same | pre-padded message, little-endian words (swapped on load) |
+| `OUT` | `[rows, 8]` | same | final state, byte-swapped back so a `uint8` view reads big-endian |
+
+The point of "start from a state" is that the first block of every SLH-DSA SHA-2 hash is
+`blockpad(PK.seed)`, constant per parameter set: its state is computed once on the host
+(`sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
+different hash function.
+
+The numpy side (`compress_np`, `hash_np`) is checked against `hashlib`, and the kernel against the
+numpy side, for both digest sizes and several block counts (`tests/test_sha2.py`).
 
 ## Generic (scheme-agnostic)
 
