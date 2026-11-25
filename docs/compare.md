@@ -138,26 +138,19 @@ full-range × full-range, which this scheme never performs.
 
 ## 1. Our data
 
-Machines, conventions and complete tables are in [docs/benchmarks.md](benchmarks.md). **Device-
-side** is the wall clock of `decaps_torch()` including the 13 Python-side enqueues but excluding
-H2D/D2H; **end-to-end** includes numpy packing, H2D and D2H. Values are min-of-N, N = 10–25,
-byte-checked against the ACVP vectors, and **absolute numbers jitter by ±20%** because the clocks
-drift and cannot be locked — only same-process paired ratios are trusted here.
+Both machines, the timing conventions and the complete measured tables are in
+[docs/benchmarks.md](benchmarks.md). In short: an **Intel Arc B390** integrated GPU (96 EU,
+Xe3-LPG, 16 MB last-level cache, 0.9 GHz idle to ~2.2 GHz) and an **NVIDIA GB10** (48 SM,
+`sm_121`, 2.418 GHz). This document uses **device-side** for the wall clock of `decaps_torch()`
+including the 13 Python-side enqueues but excluding H2D/D2H, and **end-to-end** when packing, H2D
+and D2H are included. Values are min-of-N with N = 10–25, byte-checked against the ACVP vectors;
+**absolute numbers jitter by ±20%** because the clocks drift and cannot be locked, so only
+same-process paired ratios are trusted here.
 
-| | Intel Arc B390 | NVIDIA GB10 |
-|---|---|---|
-| form factor | integrated GPU, B390 / Xe3-LPG | DGX Spark single chip, `sm_121` |
-| compute units | 96 EU / 12 subslice | 48 SM |
-| clock | 0.9 GHz idle / ~2.2 GHz loaded | 2.418 GHz |
-| software | torch 2.15.0+xpu / triton-xpu 3.9.0 | torch 2.14.0+cu130 / triton 3.8.0 |
-
-| | Intel Arc B390 | NVIDIA GB10 |
-|---|---:|---:|
-| asymptotic decaps, device-side | 3.2 Mops/s | 8.0 Mops/s |
-| decaps, end-to-end, B=8192 | 0.41 µs/op | 0.227 µs/op |
-| single-op latency, B=1 | 966 µs | 282 µs |
-| GEMM share of same-shape `tl.dot` peak | ~24% | ~28% |
-| ML-KEM-512 slower than 768, device-side | 3.0× | 5.8× |
+The figures the rest of this comparison leans on: asymptotic device-side decaps **3.2 Mops/s**
+(Arc) and **8.0 Mops/s** (GB10), i.e. 0.41 and 0.227 µs/op end-to-end at B=8192; single-op
+latency at B=1 of **966 µs** and **282 µs**; GEMM at **~24%** and **~28%** of the same-shape
+`tl.dot` peak; and ML-KEM-512 **3.0×** / **5.8×** slower than 768.
 
 CPU baseline on the same machines (liboqs 0.16.0, same ACVP ciphertexts): **9.52 µs/op**
 single-threaded decaps and **1.375 µs/op** across 16 concurrent processes; encaps is 7.82 and
@@ -314,46 +307,33 @@ Intel. Batch convergence saturates after 2.6e5.
 
 ## 4. Our advantages
 
-**4.1 No NTT — the whole path is dense.** The NTT's bottleneck is not arithmetic volume but
-access pattern: butterfly strides of 128/64/…/1 force a permutation at every stage, and each
-pointwise product must be reduced into `[0,q)` elementwise. We fold the multiplication into fixed
-256×256 blocked Toeplitz matrices and hand `[M, 256k] × [256k, B]` to fp16 tensor cores, giving a
-pure dense GEMM whose utilisation is quantifiable: **24% / 28%** of the same-shape pure-`tl.dot`
-peak on Intel and GB10 respectively.
-
-**4.2 fp16 exactness is provable, not tuned.** `|W| ≤ 1664 < 2^11`, `|y| ≤ 2`, `K ≤ 1024` gives
-`|partial sum| < 3.4e6 < 2^24`, so any accumulation order is element-wise exact independent of the
-GPU's reduction tree and of the backend; `tests/test_dot_exact.py` checks the boundary values on
-both machines rather than trusting the argument. Outside flash-attention almost all fp16 GEMM
-applications tolerate error, whereas cryptography cannot lose a bit — many GPU Kyber
-implementations therefore switch to int16/int32 or add compensation. This route is free.
-
-**4.3 The only implementation measured on two vendors.** Same code, no inline assembly, no
-vendor intrinsics: Intel Arc B390 / Xe3-LPG / triton-xpu 3.9 → **264 tests green**, and NVIDIA
-GB10 / sm_121 / triton 3.8 → **264 tests green**, without changing one kernel line.
-
-**4.4 We report end-to-end, and the host side is genuinely optimised.** Papers usually bracket
-just the kernel. We report both and treat the host as first-class: four accepted input forms
-(host cost 0.89 → 0.57 ms at B=4096 on Intel), adaptive pinned staging (probed on 4 MiB, used
-only if more than 15% faster — worth it on Intel at 0.50 → 0.28 ms, not on GB10), O(1) length
-validation instead of O(B) (saving 0.13 ms). It also proved that **H2D cannot overlap compute on
-this Intel driver** (dual-stream zero-dependency 1.328 ms vs serial 1.307 ms), ruling out
-streaming double-buffering.
-
-**4.5 Depth of fusion.** **13 kernel launches** for the whole decapsulation, with both GEMM
-epilogues fused into the GEMM kernel: ENC never materialises the 16.8 MB `acc2`, DEC never
-materialises the 4.2 MB `acc`. Paired same-process ratios: device-side 2.75 → 1.62 → 1.22 ms
-(Intel, B=4096; `fallback/fused` median 1.89×), and sponge input preparation from 192 → 28 µs.
-
-**4.6 Correctness is reproducibly verified, and silent fallback is guarded.** Byte-exact ACVP on
-both machines, plus a test per fused kernel asserting byte-equality with the unfused multi-step
-implementation — necessary because a fused kernel returns `False`/`None` and writes nothing when
-its constraints are unmet. We hit exactly this during development, when `Y` was a transposed view
-and the fused GEMM was never running. `benchmarks/bench_e2e.py` self-checks fused against
-fully-fallback, and the measurement methodology is public, including the hypotheses it falsified
-(see [CHANGELOG.md](../CHANGELOG.md)).
-
----
+- **No NTT, so the whole path is dense.** The NTT's bottleneck is not arithmetic volume but
+  access pattern: butterfly strides force a permutation at every stage, and each pointwise
+  product must be reduced into `[0,q)` elementwise. Folding the multiplication into fixed 256×256
+  blocked Toeplitz matrices gives a pure dense GEMM whose utilisation is quantifiable: **24% /
+  28%** of the same-shape pure-`tl.dot` peak on Intel and GB10.
+- **fp16 exactness is provable, not tuned.** Any accumulation order is element-wise exact
+  independent of the GPU's reduction tree and of the backend, and `test_dot_exact.py` checks the
+  boundary values on both machines rather than trusting the argument. Outside flash-attention
+  almost all fp16 GEMM work tolerates error; cryptography cannot lose a bit, which is why many
+  GPU Kyber implementations switch to int16/int32. This route is free.
+- **The only implementation measured on two vendors.** Same code, no inline assembly and no
+  vendor intrinsics: **264 tests green** on Intel Arc B390 / triton-xpu 3.9 and on NVIDIA GB10 /
+  triton 3.8, without changing one kernel line.
+- **End-to-end reporting, with the host side actually optimised.** Four accepted input forms
+  (host cost 0.89 → 0.57 ms at B=4096 on Intel), adaptive pinned staging (probed on 4 MiB, used
+  only if >15% faster: worth 0.50 → 0.28 ms on Intel, not on GB10), O(1) instead of O(B) length
+  validation (0.13 ms). It also proved **H2D cannot overlap compute on this Intel driver**
+  (dual-stream zero-dependency 1.328 ms vs serial 1.307 ms), ruling out streaming double-buffering.
+- **Deep fusion.** 13 launches for the whole decapsulation, both GEMM epilogues inside the GEMM
+  kernel: ENC never materialises the 16.8 MB `acc2`, DEC never materialises the 4.2 MB `acc`.
+  Paired same-process device-side: 2.75 → 1.62 → 1.22 ms (Intel, B=4096), and sponge input
+  preparation 192 → 28 µs.
+- **Verifiable correctness with silent fallback guarded.** Byte-exact ACVP on both machines plus
+  a byte-equality test per fused kernel against the unfused path — necessary, because a fused
+  kernel returns `False`/`None` and writes nothing when its constraints are unmet. We hit exactly
+  that during development (`Y` was a transposed view, so the fused GEMM never ran). The
+  measurement methodology is public too, including the hypotheses it falsified.
 
 ## 5. Our disadvantages
 
