@@ -318,8 +318,8 @@ Intel. Batch convergence saturates after 2.6e5.
   almost all fp16 GEMM work tolerates error; cryptography cannot lose a bit, which is why many
   GPU Kyber implementations switch to int16/int32. This route is free.
 - **The only implementation measured on two vendors.** Same code, no inline assembly and no
-  vendor intrinsics: **264 tests green** on Intel Arc B390 / triton-xpu 3.9 and on NVIDIA GB10 /
-  triton 3.8, without changing one kernel line.
+  vendor intrinsics: **264 ML-KEM tests green** on Intel Arc B390 / triton-xpu 3.9 and on
+  NVIDIA GB10 / triton 3.8, without changing one kernel line.
 - **End-to-end reporting, with the host side actually optimised.** Four accepted input forms
   (host cost 0.89 → 0.57 ms at B=4096 on Intel), adaptive pinned staging (probed on 4 MiB, used
   only if >15% faster: worth 0.50 → 0.28 ms on Intel, not on GB10), O(1) instead of O(B) length

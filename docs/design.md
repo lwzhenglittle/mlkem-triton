@@ -308,3 +308,95 @@ this module needed was the **cost**, and 15 256-point matmuls are negligible.
 
 Result: 0.158 ms on GB10, 19.3 ns/op at B=8192, so 86% of the 1.61× is the kernel and 14% is
 not re-expanding `Â`. Full numbers in [docs/compare.md](compare.md) §0.2.
+
+---
+
+## 8. The primitives layer: Keccak, sponge, NTT
+
+Version 0.2 extracted the two pieces of mathematics that both FIPS 203 and FIPS 204 need.
+`kernels/keccak.py` and `kernels/shake.py` became `primitives/keccak.py` and
+`primitives/sponge.py`; the NTT left `kernels/ntt.py` and became `primitives/ntt.py`,
+parameterised by `(q, N, ζ, layers)` instead of hard-coding ML-KEM.
+
+| module | API surface |
+|---|---|
+| `primitives.keccak` | `RC`, `ROT`, `gen_source`, `get_kernel`, `keccak_f_ref` |
+| `primitives.sponge` | `get_sponge(rate, outlen)`, `pad10star1`, `pad_batch`, `pad_torch`, `sponge_padded`, `hash_np_batch`, `HashFn` + `SHA3_256/SHA3_512/SHAKE128/SHAKE256` |
+| `primitives.ntt` | `NTTDomain(q, n, zeta, layers)`, `ntt_np/intt_np`, `ntt_torch/intt_torch`, `mul_np`, `negacyclic_conv_np`, `KYBER`, `DILITHIUM` |
+
+The two domains, and what is deliberately **not** unified:
+
+| | ML-KEM | ML-DSA |
+|---|---|---|
+| q, ζ | 3329, 17 | 8380417, 1753 |
+| multiplicative order of ζ | N (7 layers) | 2N (8 layers) |
+| arithmetic | int32, `%` by a constant | int64, Montgomery reduction |
+| inverse normalisation | 128⁻¹ = 3303 | 256⁻¹ = 8347681 |
+| pointwise product | base-case multiply in `Z_q[X]/(X²−γ)` (Alg. 12) | plain Hadamard |
+| stays scheme-side | base-case multiply, ByteEncode/Compress, CBD | SampleInBall, Decompose/UseHint, hint codec, z/w1/t1 packing |
+
+Two things are worth recording because both cost time:
+
+1. **The layer count is not "log2 N".** ML-KEM stops after 7 layers on purpose, so its twiddle
+   table has 2⁷ = 128 entries and the inverse scale is 128⁻¹, not 256⁻¹. A "generic 8-layer NTT
+   with N⁻¹ scaling" is wrong for ML-KEM — the roundtrip test passes, but the base-case product
+   is then off by a constant and every ACVP vector fails.
+2. **`%` is not free at 23 bits.** Triton lowers int64 `%` to a software divide; the transform
+   spent most of its time there. The wide path now uses Montgomery reduction
+   (`t = (a·b & 2³²-1)·q⁻¹ mod 2³²`, `r = (a·b − t·q) >> 32`) with Montgomery-form twiddles, so
+   the values themselves stay in the standard domain. Measured on the B390, 24 576 rows:
+   **6.97 → 3.63 ms (1.92×)**, bit-identical output. The int32 path keeps `%`.
+
+   The int32 instantiation also got faster, from writing the butterfly once instead of twice:
+   the old kernel multiplied by `±1` (`a + sg·(z·b)`) and reduced twice, the new one selects
+   between `a + t` and `a − t` and reduces once. Measured against the pre-refactor kernel pulled
+   from git, same input, same `br`/`num_warps`: **1.995 → 1.198 ms (1.66×)**, bit-identical. So
+   the "no ML-KEM regression" claim is stronger than it had to be — ML-KEM keygen's NTT got
+   ~1.7× cheaper on this iGPU, and nothing else changed.
+
+The refactor is performance-neutral for ML-KEM by construction — the kernel body, tables and
+`br`/`num_warps` are the same — and the 264 ML-KEM tests, including byte-exact keygen against
+kyber-py and the ACVP vectors, pass unchanged.
+
+---
+
+## 9. ML-DSA verification: why the NTT, not Toeplitz
+
+ML-DSA's `q = 8380417` is 23 bits. Two reduced coefficients therefore multiply to 46 bits
+*before* the reduction, and the ML-KEM exactness argument (`|a|·|b|·K < 2²⁴`) cannot be
+recovered: fp16 has 11 mantissa bits, fp32 24. Keeping a Toeplitz GEMM exact on int8 tensor
+cores would need 3 limbs per operand → 9 GEMMs, i.e. ≈ 2.4 M MACs per signature for `Â·ẑ`
+(`k = l = 6`), against ≈ 12 k butterflies for the NTT. That is 100× more arithmetic to exploit
+a unit that is 10–100× faster — no win, a lot of complexity, and a new correctness argument to
+make. So verification uses the NTT.
+
+That is also the *right* structure for this scheme: the only products in `Verify` are
+
+- `ŵ = Â·ẑ` — `Â` is handed to the verifier already in the NTT domain (ExpandA), and `z` needs
+  one forward transform, so the product is `k·l` pointwise multiplies followed by `k` inverse
+  transforms;
+- `c·t̂1` — `c` is sparse with τ ≤ 60 non-zeros.
+
+Per signature: `l` forward transforms for `z`, one for `c`, `k` inverse for `w′`. Everything
+else is packing/unpacking, `Decompose`/`UseHint` (integer shifts, no multiplication) and three
+SHAKE calls: `μ = H(H(pk)‖M′)`, `c = SampleInBall(c̃)` and `c̃′ = H(μ‖w1Encode(w′1))`.
+
+`SampleInBall` is the only genuinely sequential piece: `c[i] ← c[j]`, then `c[j] ← ±1`, with a
+rejection-sampled `j`, τ times. One program handles one signature and keeps the 256 coefficients
+in registers, updating them with masked selects; the rejection uses a `while`, because the
+standard gives no bound on how many bytes it may consume (the reference reads 136 and relies on
+the tail probability; the kernel would be wrong, not just lucky, to assume that).
+
+Device time at B = 4096, ML-DSA-65, synchronised per stage (total 11.5 ms):
+
+| stage | ms | µs/op | share |
+|---|---:|---:|---:|
+| `sib + NTT(z) + NTT(c)` | 4.50 | 1.10 | 39% |
+| `MAC + INTT(w)` | 4.35 | 1.06 | 38% |
+| `BitUnpack z` | 1.22 | 0.30 | 11% |
+| final `H(μ‖w1)` | 0.55 | 0.13 | 5% |
+| `UseHint + BitPack w1` | 0.54 | 0.13 | 5% |
+| hint decode | 0.38 | 0.09 | 3% |
+
+The transform is 77% of the time, which is why the Montgomery change mattered and why the next
+optimisation (if any) would be the gather-based butterfly, not the hashes.

@@ -279,8 +279,44 @@ python benchmarks/bench_host.py --batch 4096       # host-side decomposition
 python benchmarks/bench_encaps.py                  # encaps throughput
 python benchmarks/bench_keygen.py                  # keygen throughput
 python benchmarks/bench_rebuild.py                 # on-GPU key rebuild vs cuPQC convention
+python benchmarks/bench_mldsa_verify.py --ps ML-DSA-65 --batch 4096 --profile
 ```
 
 `bench_rebuild.py` and `bench_encaps.py` print the cuPQC same-machine figures alongside ours
 only when they detect the matching hardware, since quoting them on another machine would be
 invalid.
+
+---
+
+## 11. ML-DSA signature verification (FIPS 204)
+
+Intel Arc B390 / torch 2.15 / triton-xpu 3.9, min-of-15, 32-byte messages. The corpus is
+produced by **liboqs 0.16.0 with ML-DSA enabled** under one public key, so the CPU baseline and
+the GPU verifier consume exactly the same signatures.
+
+| scheme | B | device only | dev µs/op | e2e | e2e µs/op | liboqs 1T | liboqs 16P | dev vs 16P |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| ML-DSA-44 | 1024 | 2.481 ms | 2.42 | 4.061 ms | 3.97 | 58.7 µs | 10.57 µs | 4.4× |
+| ML-DSA-44 | 4096 | 7.698 ms | **1.88** | 13.227 ms | 3.23 | 58.7 µs | 10.57 µs | 5.6× |
+| ML-DSA-44 | 8192 | 16.193 ms | 1.98 | 27.611 ms | 3.37 | 58.7 µs | 10.57 µs | 5.3× |
+| ML-DSA-65 | 1024 | 2.845 ms | 2.78 | 5.154 ms | 5.03 | 93.0 µs | 13.95 µs | 5.0× |
+| ML-DSA-65 | 4096 | 10.123 ms | **2.47** | 16.790 ms | 4.10 | 93.0 µs | 13.95 µs | 5.6× |
+| ML-DSA-65 | 8192 | 20.740 ms | 2.53 | 34.063 ms | 4.16 | 93.0 µs | 13.95 µs | 5.5× |
+| ML-DSA-87 | 1024 | 3.501 ms | 3.42 | 6.467 ms | 6.31 | 136.1 µs | 20.53 µs | 6.0× |
+| ML-DSA-87 | 4096 | 15.488 ms | **3.78** | 23.380 ms | 5.71 | 136.1 µs | 20.53 µs | 5.4× |
+| ML-DSA-87 | 8192 | 31.010 ms | 3.78 | 48.123 ms | 5.87 | 136.1 µs | 20.53 µs | 5.4× |
+
+`liboqs 16P` is the aggregate over 16 concurrent **processes** (the same convention as §8 for
+ML-KEM; threads in one process do not scale on this hybrid 4P+8E+4LP part). Two caveats, both
+inherited from §1: clocks drift between sessions, so only same-process ratios are meaningful;
+and the CPU figures were taken while this machine was running builds and tests, which biases
+them *upward* — the ratios should be read as "≈5×", not as four significant figures.
+
+The end-to-end column is 1.6–1.8× the device-only column: one H2D of `B × sig_size`
+(13.5 MB at B = 4096) plus the host-side message formatting, then one D2H of `B` bools. The
+per-row `format_message` loop used to dominate that gap (a `bytes` allocation per signature);
+it is now assembled with numpy for the uniform-length case, which took e2e from 6.0 to 4.1 µs/op
+at B = 4096.
+
+Per-stage device breakdown at B = 4096, ML-DSA-65 is in [design.md](design.md) §9: the transform
+is 77% of the time (`sib + NTT(z) + NTT(c)` 39%, `MAC + INTT` 38%).

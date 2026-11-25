@@ -1,11 +1,17 @@
-"""Reference NTT / INTT / MultiplyNTTs implementation for FIPS 203 (numpy).
+"""ML-KEM (FIPS 203) reference helpers in numpy.
 
-Also provides `negacyclic_conv` and `toeplitz`, used to verify the core identity of
-the whole scheme:
+The **transform itself is generic** and lives in `mlkem_triton.primitives.ntt`; what is
+kept here is what is specific to ML-KEM:
 
-    T(a) @ b  ==  a * b   (in Z_q[X]/(X^256 + 1))
+- `multiply_ntts`, the base-case multiplication in the quadratic extension
+  Z_q[X]/(X²−γ) (FIPS 203 Alg. 11/12) — even/odd coefficients form two channels;
+- `GAMMAS`, the γ_i table that multiplication needs;
+- ByteEncode/ByteDecode_d and Compress/Decompress_d (§4.2);
+- `toeplitz`, the identity the whole project rests on:
 
-where T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1).
+      T(a) @ b  ==  a * b   (in Z_q[X]/(X^256 + 1))
+
+  where T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1).
 """
 
 from __future__ import annotations
@@ -13,56 +19,34 @@ from __future__ import annotations
 import numpy as np
 
 from .params import N, Q
+from .primitives.ntt import KYBER, intt_np, negacyclic_conv_np, ntt_np
+from .primitives.ntt import bitrev as _bitrev
 
-ZETA = 17  # primitive 256th root of unity modulo 3329
+ZETA = KYBER.zeta  # primitive 256th root of unity modulo 3329
 
 
 def bitrev7(i: int) -> int:
     """7-bit bit reversal."""
-    return int(format(i, "07b")[::-1], 2)
+    return _bitrev(i, 7)
 
 
 # zetas[i] = ζ^BitRev7(i), i = 0..127 (used by FIPS 203 Algorithm 9)
-ZETAS = np.array([pow(ZETA, bitrev7(i), Q) for i in range(128)], dtype=np.int64)
+ZETAS = KYBER.zetas
 
 # γ_i for BaseCaseMultiply = ζ^(2·BitRev7(i)+1)
 GAMMAS = np.array([pow(ZETA, 2 * bitrev7(i) + 1, Q) for i in range(128)], dtype=np.int64)
 
-INV128 = pow(128, -1, Q)  # = 3303
+INV128 = KYBER.scale  # = 3303
 
 
 def ntt(f):
-    """FIPS 203 Algorithm 9."""
-    f = np.array(f, dtype=np.int64) % Q
-    i = 1
-    length = 128
-    while length >= 2:
-        for start in range(0, N, 2 * length):
-            zeta = int(ZETAS[i])
-            i += 1
-            j = np.arange(start, start + length)
-            t = (zeta * f[j + length]) % Q
-            f[j + length] = (f[j] - t) % Q
-            f[j] = (f[j] + t) % Q
-        length //= 2
-    return f
+    """FIPS 203 Algorithm 9 (delegates to the generic primitive)."""
+    return ntt_np(f, KYBER)
 
 
 def intt(f):
-    """FIPS 203 Algorithm 10."""
-    f = np.array(f, dtype=np.int64) % Q
-    i = 127
-    length = 2
-    while length <= 128:
-        for start in range(0, N, 2 * length):
-            zeta = int(ZETAS[i])
-            i -= 1
-            j = np.arange(start, start + length)
-            t = f[j].copy()
-            f[j] = (f[j] + f[j + length]) % Q
-            f[j + length] = (zeta * (f[j + length] - t)) % Q
-        length *= 2
-    return (f * INV128) % Q
+    """FIPS 203 Algorithm 10 (delegates to the generic primitive)."""
+    return intt_np(f, KYBER)
 
 
 def base_case_multiply(a0, a1, b0, b1, gamma):
@@ -86,21 +70,12 @@ def multiply_ntts(f, g):
 
 def negacyclic_conv(a, b):
     """O(N^2) schoolbook multiplication in Z_q[X]/(X^256+1) (test only)."""
-    a = np.asarray(a, dtype=np.int64)
-    b = np.asarray(b, dtype=np.int64)
-    idx = np.arange(N)[:, None] + np.arange(N)[None, :]
-    sign = np.where(idx < N, 1, -1)
-    c = np.zeros(N, dtype=np.int64)
-    np.add.at(c, idx % N, np.outer(a, b) * sign)
-    return c % Q
+    return negacyclic_conv_np(a, b, KYBER)
 
 
 def toeplitz(a):
     """T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1)."""
-    a = np.asarray(a, dtype=np.int64)
-    i = np.arange(N)[:, None]
-    j = np.arange(N)[None, :]
-    return a[(i - j) % N] * np.where(i >= j, 1, -1)
+    return KYBER.toeplitz(a)
 
 
 # ---------------- encode/decode / compress (FIPS 203 §4.2) ----------------

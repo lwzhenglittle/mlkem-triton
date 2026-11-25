@@ -8,12 +8,27 @@ pip install -e ".[test,ref]"
 ```
 
 `[ref]` pulls in `kyber-py`; only part of the suite needs it (random key-pair generation and
-byte-exact cross-checking).
+byte-exact cross-checking of ML-KEM keygen).
+
+ML-DSA's cross-implementation test (`tests/test_mldsa.py::test_matches_liboqs`) needs **liboqs
+with ML-DSA enabled**, which is not a pip dependency. It skips cleanly when absent; to enable it:
+
+```bash
+cd third_party/liboqs            # any liboqs 0.16+ checkout works
+cmake -B build-mldsa -GNinja -DCMAKE_BUILD_TYPE=Release \
+      -DOQS_MINIMAL_BUILD="SIG_ml_dsa_44;SIG_ml_dsa_65;SIG_ml_dsa_87" \
+      -DOQS_BUILD_ONLY_LIB=ON -DBUILD_SHARED_LIBS=ON
+ninja -C build-mldsa             # -> lib/liboqs.so
+# point the tests elsewhere with MLDSA_LIBOQS_SO=/path/to/liboqs.so
+```
+
+That library is also the CPU baseline in `benchmarks/bench_mldsa_verify.py`, and it is what makes
+the ML-DSA numbers in `docs/benchmarks.md` §11 cross-implementation rather than self-referential.
 
 Hardware:
 
 - **To run the whole suite**: a GPU with a Triton backend (NVIDIA / AMD / Intel). Without a GPU
-  `pytest tests` still runs (90 passed / 174 skipped) because `tests/conftest.py` skips the
+  `pytest tests` still runs (123 passed / 252 skipped) because `tests/conftest.py` skips the
   device-dependent cases centrally. **This project has no GPU CI** — the tests are run by hand
   on real machines, so please state in your PR which hardware you ran.
 - **Just reading the code or running the reference implementation**: CPU is enough;
@@ -28,10 +43,11 @@ pytest tests/test_glue.py   # one file
 ruff check . && ruff format --check .
 ```
 
-Three layers:
+Four layers:
 
-1. **Pure maths** (`test_ntt.py`, `test_keyprep.py`, `test_dot_exact.py`) — the Toeplitz
-   identity, NTT self-consistency, the exactness bound of fp16 accumulation.
+1. **Pure maths** (`test_ntt.py`, `test_keyprep.py`, `test_dot_exact.py`, `test_primitives.py`) —
+   the Toeplitz identity, NTT algebra for both `(q, N, ζ)` domains against a schoolbook
+   convolution, the exactness bound of fp16 accumulation, sponge padding.
 2. **Kernel bit-alignment** (`test_fused_gemm.py`, `test_glue.py`, `test_encaps.py`,
    `test_keygen.py`, `test_rebuild.py`) — every fused kernel must be **byte-equal to the unfused
    multi-step implementation**. **This is the guard against silent fallback**: a fused kernel
@@ -39,8 +55,11 @@ Three layers:
    falls back silently. If the guard condition is ever written wrong, this layer goes red
    immediately. (We did hit this during development: `Y` was a transposed view, so the fused
    GEMM was never executing.)
-3. **End-to-end** (`test_pipeline*.py`) — official NIST ACVP vectors, implicit rejection, every
-   batch size.
+3. **Reference-implementation agreement** (`test_mldsa_ref.py`) — the numpy FIPS 204
+   implementation against ACVP keyGen (byte-exact), sigGen (byte-exact, deterministic *and*
+   hedged) and sigVer (180/180), plus the codec edge cases.
+4. **End-to-end** (`test_pipeline*.py`, `test_mldsa.py`) — official NIST ACVP vectors, implicit
+   rejection, every batch size, tampered signatures and hint blocks.
 
 ## Adding a backend
 

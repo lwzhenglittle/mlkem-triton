@@ -172,7 +172,7 @@ class GpuKeyRebuilder:
     # -- SHAKE-128 kernel (compiled on first call) --
     def _shake(self):
         if self._sha is None:
-            from .shake import get_sponge
+            from ..primitives.sponge import get_sponge
 
             self._sha = get_sponge(RATE_SHAKE128, 5 * RATE_SHAKE128)
         return self._sha

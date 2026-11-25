@@ -34,11 +34,11 @@ import torch
 from . import keyprep, ops
 from .devices import resolve_device
 from .kernels.encaps import fused_encaps, pack_ciphertext
-from .kernels.shake import SHA3_DOMAIN, SHAKE_DOMAIN
 from .params import PARAMS
 from .pipeline import RATE_SHA3_512, RATE_SHAKE, _pad2_gpu, _pad_prf_gpu, sponge_gpu
+from .primitives.sponge import DOMAIN_SHA3, DOMAIN_SHAKE, SHA3_256
 
-RATE_SHA3_256 = 136
+RATE_SHA3_256 = SHA3_256.rate
 
 
 class Encapsulator:
@@ -86,18 +86,18 @@ class Encapsulator:
             raise ValueError(f"m must be [B,32] uint8, got {tuple(m.shape)} {m.dtype}")
 
         # 1. (K_pre, r_seed) = G(m ‖ H(ek))     — SHA3-512, rate 72
-        gr = sponge_gpu(_pad2_gpu(m, self.h_ek, B, RATE_SHA3_512, SHA3_DOMAIN), RATE_SHA3_512, 64)
+        gr = sponge_gpu(_pad2_gpu(m, self.h_ek, B, RATE_SHA3_512, DOMAIN_SHA3), RATE_SHA3_512, 64)
         k_pre, r_seed = gr[:, :32], gr[:, 32:]
 
         # 2. PRF: r_seed ‖ [N] → the byte stream fed to CBD
         eta1, eta2 = p.eta1, p.eta2
         y_buf = sponge_gpu(
-            _pad_prf_gpu(r_seed, B * k, RATE_SHAKE, SHAKE_DOMAIN, mod=k, off=0),
+            _pad_prf_gpu(r_seed, B * k, RATE_SHAKE, DOMAIN_SHAKE, mod=k, off=0),
             RATE_SHAKE,
             64 * eta1,
         )
         e_buf = sponge_gpu(
-            _pad_prf_gpu(r_seed, B * (k + 1), RATE_SHAKE, SHAKE_DOMAIN, mod=k + 1, off=k),
+            _pad_prf_gpu(r_seed, B * (k + 1), RATE_SHAKE, DOMAIN_SHAKE, mod=k + 1, off=k),
             RATE_SHAKE,
             64 * eta2,
         )
@@ -147,7 +147,7 @@ class Encapsulator:
         total = ((ct_size + 1 + RATE_SHA3_256 - 1) // RATE_SHA3_256) * RATE_SHA3_256
         padded = torch.zeros((B, total), dtype=torch.uint8, device=dev)
         pack_ciphertext(comp, padded, k, p.du, p.dv, ct_size)
-        padded[:, ct_size] = SHA3_DOMAIN  # domain separation
+        padded[:, ct_size] = DOMAIN_SHA3  # domain separation
         padded[:, total - 1] = 0x80  # last byte of pad10*1
         c = padded[:, :ct_size]  # view, zero-copy
 

@@ -1,4 +1,6 @@
-"""mlkem-triton — ML-KEM batch decapsulation in pure Triton.
+"""mlkem-triton — FIPS 203 and FIPS 204 in pure Triton.
+
+ML-KEM (FIPS 203), all three operations:
 
     from mlkem_triton import Decapsulator, Encapsulator
     dec = Decapsulator("ML-KEM-768", dk)
@@ -6,9 +8,15 @@
     enc = Encapsulator("ML-KEM-768", ek)
     ct, keys = enc.encapsulate(list_of_32B_msgs)
 
-    eks, dks = generate_keypairs("ML-KEM-768", 4096)   # all three operations covered
+    eks, dks = generate_keypairs("ML-KEM-768", 4096)
 
-Design notes: see README.md; performance data: see docs/design.md (in the original repository).
+ML-DSA (FIPS 204) verification:
+
+    from mlkem_triton.mldsa import Verifier
+    ok = Verifier("ML-DSA-65", pk).verify(messages, signatures)
+
+Both schemes sit on `mlkem_triton.primitives` (Keccak sponge + a parameterised NTT).
+Design notes: README.md, docs/design.md; measurements: docs/benchmarks.md.
 """
 
 from __future__ import annotations
@@ -16,7 +24,7 @@ from __future__ import annotations
 from .devices import available_devices, backend_of, describe, gemm_cfg, resolve_device
 from .params import PARAMS, N, Params, Q
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "PARAMS",

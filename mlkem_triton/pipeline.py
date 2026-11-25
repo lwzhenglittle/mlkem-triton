@@ -44,12 +44,12 @@ from .devices import sync as _sync
 from .kernels import glue
 from .kernels.fused_gemm import fused_dec_gemm, fused_enc_gemm
 from .kernels.padcat import padcat2, padcat_sfx
-from .kernels.shake import SHA3_DOMAIN, SHAKE_DOMAIN
 from .params import PARAMS, Q
+from .primitives.sponge import DOMAIN_SHA3, DOMAIN_SHAKE, SHA3_256, SHA3_512, SHAKE256
 
-RATE_SHA3_512 = 72
-RATE_SHA3_256 = 136
-RATE_SHAKE = 136
+RATE_SHA3_512 = SHA3_512.rate
+RATE_SHA3_256 = SHA3_256.rate
+RATE_SHAKE = SHAKE256.rate
 BLOCK = 128
 WARPS = 4
 
@@ -475,12 +475,12 @@ class Decapsulator:
     def _G(self, m_bytes: torch.Tensor, B: int) -> torch.Tensor:
         # m' || h_ek, padded to 1 block of 72 B; one launch (previously three: cat+zeros+copy)
         return sponge_gpu(
-            _pad2_gpu(m_bytes, self.h_ek, B, RATE_SHA3_512, SHA3_DOMAIN), RATE_SHA3_512, 64
+            _pad2_gpu(m_bytes, self.h_ek, B, RATE_SHA3_512, DOMAIN_SHA3), RATE_SHA3_512, 64
         )
 
     def _J(self, cts: torch.Tensor, B: int) -> torch.Tensor:
         # z || ct, padded to 9 blocks of 136 B; one launch (previously 192 µs, now 28 µs)
-        return sponge_gpu(_pad2_gpu(self.z, cts, B, RATE_SHAKE, SHAKE_DOMAIN), RATE_SHAKE, 32)
+        return sponge_gpu(_pad2_gpu(self.z, cts, B, RATE_SHAKE, DOMAIN_SHAKE), RATE_SHAKE, 32)
 
     def _prf_bufs(self, r_prime: torch.Tensor, B: int):
         """PRF: r' → two sponge outputs (CBD not applied yet), for the fused CBD→Y/E path."""
@@ -488,8 +488,8 @@ class Decapsulator:
         # r' || [j] (33 B) → padded to 1 block of 136 B. r_prime is usually the
         # last 32 B of the G output (a slice of [B,64], contiguous in the last
         # dimension), so the kernel can read it in place with a stride, no copy.
-        y_pad = _pad_prf_gpu(r_prime, B * k, RATE_SHAKE, SHAKE_DOMAIN, mod=k, off=0)
-        e_pad = _pad_prf_gpu(r_prime, B * (k + 1), RATE_SHAKE, SHAKE_DOMAIN, mod=k + 1, off=k)
+        y_pad = _pad_prf_gpu(r_prime, B * k, RATE_SHAKE, DOMAIN_SHAKE, mod=k, off=0)
+        e_pad = _pad_prf_gpu(r_prime, B * (k + 1), RATE_SHAKE, DOMAIN_SHAKE, mod=k + 1, off=k)
         return (
             sponge_gpu(y_pad, RATE_SHAKE, 64 * p.eta1),
             sponge_gpu(e_pad, RATE_SHAKE, 64 * p.eta2),

@@ -1,21 +1,18 @@
-"""Forward Kyber/ML-KEM NTT on Triton (FIPS 203 Alg. 9).
+"""ML-KEM-specific NTT-domain kernels: pointwise multiply-accumulate and ByteEncode_12.
 
-**This is the only component in this repo unrelated to the Toeplitz trick.**
-Neither decaps nor encaps needs an NTT (polynomial multiplication is folded into
-a GEMM with fixed matrices), but keygen does: `ek` must carry the NTT-domain
-representation of `t̂`, and `s`/`e` are new for every key, so no
-"matrix fixed across operations" is available. So here it is just one plain
-butterfly.
+The transform itself is **not** here any more: `mlkem_triton.primitives.ntt` owns the
+negacyclic NTT, parameterised by the domain (q, N, ζ), and ML-KEM is just the
+`q = 3329, ζ = 17, int32` instance of it. What stays in this module is what genuinely
+depends on ML-KEM's layout:
 
-Mapping: one program handles `BR` polynomials (256 int32 each).
-7 butterfly stages (length = 128, 64, …, 2), each stage uses `tl.gather` to swap
-pairs by `idx ^ L`.
+- `pow_mac`: `t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]`, where `∘` is the *base-case*
+  multiplication in Z_q[X]/(X²−γ) (FIPS 203 Alg. 11/12) — even/odd coefficients form
+  two independent channels, which is a property of ML-KEM's NTT layout only.
+- `byte_encode12`: ByteEncode_12 for `ek`/`dk`.
 
-The pairing index `idx ^ L` is equivalent: inside a block aligned to `2L`,
-`idx ^ L` swaps the two halves exactly. `ZETAS` has `2^s` entries per stage, and
-the offset is `2^s` too (i accumulates 1,2,4,… starting from 1).
-
-Measured (GB10, B=8192 equivalent scale): see `benchmarks/bench_keygen.py`.
+ML-KEM still needs an NTT at all only in keygen: decaps and encaps fold their
+multiplications into Toeplitz GEMMs. `ek` must carry `t̂`, and `s`/`e` are new for every
+key, so no matrix can be pre-expanded — so keygen calls the generic primitive.
 """
 
 from __future__ import annotations
@@ -25,7 +22,8 @@ import triton
 import triton.language as tl
 
 from ..devices import warps
-from ..ntt_ref import GAMMAS, ZETAS
+from ..ntt_ref import GAMMAS
+from ..primitives.ntt import KYBER, ntt_torch
 
 Q = 3329
 QL = tl.constexpr(Q)
@@ -33,35 +31,6 @@ N = 256
 
 
 _GM: dict = {}
-
-
-_ZT_FLAT: dict = {}
-
-
-def _zt_flat(dev):
-    """ζ for each stage × each element position, flattened to [7*256], so a
-    single load suffices.
-
-    Previously every element at every stage had to compute `idx // (2*L)` and
-    then gather the constant table -- 7 stages meant 7 integer divisions + 7
-    small table gathers. Integer division is 20+ instructions on the GPU.
-    """
-    t = _ZT_FLAT.get(dev)
-    if t is None:
-        import numpy as _np
-
-        z = _np.asarray([int(v) for v in ZETAS], dtype=_np.int32)
-        flat = _np.empty(7 * 256, dtype=_np.int32)
-        L = 128
-        off = 1
-        for s_i in range(7):
-            idx = _np.arange(256)
-            flat[s_i * 256 : (s_i + 1) * 256] = z[off + idx // (2 * L)]
-            L //= 2
-            off *= 2
-        t = torch.from_numpy(flat).to(dev)
-        _ZT_FLAT[dev] = t
-    return t
 
 
 def _gammas(dev):
@@ -78,35 +47,9 @@ def _modq(v):
     return tl.where(v < 0, v + QL, v)
 
 
-@triton.jit
-def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
-    """[P, 256] coefficient domain int32 → NTT domain int32. In-place is
-    unnecessary; input and output may be the same buffer."""
-    pid = tl.program_id(0)
-    rows = pid * BR + tl.arange(0, BR)
-    m = rows < P
-    idx = tl.arange(0, N)
-    x = tl.load(X + rows[:, None] * N + idx[None, :], mask=m[:, None], other=0).to(tl.int32)
-    x = _modq(x)
-
-    L = N // 2
-    for _s in tl.static_range(7):
-        pv = tl.gather(x, (idx ^ L)[None, :].broadcast_to((BR, N)), axis=1)
-        z = tl.load(ZT + _s * N + idx).to(tl.int32)[None, :]
-        lo = ((idx & L) == 0)[None, :]
-        # low half out = a + z·b, high half out = a − z·b (a is the j-th element
-        # of the block, b is the (j+L)-th). Folding a/b into the two halves with
-        # where needs only **one** multiply + two modq, instead of "compute both
-        # branches" (which is two multiplies + four modq).
-        # Measured: this change + BR going from 16 to 2 took the NTT from
-        # 15.2 ms to 1.5 ms (P=24576).
-        a = tl.where(lo, x, pv)
-        b = tl.where(lo, pv, x)
-        sg = tl.where(lo, 1, -1)
-        x = _modq(a + sg * _modq(z * b))
-        L = L // 2
-
-    tl.store(OUT + rows[:, None] * N + idx[None, :], x, mask=m[:, None])
+def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
+    """[P, 256] int32 (coefficient domain, [0,q)) → [P, 256] int32 (NTT domain)."""
+    return ntt_torch(x, KYBER, br=br, warps=warps("ntt", 2))
 
 
 @triton.jit
@@ -155,16 +98,6 @@ def pow_mac_kernel(
     tl.store(o_base + 2 * h[None, :] + 1, acc1, mask=m[:, None])
 
 
-def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
-    """[P, 256] int32 (coefficient domain, [0,q)) → [P, 256] int32 (NTT domain)."""
-    P = x.shape[0]
-    out = torch.empty_like(x, dtype=torch.int32)
-    ntt_kernel[(triton.cdiv(P, br),)](
-        x, out, _zt_flat(x.device), P, N, br, num_warps=warps("ntt", 2)
-    )
-    return out
-
-
 def pow_mac(a, s, e, k: int, br: int = 16) -> torch.Tensor:
     """[B*k*k,256] × [B*k,256] → t̂ [B*k,256]; inputs must already be NTT'ed."""
     P = s.shape[0]
@@ -185,7 +118,7 @@ def pow_mac(a, s, e, k: int, br: int = 16) -> torch.Tensor:
     return out
 
 
-__all__ = ["forward_ntt", "ntt_kernel", "pow_mac", "pow_mac_kernel"]
+__all__ = ["forward_ntt", "pow_mac", "pow_mac_kernel"]
 
 
 # --------------------------------------------------------------- ByteEncode_12

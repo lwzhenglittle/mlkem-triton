@@ -21,7 +21,7 @@ from .devices import warps
 
 LIB = "mlkem_triton"
 
-# constants kept in sync with kernels/shake.py
+# constants kept in sync with primitives/sponge.py
 BLOCK = 128
 WARPS = 4
 
@@ -34,26 +34,9 @@ def sponge(padded: Tensor, rate: int, outlen: int) -> Tensor:
     # included in this package because it has to shell out to icpx in a subprocess
     # to build, which completely destroys portability — see `README.md` section
     # `Limitations`.
-    from .kernels.shake import get_sponge
+    from .primitives.sponge import sponge_padded
 
-    n, tot = padded.shape
-    nblocks = tot // rate
-    assert nblocks * rate == tot
-    x = padded.contiguous().view(torch.int64)
-    out = torch.empty((n, outlen // 8), dtype=torch.int64, device=padded.device)
-    kern = get_sponge(rate, outlen)
-    grid = (triton.cdiv(n, BLOCK),)
-    kern[grid](
-        x,
-        out,
-        n,
-        nblocks,
-        nblocks * rate // 8,
-        OUTW=outlen // 8,
-        BLOCK=BLOCK,
-        num_warps=warps("shake", WARPS),
-    )
-    return out.view(torch.uint8).view(n, outlen)
+    return sponge_padded(padded, rate, outlen, warps=warps("shake", WARPS))
 
 
 @sponge.register_fake

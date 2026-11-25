@@ -4,20 +4,22 @@
 
 ## 1. Support matrix
 
-| backend | status | notes |
-|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, 264 tests green |
-| NVIDIA CUDA | ✅ **measured** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 tests green |
-| AMD ROCm | ⚠️ **untested** | code-level reasoning only |
-| Apple MPS | ❌ | no Triton backend |
-| CPU | ❌ | no usable Triton CPU target |
+| backend | ML-KEM (FIPS 203) | ML-DSA verify (FIPS 204) | notes |
+|---|---|---|---|
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **375 tests green** |
+| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
+| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
+| Apple MPS | ❌ | ❌ | no Triton backend |
+| CPU | ❌ | ❌ | no usable Triton CPU target |
 
-The CUDA row was **actually run on that machine**: same code, same ACVP vectors, 264 tests
-green, without changing a single kernel. Only the tile configuration differs. ROCm remains an
-inference from the code and is not claimed as working.
+The ML-KEM CUDA row was **actually run on that machine**: same code, same ACVP vectors, 264
+tests green, without changing a single kernel. Only the tile configuration differs. ML-DSA has
+not been run on NVIDIA hardware yet — its kernels are plain Triton with the same idioms
+(`tl.gather`, int64 lanes, `while` in one kernel), but that is reasoning, not a measurement, and
+is marked as such. ROCm remains an inference from the code and is not claimed as working.
 
-With no GPU at all, `pytest tests` skips the device-dependent cases (currently 90 passed /
-174 skipped), so a CPU-only machine can still smoke-test the maths and reference paths.
+With no GPU at all, `pytest tests` skips the device-dependent cases (currently **123 passed /
+251 skipped**), so a CPU-only machine can still smoke-test the maths and reference paths.
 
 ### Cross-backend details that were verified, not assumed
 
@@ -90,14 +92,23 @@ mlkem_triton/
 ├── gpu_hash.py            thin numpy wrapper over the batch sponge
 ├── refimpl.py             kyber-py reference wrapper (optional dependency)
 ├── acvp.py                NIST ACVP vector parsing
-└── kernels/
-    ├── keccak.py          Keccak constant tables
-    ├── shake.py           sponge kernel (code-generated)
+├── primitives/            scheme-independent: shared by FIPS 203 and FIPS 204
+│   ├── keccak.py          Keccak-f[1600]: constants, generated kernel, numpy reference
+│   ├── sponge.py          sponge kernel, pad10*1, SHA3/SHAKE registry, torch helpers
+│   └── ntt.py             NTT over Z_q[X]/(X^N+1), parameterised by (q, N, ζ, layers),
+│                          forward + inverse, numpy + Triton, KYBER / DILITHIUM
+├── mldsa/                 FIPS 204 verification (+ a full numpy reference)
+│   ├── params.py          ML-DSA-44/65/87 parameter sets and derived sizes
+│   ├── ref.py             numpy FIPS 204: keygen, sign, verify, packing, sampling, rounding
+│   ├── kernels.py         BitUnpack z, MAC, SampleInBall, hint decode, UseHint+BitPack w1
+│   ├── verify.py          the batched Verifier (public-key preprocessing, message formatting)
+│   └── acvp.py            ACVP keyGen / sigGen / sigVer parsing
+└── kernels/               ML-KEM-specific kernels
     ├── glue.py            compress/pack, Y/E assembly, CBD direct write
     ├── padcat.py          pad10*1 + segment concatenation (one launch)
     ├── fused_gemm.py      the two fused GEMM passes (ENC / DEC)
     ├── gemm_modq.py       generic Triton GEMM (comparison path)
-    ├── ntt.py             forward NTT, pointwise multiply, ByteEncode12
+    ├── ntt.py             pow_mac (base-case multiply), ByteEncode12, forward_ntt delegation
     ├── rebuild.py         on-GPU key-material rebuild (measurement tool)
     ├── encaps.py          encaps-specific kernels and packing
     └── elementwise.py     elementwise operators

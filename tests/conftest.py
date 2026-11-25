@@ -36,7 +36,13 @@ def pytest_configure(config):
 # Writing skipif in each test file is easy to get wrong (a newly added file
 # would be missed), so the fallback lives here. The whitelisted modules are
 # pure numpy / pure math and do not need a GPU.
-_NO_GPU_OK = {"test_ntt.py", "test_keyprep.py", "test_ref.py"}
+_NO_GPU_OK = {
+    "test_ntt.py",
+    "test_keyprep.py",
+    "test_ref.py",
+    "test_primitives.py",
+    "test_mldsa_ref.py",
+}
 
 
 def pytest_collection_modifyitems(config, items):

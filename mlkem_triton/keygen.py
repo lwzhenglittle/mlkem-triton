@@ -27,12 +27,12 @@ from . import ops
 from .devices import resolve_device
 from .kernels.ntt import byte_encode12, forward_ntt, pow_mac
 from .kernels.rebuild import RATE_SHAKE128, _sample_ntt_kernel
-from .kernels.shake import SHA3_DOMAIN, SHAKE_DOMAIN
 from .params import PARAMS, Q
 from .pipeline import RATE_SHA3_512, RATE_SHAKE, _pad_prf_gpu, sponge_gpu
+from .primitives.sponge import DOMAIN_SHA3, DOMAIN_SHAKE, SHA3_256
 
 N = 256
-RATE_SHA3_256 = 136
+RATE_SHA3_256 = SHA3_256.rate
 
 
 class KeyGenerator:
@@ -60,7 +60,7 @@ class KeyGenerator:
         gpad = torch.zeros((B, RATE_SHA3_512), dtype=torch.uint8, device=dev)
         gpad[:, :32] = d
         gpad[:, 32] = k
-        gpad[:, 33] = SHA3_DOMAIN
+        gpad[:, 33] = DOMAIN_SHA3
         gpad[:, RATE_SHA3_512 - 1] = 0x80
         g = sponge_gpu(gpad, RATE_SHA3_512, 64)
         rho, sigma = g[:, :32], g[:, 32:]
@@ -72,11 +72,11 @@ class KeyGenerator:
         ji = torch.arange(k * k, device=dev)
         msgs[:, 32] = (ji % k).repeat(B)
         msgs[:, 33] = (ji // k).repeat(B)
-        msgs[:, 34] = SHAKE_DOMAIN
+        msgs[:, 34] = DOMAIN_SHAKE
         msgs[:, RATE_SHAKE128 - 1] = 0x80
         outw = 5 * RATE_SHAKE128 // 8  # 840/8 = 105
         buf64 = torch.empty((n, outw), dtype=torch.int64, device=dev)
-        from .kernels.shake import get_sponge
+        from .primitives.sponge import get_sponge
 
         get_sponge(RATE_SHAKE128, 5 * RATE_SHAKE128)[(triton.cdiv(n, 128),)](
             msgs.view(torch.int64),
@@ -102,10 +102,10 @@ class KeyGenerator:
         # 3. s / e = CBD_η1(PRF(σ, 0..k-1)) and PRF(σ, k..2k-1)
         eta = p.eta1
         yb = sponge_gpu(
-            _pad_prf_gpu(sigma, B * k, RATE_SHAKE, SHAKE_DOMAIN, mod=k, off=0), RATE_SHAKE, 64 * eta
+            _pad_prf_gpu(sigma, B * k, RATE_SHAKE, DOMAIN_SHAKE, mod=k, off=0), RATE_SHAKE, 64 * eta
         )
         eb = sponge_gpu(
-            _pad_prf_gpu(sigma, B * k, RATE_SHAKE, SHAKE_DOMAIN, mod=k, off=k), RATE_SHAKE, 64 * eta
+            _pad_prf_gpu(sigma, B * k, RATE_SHAKE, DOMAIN_SHAKE, mod=k, off=k), RATE_SHAKE, 64 * eta
         )
         if eta == 2:
             sbuf = ops.cbd(yb, eta)  # [B*k, 256] int16
@@ -134,7 +134,7 @@ class KeyGenerator:
         total = ((ct_len + 1 + RATE_SHA3_256 - 1) // RATE_SHA3_256) * RATE_SHA3_256
         padded = torch.zeros((B, total), dtype=torch.uint8, device=dev)
         padded[:, :ct_len] = ek
-        padded[:, ct_len] = SHA3_DOMAIN
+        padded[:, ct_len] = DOMAIN_SHA3
         padded[:, total - 1] = 0x80
         h_ek = sponge_gpu(padded, RATE_SHA3_256, 32)
 

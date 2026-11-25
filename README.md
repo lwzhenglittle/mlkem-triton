@@ -1,11 +1,15 @@
 # mlkem-triton
 
-**ML-KEM (FIPS 203) implemented in pure Triton, with the NTT replaced by Toeplitz matrix
-multiplication.**
+**ML-KEM (FIPS 203) and ML-DSA (FIPS 204) verification in pure Triton — with ML-KEM's NTT
+replaced by Toeplitz matrix multiplication, and the Keccak / NTT primitives shared between
+both schemes.**
 
-Batched decapsulation, encapsulation and key generation. No inline assembly, no
-vendor-specific intrinsics: the polynomial multiplication is folded into a fixed matrix and
-handed straight to the fp16 tensor cores — except in keygen, which genuinely needs an NTT.
+Batched decapsulation, encapsulation and key generation for ML-KEM, batched signature
+verification for ML-DSA. No inline assembly, no vendor-specific intrinsics: ML-KEM's
+polynomial multiplication is folded into a fixed matrix and handed straight to the fp16
+tensor cores — except in keygen, which genuinely needs an NTT. ML-DSA verification needs no
+such trick: its only multiplications are already in the NTT domain, so it uses the shared NTT
+primitive at q = 8380417 (see [ML-DSA](#ml-dsa-fips-204-signature-verification)).
 
 > ### Naming: this is ML-KEM, not Kyber round-3
 >
@@ -64,8 +68,9 @@ pip install "mlkem-triton @ git+https://github.com/lwzhenglittle/mlkem-triton.gi
 Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. Nothing needs compiling, and the wheel is
 pure Python (`py3-none-any`). Add `[ref]` to also pull in kyber-py for random key-pair helpers.
 
-The NIST ACVP vectors in `data/acvp/` and the `tests/` tree are **not** shipped in the built
-distribution, so the correctness gate needs a source checkout:
+The NIST ACVP vectors in `data/acvp/` (ML-KEM) and `data/acvp-mldsa/` (ML-DSA) plus the
+`tests/` tree are **not** shipped in the built distribution, so the correctness gate needs a
+source checkout:
 
 ```bash
 git clone https://github.com/lwzhenglittle/mlkem-triton && cd mlkem-triton
@@ -130,26 +135,126 @@ tables, and the comparison against cuPQC: [docs/benchmarks.md](docs/benchmarks.m
 
 ---
 
+## ML-DSA (FIPS 204) signature verification
+
+Verification is the batchable half of ML-DSA — signing needs the rejection loop and secret
+material — and it has exactly the shape this project optimises for: **one long-lived public
+key, very many signatures**. `Â = ExpandA(ρ)` and `t̂1` are expanded once when the `Verifier`
+is built; a signature then costs one BitUnpack, `l + k + 1` transforms, `k·l` pointwise
+products and three SHAKE calls.
+
+```python
+from mlkem_triton.mldsa import Verifier
+
+v = Verifier("ML-DSA-65", pk)  # pk preprocessing, once
+ok = v.verify(messages, signatures)  # -> np.ndarray[bool], any batch size
+ok = v.verify(messages, sigs, ctx=b"")  # context-bound (FIPS 204 §5.2)
+ok = v.verify(messages, sigs, prehash="SHA2-256")  # HashML-DSA
+ok = v.verify_mu(mu, sigs)  # external-μ interface
+```
+
+| scheme | device-side, B=4096 | e2e (numpy→GPU→bool) | liboqs 1T | liboqs 16P | speed-up dev / e2e |
+|---|---:|---:|---:|---:|---:|
+| ML-DSA-44 | **1.9 µs** | 3.2 µs | 58.7 µs | 10.6 µs | 5.6× / 3.3× |
+| ML-DSA-65 | **2.5 µs** | 4.1 µs | 93.0 µs | 13.9 µs | 5.6× / 3.4× |
+| ML-DSA-87 | **3.8 µs** | 5.7 µs | 136.1 µs | 20.5 µs | 5.4× / 3.6× |
+
+Intel Arc B390, torch 2.15 / triton-xpu 3.9, 32-byte messages; the corpus is **signed by
+liboqs** 0.16.0 (ML-DSA enabled) so the timing and the cross-implementation check share their
+data. `liboqs 16P` = aggregate over 16 concurrent processes, min-of-15:
+`python benchmarks/bench_mldsa_verify.py --ps ML-DSA-65 --batch 4096 --profile`.
+
+**Correctness gates**, all NIST ACVP or a second implementation:
+
+| layer | gate |
+|---|---|
+| GPU verify | 180/180 ACVP **sigVer** cases (44/65/87 × external pure / pre-hash / internal / external-μ, 144 of them invalid) |
+| numpy reference | byte-exact ACVP **keyGen** (75) and **sigGen** (360, deterministic *and* hedged), 180/180 sigVer |
+| kernels | BitUnpack(z), HintBitUnpack, SampleInBall, Decompose/UseHint/BitPack, NTT-domain MAC each compared with `mldsa/ref.py` |
+| cross-implementation | signatures produced by liboqs verify here; both reject the same corrupted ones |
+
+### Why there is no Toeplitz GEMM here
+
+The ML-KEM trick needs one operand to be small: `|W| <= 1664`, `|y| <= 2`, so every fp16
+partial sum stays below 2²⁴ and the tensor-core result is *exactly* the integer result. ML-DSA
+cannot buy that. `q = 8380417` is 23 bits, so two reduced coefficients multiply to 46 bits
+before reduction; keeping that exact on int8 tensor cores takes 9 limb-GEMMs (~2.4 million
+MACs per signature), a hundred times the arithmetic of the NTT it would replace. And there is
+nothing to fold: verification's products are `ŵ = Â·ẑ`, already in the NTT domain, and
+`c·t̂1` with a `c` that has τ ≤ 60 non-zeros.
+
+So ML-DSA verification is genuinely an **NTT + sponge** workload — which is precisely why the
+next section exists.
+
+---
+
+## Shared primitives: Keccak and NTT are not scheme-specific
+
+`mlkem_triton/primitives/` is the layer both standards sit on. Neither module knows which
+scheme is calling it.
+
+| module | what it is | consumers |
+|---|---|---|
+| `primitives.keccak` | Keccak-f[1600]: generated Triton kernel (one lane per thread, 24 rolled rounds) + a numpy reference | both |
+| `primitives.sponge` | pad10\*1, multi-block absorb, multi-block squeeze, and the named `SHA3-256` / `SHA3-512` / `SHAKE128` / `SHAKE256` instances | both |
+| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`, forward **and** inverse | both |
+
+```python
+>>> from mlkem_triton.primitives import KYBER, DILITHIUM
+>>> KYBER.q, KYBER.zeta, KYBER.layers, KYBER.wide      # ML-KEM: 7 layers, order-N ζ
+(3329, 17, 7, False)
+>>> DILITHIUM.q, DILITHIUM.zeta, DILITHIUM.layers, DILITHIUM.wide   # ML-DSA: 8 layers, order-2N ζ
+(8380417, 1753, 8, True)
+```
+
+Same butterfly, two instantiations. Two differences are *not* unified, on purpose:
+
+1. **arithmetic width** — `q = 3329` fits int32 and `%` by a constant is cheap; `q = 8380417`
+   needs int64 products, and there `%` is a 64-bit software divide, so the wide path uses
+   Montgomery reduction (measured 1.9× faster on the transform, and bit-identical).
+2. **what a product means afterwards** — ML-KEM's ζ has order `N`, so the transform stops
+   after 7 layers and its 128 CRT slots are the quadratic extensions `Z_q[X]/(X²−γ)`: the
+   pointwise step is FIPS 203 Alg. 12's base-case multiply (`mlkem_triton.ntt_ref`). ML-DSA's
+   ζ has order `2N`, the transform splits all 256 slots, and the pointwise step is a plain
+   Hadamard product (`DILITHIUM.mul`). Unifying *that* would be wrong for one of the schemes,
+   so it stays in the scheme layer.
+
+What each scheme keeps for itself: ML-KEM's base-case multiply, ByteEncode/Compress, CBD;
+ML-DSA's SampleInBall, Decompose/UseHint, hint encoding, and the bit-packing of `z`, `w1` and
+`t1`. The NTT kernel's ML-KEM instantiation is unchanged by the refactor — the 264 ML-KEM
+tests, including the byte-exact keygen and the ACVP vectors, still pass bit-for-bit.
+
+---
+
 ## Support matrix
 
-| backend | status | notes |
-|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, 264 tests green |
-| NVIDIA CUDA | ✅ **measured** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 tests green |
-| AMD ROCm | ⚠️ **untested** | code-level reasoning only |
-| Apple MPS / CPU | ❌ | no Triton backend / no usable Triton CPU target |
+| backend | ML-KEM (FIPS 203) | ML-DSA verify (FIPS 204) | notes |
+|---|---|---|---|
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **375 tests green** |
+| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
+| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
+| Apple MPS / CPU | ❌ | ❌ | no Triton backend / no usable Triton CPU target |
 
-The CUDA column was actually run on that machine: same code, same vectors, 264 tests green,
-not one kernel line changed — only the tile configuration differs. Detail and tuning knobs:
+The ML-KEM CUDA column was actually run on that machine: same code, same vectors, 264 tests
+green, not one kernel line changed — only the tile configuration differs. ML-DSA has only been
+run on the Intel device so far; there is no NVIDIA hardware in this checkout's development
+environment, and the numbers above are for the Intel iGPU only. Detail and tuning knobs:
 [docs/support.md](docs/support.md).
 
 ## Testing
 
 `pytest` (GPU cases skip themselves with no GPU), plus `ruff check . && ruff format --check .`.
-Three layers: pure maths (Toeplitz identity, fp16 exactness bound), kernel bit-alignment
-(every fused kernel must be byte-equal to the unfused version — this is the guard against
-silent fallback), and end-to-end ACVP vectors. Without a GPU: 90 passed / 174 skipped.
-Contribution process and **measurement discipline**: [CONTRIBUTING.md](CONTRIBUTING.md).
+**375 tests**, four layers:
+
+| layer | what it protects against |
+|---|---|
+| pure maths | Toeplitz identity, fp16 exactness bound, NTT algebra for both `(q, N, ζ)` domains against a schoolbook convolution |
+| kernels vs numpy | every fused kernel must be byte-equal to its unfused/numpy equivalent — the guard against silent fallback, and for ML-DSA the only practical way to debug a data-dependent verdict |
+| ACVP vectors | ML-KEM encap/decap (3×35), ML-DSA sigVer (180), plus keyGen (75) and sigGen (360) for the numpy reference |
+| cross-implementation | byte-exact ML-KEM keygen against kyber-py; ML-DSA against liboqs-signed batches when liboqs is built |
+
+Without a GPU: **123 passed / 252 skipped**. Contribution process and **measurement
+discipline**: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limitations
 
@@ -172,10 +277,26 @@ Read these first; detail in [docs/compare.md](docs/compare.md) §5.
   prior art (TensorCrypto, 2022); the contribution is the exactness argument, the epilogue
   fusion, and two vendors' hardware.
 
+ML-DSA specific:
+
+- **Verification only.** Signing is not implemented on the GPU: it needs the rejection loop and
+  secret-key material, and its cost is dominated by that loop, not by arithmetic. `mldsa/ref.py`
+  has a full numpy implementation (byte-exact against ACVP sigGen) if you need signatures.
+- **Same one-key shape.** Â and t̂1 are expanded once per `Verifier`: **4.3 ms** of host-side
+  work on the B390 (2.5 ms of which is `k·l` SHAKE128 calls with rejection sampling, 1.8 ms the
+  `k` transforms), plus the first device upload when the device is cold. Many keys × few
+  signatures each is not this API's shape.
+- **The Toeplitz trick does not apply** (see above): 23-bit products cannot be exact in fp16,
+  and verification's products are already in the NTT domain. The speed here comes from batching
+  and from the shared primitives, not from tensor cores — the kernel is int64 scalar work.
+- **ML-DSA is ~2× heavier per operation than ML-KEM-768** and scales with `k·l`; the measured
+  5.4–5.6× over 16-threaded liboqs is a batch-throughput claim, not a latency claim (B=1 is
+  dominated by launch overhead, ~13 launches).
+
 ## Documentation
 
 - [docs/design.md](docs/design.md) — why Toeplitz, the fp16 exactness proof, fusion catalogue,
-  Triton pitfalls
+  Triton pitfalls, the primitives layer, and why ML-DSA uses the NTT instead
 - [docs/benchmarks.md](docs/benchmarks.md) — every measured table: throughput, per-kernel,
   fusion A/B, host side
 - [docs/support.md](docs/support.md) — backend status in detail, tuning knobs, project structure
@@ -187,6 +308,6 @@ The Chinese originals of the long-form documents are supplementary material in
 
 ## License
 
-Apache-2.0. ML-KEM itself is a public NIST standard; the ACVP test vectors come from
+Apache-2.0. ML-KEM and ML-DSA are public NIST standards; the ACVP test vectors come from
 [usnistgov/ACVP-Server](https://github.com/usnistgov/ACVP-Server) (a US Government work, in the
 public domain).
