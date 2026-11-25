@@ -331,15 +331,23 @@ single-thread in the same process on the same signatures.
 
 | set | B | device / sig | liboqs 1T | speed-up |
 |---|---:|---:|---:|---:|
-| SHAKE-128s | 4096 | **26.1 µs** | 455 µs | 17.4× |
-| SHAKE-128f | 1024 | 83.0 µs | 1 329 µs | 16.0× |
-| SHAKE-128f | 4096 | **71.2 µs** | 1 329 µs | 18.7× |
-| SHAKE-192f | 4096 | **109.8 µs** | 1 987 µs | 18.1× |
-| SHAKE-256f | 4096 | **111.6 µs** | 1 963 µs | 17.6× |
+| SHAKE-128s | 4096 | **18.7 µs** | 458 µs | 24.5× |
+| SHAKE-128f | 1024 | 67.0 µs | 1 333 µs | 19.9× |
+| SHAKE-128f | 4096 | **47.8 µs** | 1 333 µs | 27.9× |
+| SHAKE-192s | 4096 | **26.5 µs** | 654 µs | 24.6× |
+| SHAKE-192f | 4096 | **67.4 µs** | 1 970 µs | 29.2× |
+| SHAKE-256s | 4096 | **37.8 µs** | 1 032 µs | 27.3× |
+| SHAKE-256f | 4096 | **71.2 µs** | 2 040 µs | 28.7× |
 
-Batch curve for 128f, same corpus: B = 1 → 37.5 ms/sig (400 launches, nothing else), B = 8 →
-4.8 ms, B = 32 → 1.21 ms, B = 64 → 603 µs, B = 1024 → 83 µs, B = 4096 → 71 µs. The crossover
+Batch curve for 128f, same corpus: B = 1 → 37 ms/sig (400 launches, nothing else), B = 8 →
+4.8 ms, B = 32 → 1.2 ms, B = 64 → 600 µs, B = 1024 → 67 µs, B = 4096 → 48 µs. The crossover
 against the CPU is around B ≈ 32, and everything below that is launch latency.
+
+Chain compaction is worth a note because it is data-dependent work made regular: a WOTS+ chain
+with digit `d` needs `w-1-d` hashes, so the `B × 35` chains of a layer finish at different times.
+Sorting them by digit once per layer (and launching each step over the still-running suffix) took
+128f from 71 µs to 48 µs — the earlier "15 fixed steps" schedule was doing ~2× the necessary
+work.
 
 Two honest notes on the comparison:
 

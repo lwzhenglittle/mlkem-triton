@@ -59,10 +59,10 @@ def gen_source(n: int, dn: int) -> str:
         "",
         "@triton.jit",
         "def thash_kernel(SEED, OUT, DATA, RCP, KP, CHAIN, INDEX, TREE, rows,",
-        "                 LAYER: tl.int64, TYPE: tl.int64,",
+        "                 LAYER: tl.int64, TYPE: tl.int64, T: tl.int64, W: tl.int64, ROW0: tl.int64,",
         "                 BLOCK: tl.constexpr):",
         "    pid = tl.program_id(0)",
-        "    row = pid * BLOCK + tl.arange(0, BLOCK)",
+        "    row = ROW0 + pid * BLOCK + tl.arange(0, BLOCK)",
         "    m = row < rows",
     ]
     # ADRS words (bytes 0..32), each written big-endian by the scheme and read little-endian here
@@ -74,7 +74,9 @@ def gen_source(n: int, dn: int) -> str:
     L.append("    w1 = _bs64(tl.load(TREE + row, mask=m, other=0))")
     L.append("    w2 = _bs32(tl.load(KP + row, mask=m, other=0)) << 32")
     L.append("    w2 = w2 | _bs32(TYPE)")
-    L.append("    w3 = _bs32(tl.load(INDEX + row, mask=m, other=0)) << 32")
+    L.append("    addr = tl.load(INDEX + row, mask=m, other=0) + T")
+    L.append("    active = addr < W")
+    L.append("    w3 = _bs32(tl.where(active, addr, 0)) << 32")
     L.append("    w3 = w3 | _bs32(tl.load(CHAIN + row, mask=m, other=0))")
     L.append(f"    a{nw_seed} = w0 | zero_v")
     L.append(f"    a{nw_seed + 1} = w1 | zero_v")
@@ -82,9 +84,10 @@ def gen_source(n: int, dn: int) -> str:
     L.append(f"    a{nw_seed + 3} = w3 | zero_v")
     for i in range(nw_data):
         L.append(
-            f"    a{nw_seed + 4 + i} = tl.load(DATA + row * {nw_data} + {i}, mask=m,"
+            f"    m{i} = tl.load(DATA + row * {nw_data} + {i}, mask=m,"
             f" other=0).to(tl.uint64, bitcast=True)"
         )
+        L.append(f"    a{nw_seed + 4 + i} = m{i}")
 
     used = nw_seed + 4 + nw_data  # words filled so far
     for i in range(used, 17):
@@ -104,7 +107,10 @@ def gen_source(n: int, dn: int) -> str:
     L.append("        rc = tl.load(RCP + _r)")
     _emit_rounds(L, 0, ind="        ", rc_expr="rc")
 
+    # inactive rows keep their input (this also makes OUT == DATA safe: per-row read-then-write)
     for i in range(nw_out):
+        if i < nw_data:
+            L.append(f"    a{i} = tl.where(active, a{i}, m{i})")
         L.append(
             f"    tl.store(OUT + row * {nw_out} + {i}, a{i}.to(tl.int64, bitcast=True), mask=m)"
         )
@@ -129,13 +135,29 @@ def _compile(n: int, dn: int):
     return mod.thash_kernel
 
 
-def thash(seed_words, data, out_words, kp, chain, index, tree, layer, typ, n, block=128):
+def thash(
+    seed_words,
+    data,
+    out_words,
+    kp,
+    chain,
+    index,
+    tree,
+    layer,
+    typ,
+    n,
+    t=0,
+    w=1 << 40,
+    row0=0,
+    block=128,
+):
     """Launch the fused thash over `rows = data.shape[0]` rows; `out_words` is [rows, n/8]."""
     import triton
 
     rows = data.shape[0]
     kern = _compile(n, data.shape[1] * 8)  # data is an int64 view
-    kern[(triton.cdiv(rows, block),)](
+    # `row0` lets the chain loop launch only over the rows whose chain is still running
+    kern[(max(1, triton.cdiv(rows - row0, block)),)](
         seed_words,
         out_words,
         data,
@@ -147,6 +169,9 @@ def thash(seed_words, data, out_words, kp, chain, index, tree, layer, typ, n, bl
         rows,
         layer,
         typ,
+        t,
+        w,
+        row0,
         BLOCK=block,
         num_warps=4,
     )

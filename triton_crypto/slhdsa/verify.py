@@ -133,7 +133,9 @@ class Verifier:
     def _dev_t(self):
         return self.device
 
-    def _thash(self, data, kp, chain, index, tree, *, layer=0, typ=0):
+    def _thash(
+        self, data, kp, chain, index, tree, *, layer=0, typ=0, t=0, w=1 << 40, inplace=False, row0=0
+    ):
         """
 
         Single-block inputs (n + 32 + dn < 136: every F and H call) go through the fused kernel;
@@ -148,10 +150,14 @@ class Verifier:
         n = self.p.n
         if n + 32 + data.shape[1] >= RATE:
             return self._thash_multi(data, layer, typ, kp, tree)
-        out = torch.empty((rows, n // 8), dtype=torch.int64, device=self._dev_t())
+        words = data.contiguous().view(torch.int64)
+        if inplace:
+            out = words  # OUT aliases DATA: each lane reads its row before writing it
+        else:
+            out = torch.empty((rows, n // 8), dtype=torch.int64, device=self._dev_t())
         _kernels.thash(
             self._seed_w,
-            data.contiguous().view(torch.int64),
+            words,
             out,
             kp,
             chain,
@@ -160,6 +166,9 @@ class Verifier:
             layer,
             typ,
             n,
+            t=t,
+            w=w,
+            row0=row0,
         )
         return out.view(torch.uint8)
 
@@ -249,16 +258,33 @@ class Verifier:
         kp_row = idx_leaf.repeat_interleave(len_)
         tree_row = idx_tree.repeat_interleave(len_)
         chain_row = torch.arange(len_, dtype=torch.int64, device=dev).repeat(B)
-        pos = digits.reshape(-1).clone()
-        remaining = (p.w - 1) - pos
-        value = wots.reshape(rows, n)
-        for _ in range(p.w - 1):
-            hashed = self._thash(
-                value, kp_row, chain_row, pos, tree_row, layer=layer, typ=WOTS_HASH
+        digit_row = digits.reshape(-1)
+        # Chains finish at different times: one with digit d needs w-1-d hashes. Sorting by
+        # descending digit makes the still-running rows a contiguous suffix, so each step can
+        # launch over just that suffix (~half the permutations, on average).
+        order = torch.argsort(digit_row, descending=True, stable=True)
+        value = wots.reshape(rows, n)[order]
+        kp_s, ch_s, tr_s = kp_row[order], chain_row[order], tree_row[order]
+        dig_s = digit_row[order]
+        dhost = dig_s.cpu().numpy()  # one sync per layer, to size the launches
+        for t in range(p.w - 1):
+            active = int((dhost + t < p.w - 1).sum())
+            if active == 0:
+                break
+            self._thash(
+                value,
+                kp_s,
+                ch_s,
+                dig_s,
+                tr_s,
+                layer=layer,
+                typ=WOTS_HASH,
+                t=t,
+                w=p.w - 1,
+                inplace=True,
+                row0=rows - active,
             )
-            value = torch.where((remaining > 0)[:, None], hashed, value)
-            pos = pos + 1
-            remaining = torch.clamp(remaining - 1, min=0)
+        value = torch.empty_like(value).index_copy_(0, order, value)
 
         zero_b = torch.zeros(B, dtype=torch.int64, device=dev)
         root = self._thash(

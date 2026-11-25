@@ -237,20 +237,24 @@ machine and the same signatures:
 
 | set | device | liboqs 1T | speed-up |
 |---|---:|---:|---:|
-| SLH-DSA-SHAKE-128s | **26.1 µs** | 455 µs | 17.4× |
-| SLH-DSA-SHAKE-128f | **71.2 µs** | 1 329 µs | 18.7× |
-| SLH-DSA-SHAKE-192f | **109.8 µs** | 1 987 µs | 18.1× |
-| SLH-DSA-SHAKE-256f | **111.6 µs** | 1 963 µs | 17.6× |
+| SLH-DSA-SHAKE-128s | **18.7 µs** | 458 µs | 24.5× |
+| SLH-DSA-SHAKE-128f | **47.8 µs** | 1 333 µs | 27.9× |
+| SLH-DSA-SHAKE-192s | **26.5 µs** | 654 µs | 24.6× |
+| SLH-DSA-SHAKE-192f | **67.4 µs** | 1 970 µs | 29.2× |
+| SLH-DSA-SHAKE-256s | **37.8 µs** | 1 032 µs | 27.3× |
+| SLH-DSA-SHAKE-256f | **71.2 µs** | 2 040 µs | 28.7× |
 
 **The speed-up is real but it is not the 10³× the literature reports**, and the reason is worth
 stating: those figures compare against the NIST reference implementation, not against an
-optimised CPU. Measured against liboqs on the same machine, 18× is what a batch buys.
+optimised CPU. Measured against liboqs on the same machine, ~25× is what a batch buys.
 
 Why the batch is needed: one verification is 2k–12k hashes in a dependency chain, and the batch
 turns it into `B × 35` independent chains per layer. The schedule is one launch per chain step —
 `d × 15` of them for 128f — and each hash is a fused kernel (`thash_kernel` in
 [docs/kernels.md](docs/kernels.md)) that builds `PK.seed ‖ ADRS ‖ data` in registers and permutes
-it, so no intermediate buffer is written. Small batches are pure launch overhead: at B = 1 a
+it, so no intermediate buffer is written. Chains also finish early: a chain whose digit is `d`
+needs `w-1-d` hashes, so the rows are sorted once per layer and each step launches only over the
+still-running suffix — that alone halved the chain work and moved the table from ~18× to ~25×. Small batches are pure launch overhead: at B = 1 a
 signature costs 37 ms, the crossover against the CPU is around **B ≈ 32**, and B ≥ 1024 is where
 the table above lives.
 

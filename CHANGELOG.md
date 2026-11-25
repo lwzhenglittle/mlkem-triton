@@ -20,9 +20,14 @@ verification is a dependency chain of thousands of hashes — and a hash kernel 
   permuted in one launch, specialised per `(n, dn)` so the padding is a constant. This is what
   took 128f from 172 µs to **71 µs** per signature at B = 4096.
 - `benchmarks/bench_slhdsa_verify.py` and a `--scheme slhdsa` route in `benchmarks/bench.py`.
+- **In-place chain steps and chain compaction.** The fused kernel reads its own output buffer
+  (per-row read-then-write), so a chain step needs no `torch.where` and no copy; and because a
+  chain with digit `d` needs `w-1-d` hashes, each layer sorts its rows by digit and every step
+  launches only over the still-running suffix. Together: 71 µs → 48 µs for 128f at B = 4096, and
+  17× → ~25× over liboqs.
 
-Measured at batch 4096 against liboqs single-thread on the same machine: 26.1 µs (128s),
-71.2 µs (128f), 109.8 µs (192f), 111.6 µs (256f) — 17–19×. The crossover against the CPU is
+Measured at batch 4096 against liboqs single-thread on the same machine: 18.7 µs (128s),
+47.8 µs (128f), 67.4 µs (192f), 71.2 µs (256f) — 24–29×. The crossover against the CPU is
 around B ≈ 32; below that the device is launch-bound.
 
 ### Notes
