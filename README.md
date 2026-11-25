@@ -366,6 +366,18 @@ ML-DSA specific:
   work on the B390 (2.5 ms of which is `k·l` SHAKE128 calls with rejection sampling, 1.8 ms the
   `k` transforms), plus the first device upload when the device is cold. Many keys × few
   signatures each is not this API's shape.
+
+SLH-DSA specific:
+
+- **Six of the twelve parameter sets on device.** The SHA-2 sets need SHA-256/SHA-512 compression
+  kernels; `Verifier` raises `NotImplementedError` for them rather than guessing, and the numpy
+  reference covers all twelve.
+- **Verification only**, like ML-DSA.
+- **Batch-bound.** A signature is ~400 launches, so at B = 1 it costs 37 ms — 28× *slower* than
+  the CPU. The crossover is around B ≈ 32; B ≥ 1024 is where the table in the section above lives.
+- **First call compiles six kernels.** Each `(n, dn)` pair of the fused `thash` is its own kernel
+  (~1.5 s each, then cached on disk by Triton), so a cold machine pays a few seconds before the
+  first verification.
 - **The Toeplitz trick does not apply** (see above): 23-bit products cannot be exact in fp16,
   and verification's products are already in the NTT domain. The speed here comes from batching
   and from the shared primitives, not from tensor cores — the kernel is int64 scalar work.
