@@ -28,19 +28,34 @@ QL = tl.constexpr(Q)
 N = 256
 
 
-def _zt(dev):
-    """ZETAS 表（int32，按设备缓存）。索引 0 不用。"""
-    global _ZT
-    key = dev
-    t = _ZT.get(key)
-    if t is None:
-        t = torch.tensor([int(z) for z in ZETAS], dtype=torch.int32, device=dev)
-        _ZT[key] = t
-    return t
-
-
-_ZT: dict = {}
 _GM: dict = {}
+
+
+_ZT_FLAT: dict = {}
+
+
+def _zt_flat(dev):
+    """每个 stage × 每个元素位置的 ζ，展平成 [7*256]，一次 load 就够。
+
+    原来每级每个元素都要算 `idx // (2*L)` 再 gather 常数表 —— 7 级就是 7 次整数
+    除法 + 7 次小表 gather。整除在 GPU 上是 20+ 条指令。
+    """
+    t = _ZT_FLAT.get(dev)
+    if t is None:
+        import numpy as _np
+
+        z = _np.asarray([int(v) for v in ZETAS], dtype=_np.int32)
+        flat = _np.empty(7 * 256, dtype=_np.int32)
+        L = 128
+        off = 1
+        for s_i in range(7):
+            idx = _np.arange(256)
+            flat[s_i * 256 : (s_i + 1) * 256] = z[off + idx // (2 * L)]
+            L //= 2
+            off *= 2
+        t = torch.from_numpy(flat).to(dev)
+        _ZT_FLAT[dev] = t
+    return t
 
 
 def _gammas(dev):
@@ -68,10 +83,9 @@ def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
     x = _modq(x)
 
     L = N // 2
-    off = 1
     for _s in tl.static_range(7):
         pv = tl.gather(x, (idx ^ L)[None, :].broadcast_to((BR, N)), axis=1)
-        z = tl.load(ZT + off + (idx // (2 * L))).to(tl.int32)[None, :]
+        z = tl.load(ZT + _s * N + idx).to(tl.int32)[None, :]
         lo = ((idx & L) == 0)[None, :]
         # 低半 out = a + z·b，高半 out = a − z·b（a 是块内第 j 个、b 是第 j+L 个）。
         # 把 a/b 用 where 归一到两个半区，就只需要 **一次** 乘法 + 两次 modq，
@@ -82,49 +96,53 @@ def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
         sg = tl.where(lo, 1, -1)
         x = _modq(a + sg * _modq(z * b))
         L = L // 2
-        off = off * 2
 
     tl.store(OUT + rows[:, None] * N + idx[None, :], x, mask=m[:, None])
 
 
 @triton.jit
-def pow_mac_kernel(A, S, E, OUT, GAM, P, K: tl.constexpr, N: tl.constexpr, BR: tl.constexpr):
-    """`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]`（NTT 域逐点乘 + 二次扩域，FIPS 203 Alg. 11/12）。
+def pow_mac_kernel(
+    A, S, E, OUT, GAM, P, K: tl.constexpr, N: tl.constexpr, HALF: tl.constexpr, BR: tl.constexpr
+):
+    """`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]`（FIPS 203 Alg. 11/12）。
 
-    A: [B*k*k, N]（行序 b*k*k + i*k + j）；S: [B*k, N]（b*k + j）；
-    E: [B*k, N]；OUT: [B*k, N]。
+    `multiply_ntts` 是 128 个**二次扩域**乘法：
+
+        c0 = a0·b0 + (a1·b1 mod q)·γ
+        c1 = a0·b1 + a1·b0
+
+    所以偶数/奇数系数是两个独立的通道。**直接在加载时按 stride=2 取**，就完全
+    不需要 gather —— 这一版把 16 次 `tl.gather` 换成了纯 strided load/store。
+    （GB10 上 keygen 里这一步原本占 33%，是整个 keygen 最大的一块。）
     """
     pid = tl.program_id(0)
-    rows = pid * BR + tl.arange(0, BR)  # 输出多项式序号 p = b*k + i
+    rows = pid * BR + tl.arange(0, BR)
     m = rows < P
-    idx = tl.arange(0, N)
+    h = tl.arange(0, HALF)
     b = rows // K
     i = rows - b * K
-    arow = b * (K * K) + i * K  # Â[b][i][0] 的起始行
-    srow = b * K  # ŝ[b][0] 的起始行
+    arow = b * (K * K) + i * K
+    srow = b * K
 
-    acc = tl.load(E + rows[:, None] * N + idx[None, :], mask=m[:, None], other=0).to(tl.int32)
-    even = (idx % 2) == 0
-    j2 = idx // 2
+    e_base = E + rows[:, None] * N
+    acc0 = tl.load(e_base + 2 * h[None, :], mask=m[:, None], other=0).to(tl.int32)
+    acc1 = tl.load(e_base + 2 * h[None, :] + 1, mask=m[:, None], other=0).to(tl.int32)
+    g = tl.load(GAM + h).to(tl.int32)[None, :]
 
-    for j in tl.static_range(4):  # K 是 2/3/4，跑满 4 次
+    for j in tl.static_range(4):  # K ∈ {2,3,4}，跑满 4 次
         if j < K:
-            a = tl.load(A + (arow + j)[:, None] * N + idx[None, :], mask=m[:, None], other=0).to(
-                tl.int32
-            )
-            s = tl.load(S + (srow + j)[:, None] * N + idx[None, :], mask=m[:, None], other=0).to(
-                tl.int32
-            )
-            # --- multiply_ntts ---
-            a0 = tl.gather(a, (j2 * 2)[None, :].broadcast_to((BR, N)), axis=1)
-            a1 = tl.gather(a, (j2 * 2 + 1)[None, :].broadcast_to((BR, N)), axis=1)
-            b0 = tl.gather(s, (j2 * 2)[None, :].broadcast_to((BR, N)), axis=1)
-            b1 = tl.gather(s, (j2 * 2 + 1)[None, :].broadcast_to((BR, N)), axis=1)
-            g = tl.load(GAM + j2).to(tl.int32)[None, :]
-            c0 = _modq(a0 * b0 + _modq(_modq(a1 * b1) * g))
-            c1 = _modq(a0 * b1 + a1 * b0)
-            acc = _modq(acc + tl.where(even[None, :], c0, c1))
-    tl.store(OUT + rows[:, None] * N + idx[None, :], acc, mask=m[:, None])
+            ab = A + (arow + j)[:, None] * N + 2 * h[None, :]
+            sb = S + (srow + j)[:, None] * N + 2 * h[None, :]
+            a0 = tl.load(ab, mask=m[:, None], other=0).to(tl.int32)
+            a1 = tl.load(ab + 1, mask=m[:, None], other=0).to(tl.int32)
+            b0 = tl.load(sb, mask=m[:, None], other=0).to(tl.int32)
+            b1 = tl.load(sb + 1, mask=m[:, None], other=0).to(tl.int32)
+            acc0 = _modq(acc0 + _modq(a0 * b0 + _modq(_modq(a1 * b1) * g)))
+            acc1 = _modq(acc1 + _modq(a0 * b1 + a1 * b0))
+
+    o_base = OUT + rows[:, None] * N
+    tl.store(o_base + 2 * h[None, :], acc0, mask=m[:, None])
+    tl.store(o_base + 2 * h[None, :] + 1, acc1, mask=m[:, None])
 
 
 def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
@@ -132,7 +150,7 @@ def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
     P = x.shape[0]
     out = torch.empty_like(x, dtype=torch.int32)
     ntt_kernel[(triton.cdiv(P, br),)](
-        x, out, _zt(x.device), P, N, br, num_warps=warps("ntt", 2 if br <= 2 else 4)
+        x, out, _zt_flat(x.device), P, N, br, num_warps=warps("ntt", 2)
     )
     return out
 
@@ -142,7 +160,17 @@ def pow_mac(a, s, e, k: int, br: int = 16) -> torch.Tensor:
     P = s.shape[0]
     out = torch.empty_like(s, dtype=torch.int32)
     pow_mac_kernel[(triton.cdiv(P, br),)](
-        a, s, e, out, _gammas(s.device), P, k, N, br, num_warps=warps("pow_mac", 4)
+        a,
+        s,
+        e,
+        out,
+        _gammas(s.device),
+        P,
+        k,
+        N,
+        N // 2,
+        br,
+        num_warps=warps("pow_mac", 4),
     )
     return out
 
