@@ -220,10 +220,11 @@ permutation, and the scheme sits directly on `primitives.sponge`. Verification r
 hypertree root from the signature and compares it with the public key — no secrets, no early exit,
 no data-dependent branches beyond the WOTS+ digits.
 
-Implemented: **the six SHAKE parameter sets**, verification only. The SHA-2 sets need SHA-256 /
-SHA-512 compression kernels that this repository does not have yet: the numpy reference
-implements them (and is ACVP-checked), the device path raises `NotImplementedError` rather than
-returning a wrong answer. Signing is out of scope, as with ML-DSA.
+Implemented: **the six SHAKE parameter sets**, verification only. The SHA-2 sets are
+reference-only on device: the SHA-256/SHA-512 kernels exist and are validated
+(`primitives/sha2.py`), but the composite hash those sets need is not wired into the scheme yet, so
+`Verifier` raises `NotImplementedError` for them rather than returning a wrong answer. Signing is
+out of scope, as with ML-DSA.
 
 | gate | result |
 |---|---|
