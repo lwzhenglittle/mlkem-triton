@@ -120,6 +120,11 @@ def parse_key(ps: str, dk: bytes, verify_hash: bool = True) -> KeyPrep:
     """
     p = PARAMS[ps]
     k = p.k
+    # Accept bytes-like or an array of uint8. Without this, `parse_key` on a
+    # numpy array returns array views for `ek` / `h_ek`, and the hash check below
+    # compares `bytes != ndarray`, which yields an array and makes `if` raise.
+    if not isinstance(dk, (bytes, bytearray)):
+        dk = np.asarray(dk, dtype=np.uint8).tobytes()
     if len(dk) != p.dk_size:
         raise ValueError(f"{ps}: dk length should be {p.dk_size}, got {len(dk)}")
 
@@ -184,6 +189,11 @@ def parse_ek(ps: str, ek: bytes) -> EncKeyPrep:
     """
     p = PARAMS[ps]
     k = p.k
+    # Accept bytes-like or an array of uint8; see the note in `parse_key`. Here the
+    # array form would reach `sample_ntt`, where `rho` must support `bytes`
+    # concatenation rather than numpy addition.
+    if not isinstance(ek, (bytes, bytearray)):
+        ek = np.asarray(ek, dtype=np.uint8).tobytes()
     if len(ek) != p.ek_size:
         raise ValueError(f"{ps}: ek length should be {p.ek_size}, got {len(ek)}")
     t_hat = np.stack([byte_decode(ek[384 * j : 384 * (j + 1)], 12) for j in range(k)])

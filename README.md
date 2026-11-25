@@ -54,13 +54,23 @@ kernels. Full argument, fusion catalogue and Triton pitfalls: [docs/design.md](d
 
 ## Install
 
+**Not on PyPI yet** — the name is unregistered, so `pip install mlkem-triton` fails with
+"No matching distribution found". Install from GitHub until it is published:
+
 ```bash
-pip install mlkem-triton
+pip install "mlkem-triton @ git+https://github.com/lwzhenglittle/mlkem-triton.git"
 ```
 
-Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. Nothing needs compiling. For test helpers
-that generate key pairs at random, `pip install "mlkem-triton[ref]"` pulls in kyber-py; the
-primary correctness gate is the NIST vectors in `data/acvp/`, which do not need it.
+Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. Nothing needs compiling, and the wheel is
+pure Python (`py3-none-any`). Add `[ref]` to also pull in kyber-py for random key-pair helpers.
+
+The NIST ACVP vectors in `data/acvp/` and the `tests/` tree are **not** shipped in the built
+distribution, so the correctness gate needs a source checkout:
+
+```bash
+git clone https://github.com/lwzhenglittle/mlkem-triton && cd mlkem-triton
+pip install -e ".[test,ref]" && pytest
+```
 
 ## Usage
 
