@@ -44,6 +44,7 @@ _NO_GPU_OK = {
     "test_mldsa_ref.py",
     "test_compat.py",
     "test_slhdsa_ref.py",
+    "test_sha2.py",
 }
 
 
