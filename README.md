@@ -246,7 +246,9 @@ machine and the same signatures:
 
 **The speed-up is real but it is not the 10³× the literature reports**, and the reason is worth
 stating: those figures compare against the NIST reference implementation, not against an
-optimised CPU. Measured against liboqs on the same machine, ~25× is what a batch buys.
+optimised CPU. Measured against liboqs on the same machine, ~25× is what a batch buys — and 7.5× against
+16 liboqs processes, which is the number that survives once the CPU is allowed to use all its
+cores.
 
 Why the batch is needed: one verification is 2k–12k hashes in a dependency chain, and the batch
 turns it into `B × 35` independent chains per layer. The schedule is one launch per chain step —

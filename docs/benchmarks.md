@@ -349,6 +349,11 @@ Sorting them by digit once per layer (and launching each step over the still-run
 128f from 71 µs to 48 µs — the earlier "15 fixed steps" schedule was doing ~2× the necessary
 work.
 
+Against **16 liboqs processes** on the same batch (4096 signatures, wall clock): 359.9 µs per
+signature, so the device is 7.5× faster than a loaded 16-core CPU — not 28×. End-to-end (message
+bytes in, `bool[B]` out, M' formatting on the host) adds 1–2 µs/signature to the device-only
+figure.
+
 Two honest notes on the comparison:
 
 - **The CPU baseline moves with the machine's clock state.** In the evaluation that preceded this
