@@ -1,7 +1,8 @@
-"""密钥生成（FIPS 203 Alg. 16）验收。
+"""Key generation (FIPS 203 Alg. 16) acceptance.
 
-keygen 是三个操作里唯一用 NTT 的，也是最容易错的一个（我第一版把
-`G(d ‖ k)` 写成了 `G(d)`，ρ 全错）。所以这里用**逐字节对拍 kyber-py** 来锁死。
+keygen is the only one of the three operations that uses the NTT, and the easiest to
+get wrong (my first version wrote `G(d ‖ k)` as `G(d)`, so ρ was completely wrong).
+So here we pin it down with a **byte-for-byte cross-check against kyber-py**.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from mlkem_triton.params import Q
 
 pytest.importorskip("triton")
 
-pytestmark = pytest.mark.skipif(not HAS_GPU, reason="需要 GPU")
+pytestmark = pytest.mark.skipif(not HAS_GPU, reason="requires GPU")
 
 PS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
 
@@ -57,8 +58,10 @@ def test_byte_encode12_matches_reference():
 
 @pytest.mark.parametrize("ps", PS)
 def test_keygen_bit_exact_vs_kyberpy(ps):
-    """全长 2400 字节的 dk 必须与 kyber-py 逐字节相同（含那个 `‖ k` 域分隔）。"""
-    pytest.importorskip("kyber_py", reason="需要 kyber-py 做逐字节对拍")
+    """The full 2400-byte dk must be byte-identical to kyber-py's (including the
+    `‖ k` domain separation).
+    """
+    pytest.importorskip("kyber_py", reason="requires kyber-py for the byte-for-byte check")
     from mlkem_triton import refimpl
 
     d = bytes(range(32))
@@ -69,23 +72,23 @@ def test_keygen_bit_exact_vs_kyberpy(ps):
         torch.from_numpy(np.frombuffer(d, np.uint8).copy()).to(DEV).reshape(1, 32),
         torch.from_numpy(np.frombuffer(z, np.uint8).copy()).to(DEV).reshape(1, 32),
     )
-    assert ek.cpu().numpy()[0].tobytes() == ek_ref, "ek 不一致"
-    assert dk.cpu().numpy()[0].tobytes() == dk_ref, "dk 不一致"
+    assert ek.cpu().numpy()[0].tobytes() == ek_ref, "ek mismatch"
+    assert dk.cpu().numpy()[0].tobytes() == dk_ref, "dk mismatch"
 
 
 @pytest.mark.parametrize("ps", PS)
 def test_keygen_batch_then_encaps_decaps(ps):
-    """批量生成 → 用第一把钥匙 encaps → 用自己的 decaps 拿回同一个 K。"""
-    pytest.importorskip("kyber_py", reason="需要 kyber-py 交叉验证")
+    """Batch generate → encaps with the first key → get the same K back with our own decaps."""
+    pytest.importorskip("kyber_py", reason="requires kyber-py for cross-validation")
     from mlkem_triton import refimpl
     from mlkem_triton.encaps import Encapsulator
     from mlkem_triton.pipeline import Decapsulator
 
     eks, dks = KeyGenerator(ps, device=DEV).generate(5)
     ek, dk = eks[0].tobytes(), dks[0].tobytes()
-    # kyber-py 能用我们生成的 ek 封装 → 说明 ek 是合法的 FIPS 203 公钥
+    # kyber-py can encapsulate with our ek → so the ek is a valid FIPS 203 public key
     K, c = refimpl.ref_encaps(ps, ek)
     assert Decapsulator(ps, dk, device=DEV).decaps([c])[0].tobytes() == K
-    # 我们的 encaps 也能用我们生成的 ek
+    # our encaps can also use the ek we generated
     c2, K2 = Encapsulator(ps, ek, device=DEV).encapsulate([bytes(32)])
     assert refimpl.ref_decaps(ps, dk, c2[0].tobytes()) == K2[0].tobytes()

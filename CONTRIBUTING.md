@@ -1,69 +1,77 @@
-# 贡献指南
+# Contributing
 
-## 环境
+## Environment
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[test,ref]"
 ```
 
-`[ref]` 会装 `kyber-py`，只有一部分测试要用它（随机生成密钥对、做逐字节对拍）。
+`[ref]` pulls in `kyber-py`; only part of the suite needs it (random key-pair generation and
+byte-exact cross-checking).
 
-硬件要求：
+Hardware:
 
-- **跑全部测试**：需要一块有 Triton 后端的 GPU（NVIDIA / AMD / Intel）。
-  没有 GPU 时 `pytest tests` 仍然能跑（90 passed / 174 skipped），GPU 用例由
-  `tests/conftest.py` 集中 skip 掉。**这个项目没有 GPU CI** —— 测试都是在真机上
-  手动跑的，所以 PR 里请写明你跑过哪些硬件。
-- **只是看看代码 / 跑参考实现**：纯 CPU 就够，`mlkem_triton.ntt_ref` / `keyprep`
-  是纯 numpy。
+- **To run the whole suite**: a GPU with a Triton backend (NVIDIA / AMD / Intel). Without a GPU
+  `pytest tests` still runs (90 passed / 174 skipped) because `tests/conftest.py` skips the
+  device-dependent cases centrally. **This project has no GPU CI** — the tests are run by hand
+  on real machines, so please state in your PR which hardware you ran.
+- **Just reading the code or running the reference implementation**: CPU is enough;
+  `mlkem_triton.ntt_ref` and `keyprep` are pure numpy.
 
-## 测试
+## Tests
 
 ```bash
-pytest                      # 全部
-pytest --device cuda        # 指定后端
-pytest tests/test_glue.py   # 单文件
+pytest                      # everything
+pytest --device cuda        # pin a backend
+pytest tests/test_glue.py   # one file
 ruff check . && ruff format --check .
 ```
 
-三层：
+Three layers:
 
-1. **纯数学**（`test_ntt.py`、`test_keyprep.py`、`test_dot_exact.py`）——
-   Toeplitz 等式、NTT 自洽、fp16 累加的精确性边界。
-2. **内核逐位对齐**（`test_fused_gemm.py`、`test_glue.py`、`test_encaps.py`、
-   `test_keygen.py`、`test_rebuild.py`）—— 每个融合内核必须和「未融合的多步实现
-   逐字节相等」。**这一层是防静默回退的关键**：融合内核在不满足约束时会返回
-   `False`/`None` 且不写任何输出，调用方回退；判定条件写错时这一层立刻红。
-   （开发过程中真的踩过一次：`Y` 是个转置视图导致融合 GEMM 一直没执行。）
-3. **端到端**（`test_pipeline*.py`）—— NIST ACVP 官方向量 + 隐式拒绝 + 各批量。
+1. **Pure maths** (`test_ntt.py`, `test_keyprep.py`, `test_dot_exact.py`) — the Toeplitz
+   identity, NTT self-consistency, the exactness bound of fp16 accumulation.
+2. **Kernel bit-alignment** (`test_fused_gemm.py`, `test_glue.py`, `test_encaps.py`,
+   `test_keygen.py`, `test_rebuild.py`) — every fused kernel must be **byte-equal to the unfused
+   multi-step implementation**. **This is the guard against silent fallback**: a fused kernel
+   returns `False`/`None` and writes no output when its constraints are unmet, and the caller
+   falls back silently. If the guard condition is ever written wrong, this layer goes red
+   immediately. (We did hit this during development: `Y` was a transposed view, so the fused
+   GEMM was never executing.)
+3. **End-to-end** (`test_pipeline*.py`) — official NIST ACVP vectors, implicit rejection, every
+   batch size.
 
-## 加一个新后端
+## Adding a backend
 
-只改 `mlkem_triton/devices.py`：
+Only `mlkem_triton/devices.py` needs to change:
 
-1. `available_devices()` / `_check_available()` 里加上该设备类型；
-2. `_GEMM_CFG` 里给一组 tile 配置（必须同时满足 `M % BM == 0`、`K % BK == 0`
-   这类整除约束，见 `fused_gemm._pick_cfg`）；
-3. `sync()` 里加同步分支；
-4. 小内核的 `num_warps` 默认值在各自模块顶部，可以用
-   `MLKEM_WARPS="shake=8,ntt=4"` 临时覆盖，扫完再写回默认值。
+1. add the device type to `available_devices()` / `_check_available()`;
+2. add a tile configuration to `_GEMM_CFG`. It must satisfy the divisibility constraints
+   (`M % BM == 0`, `K % BK == 0`, …) checked by `fused_gemm._pick_cfg`;
+3. add a synchronisation branch to `sync()`;
+4. small-kernel `num_warps` defaults live at the top of each module and can be overridden
+   temporarily with `MLKEM_WARPS="shake=8,ntt=4"`. Sweep first, then write the value back as the
+   default.
 
-**请在 PR 里写明实际测过的硬件型号**，不要提交「理论上应该更快」的配置。
+**State the exact hardware model you measured in the PR.** Do not submit configurations that
+are only "supposed to be faster".
 
-## 测量纪律（这个项目吃过亏，务必遵守）
+## Measurement discipline (this project has been burned; follow it)
 
-- **只信同进程交错 A/B 的比值**。GPU 时钟在不同会话之间能差 2~4 倍
-  （本机 Intel 核显空载 0.9 GHz、满载 2.2 GHz，而 `xe` 驱动不暴露调频接口）。
-- 报 **min-of-N**，不要报平均值。本项目的 `_pre` 内核有 26 倍冷启动离散，
-  用平均值算出来的占比排名和按 min 算的**完全相反**。
-- **先确认优化路径真的执行了**。融合内核会静默回退，跨进程比较会把时钟噪声
-  当成收益。
-- 用 `benchmarks/` 里的脚本，它们自带「融合 vs 全回退」的一致性自检。
-- 基准数字要附上：硬件型号、软件版本、批大小、计时口径（纯 kernel / 含 host）。
+- **Only same-process interleaved A/B ratios are trustworthy.** GPU clocks differ by 2–4×
+  between sessions (this machine's Intel iGPU idles at 0.9 GHz and loads at 2.2 GHz, and the
+  `xe` driver exposes no frequency control).
+- Report **min-of-N**, never the mean. The `_pre` kernel here has 26× cold-start spread, and the
+  ranking by share computed from means is **the exact opposite** of the one computed from mins.
+- **Confirm the optimised path actually ran.** Fused kernels fall back silently, and
+  cross-process comparisons turn clock noise into apparent gains.
+- Use the scripts in `benchmarks/`; they self-check fused against the fully-fallback path.
+- Every benchmark number must be accompanied by: hardware model, software versions, batch size,
+  and timing convention (pure kernel vs host-included).
 
-## 提交
+## Commits
 
-- 跑 `ruff format .`
-- 它会让 diff 变大，但请单独一个 commit
-- 性能改动请附上改动前后的配对比值，以及跑在什么硬件上
+- run `ruff format .`
+- it makes the diff large, so keep it in its own commit
+- performance changes must include paired before/after ratios and the hardware they ran on

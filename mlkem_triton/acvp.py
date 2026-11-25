@@ -1,7 +1,7 @@
-"""解析 NIST ACVP-Server 的 ML-KEM encapDecap 测试向量。
+"""Parse the NIST ACVP-Server ML-KEM encapDecap test vectors.
 
-数据来源：https://github.com/usnistgov/ACVP-Server
-路径：gen-val/json-files/ML-KEM-encapDecap-FIPS203/{prompt,expectedResults}.json
+Data source: https://github.com/usnistgov/ACVP-Server
+Path: gen-val/json-files/ML-KEM-encapDecap-FIPS203/{prompt,expectedResults}.json
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ DEFAULT_DIR = Path(
 
 
 def load(data_dir: Path | str | None = None):
-    """返回扁平化的用例列表。
+    """Return the flattened list of test cases.
 
-    每条记录：{tgId, parameterSet, function, testType, tcId, inputs, expected}
+    Each record: {tgId, parameterSet, function, testType, tcId, inputs, expected}
     """
     d = Path(data_dir) if data_dir else DEFAULT_DIR
     prompt = json.loads((d / "prompt.json").read_text())
@@ -56,6 +56,6 @@ def group_summary(cases=None):
 
 if __name__ == "__main__":
     cs = load()
-    print(f"共 {len(cs)} 条用例")
+    print(f"total {len(cs)} test cases")
     for k, v in sorted(group_summary(cs).items()):
         print(f"  {k[0]:<12} {k[1]:<22} {k[2]:<5} {v:>3}")

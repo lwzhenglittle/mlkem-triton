@@ -1,16 +1,16 @@
-"""参考实现封装：统一接口 ref_keygen / ref_encaps / ref_decaps。
+"""Reference-implementation wrapper: uniform ref_keygen / ref_encaps / ref_decaps API.
 
-底层用 **kyber-py**（第三方 FIPS 203 实现，可选依赖）：
-    pip install mlkem-triton[ref]        # 或 pip install kyber-py
+Backed by **kyber-py** (a third-party FIPS 203 implementation, optional dependency):
+    pip install mlkem-triton[ref]        # or: pip install kyber-py
 
-它提供确定性内部接口，正好对上 ACVP 向量：
+It exposes deterministic internal entry points that line up exactly with the ACVP vectors:
     _keygen_internal(d, z) -> (ek, dk)
     _encaps_internal(ek, m) -> (K, c)
     _decaps_internal(dk, c) -> K
 
-**不是必需的**：正确性主 gate 用 `data/acvp/` 里的 NIST 官方测试向量
-（`mlkem_triton.acvp`），不需要任何第三方实现。kyber-py 只在想随机
-生成密钥对做往返测试时才用得上。
+**Not required**: the primary correctness gate uses the official NIST test vectors in
+`data/acvp/` (`mlkem_triton.acvp`) and needs no third-party implementation. kyber-py is
+only needed when you want to randomly generate keypairs for round-trip tests.
 """
 
 from __future__ import annotations
@@ -25,17 +25,17 @@ _KEM = None
 
 
 def _kems() -> dict:
-    """惰性导入 kyber-py，缺包时给一条能直接照做的错误信息。"""
+    """Import kyber-py lazily; if it is missing, raise an error you can act on directly."""
     global _KEM
     if _KEM is None:
         try:
             from kyber_py.ml_kem import ML_KEM_512, ML_KEM_768, ML_KEM_1024
         except ModuleNotFoundError as e:  # pragma: no cover
             raise ModuleNotFoundError(
-                "这个功能需要 kyber-py（可选依赖）。装它：\n"
+                "This feature requires kyber-py (an optional dependency). Install it:\n"
                 "    pip install mlkem-triton[ref]\n"
-                "如果只是想做正确性验证，用 mlkem_triton.acvp + data/acvp/ 下的\n"
-                "NIST 官方测试向量，不需要 kyber-py。"
+                "If you only want correctness verification, use mlkem_triton.acvp + the\n"
+                "official NIST test vectors under data/acvp/; kyber-py is not needed."
             ) from e
         _KEM = {
             "ML-KEM-512": ML_KEM_512,
@@ -48,36 +48,36 @@ def _kems() -> dict:
 def kem(ps: str):
     kems = _kems()
     if ps not in kems:
-        raise KeyError(f"未知参数集 {ps}")
+        raise KeyError(f"unknown parameter set {ps}")
     return kems[ps]
 
 
-# ---------------- 官方接口 ----------------
+# ---------------- public API ----------------
 
 
 def ref_keygen(ps: str, d: bytes | None = None, z: bytes | None = None):
-    """返回 (ek, dk)。d/z 给定时为确定性。"""
+    """Return (ek, dk). Deterministic when d/z are given."""
     d = os.urandom(32) if d is None else d
     z = os.urandom(32) if z is None else z
     return kem(ps)._keygen_internal(d, z)
 
 
 def ref_encaps(ps: str, ek: bytes, m: bytes | None = None):
-    """返回 (K, c)；注意 K 在前。"""
+    """Return (K, c); note that K comes first."""
     m = os.urandom(32) if m is None else m
     return kem(ps)._encaps_internal(ek, m)
 
 
 def ref_decaps(ps: str, dk: bytes, c: bytes) -> bytes:
-    """返回共享密钥 K（含隐式拒绝）。"""
+    """Return the shared secret K (implicit rejection included)."""
     return kem(ps)._decaps_internal(dk, c)
 
 
-# ---------------- FIPS 203 §7 输入校验 ----------------
+# ---------------- FIPS 203 §7 input validation ----------------
 
 
 def decaps_key_check(ps: str, dk: bytes) -> bool:
-    """§7.3 解封装密钥检查：长度 + 内嵌 H(ek) 与 ek 一致。"""
+    """§7.3 decapsulation key check: length + embedded H(ek) matches ek."""
     p = PARAMS[ps]
     if len(dk) != p.dk_size:
         return False
@@ -87,11 +87,12 @@ def decaps_key_check(ps: str, dk: bytes) -> bool:
 
 
 def encaps_key_check(ps: str, ek: bytes) -> bool:
-    """§7.2 封装密钥检查：长度 + 模数检查（每个 12-bit 系数必须 < q）。"""
+    """§7.2 encapsulation key check: length + modulus check (every 12-bit
+    coefficient must be < q)."""
     p = PARAMS[ps]
     if len(ek) != p.ek_size:
         return False
-    # ek 的 t̂ 部分是 k 个多项式，每个 384 字节，需逐个 ByteDecode12
+    # the t̂ part of ek is k polynomials, 384 bytes each, each needs its own ByteDecode12
     ok = True
     for i in range(p.k):
         vals = byte_decode(ek[384 * i : 384 * (i + 1)], 12)
@@ -99,11 +100,11 @@ def encaps_key_check(ps: str, ek: bytes) -> bool:
     return ok
 
 
-# ---------------- 辅助 ----------------
+# ---------------- helpers ----------------
 
 
 def split_dk(ps: str, dk: bytes):
-    """按 FIPS 203 拆 dk：dk_PKE ‖ ek ‖ H(ek) ‖ z。"""
+    """Split dk as in FIPS 203: dk_PKE ‖ ek ‖ H(ek) ‖ z."""
     p = PARAMS[ps]
     k = p.k
     return {
@@ -115,7 +116,7 @@ def split_dk(ps: str, dk: bytes):
 
 
 def implicit_reject_key(ps: str, dk: bytes, c: bytes) -> bytes:
-    """K̄ = J(z ‖ c) = SHAKE256(z‖c, 32)。"""
+    """K̄ = J(z ‖ c) = SHAKE256(z‖c, 32)."""
     z = split_dk(ps, dk)["z"]
     return hashlib.shake_256(z + c).digest(32)
 

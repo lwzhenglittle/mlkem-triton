@@ -1,35 +1,58 @@
-# 变更记录
+# Changelog
 
 ## 0.1.0
 
-首个可运行版本。**纯 Triton，无内联汇编、无厂商专属 intrinsic**。
+First working release. **Pure Triton — no inline assembly, no vendor-specific intrinsics.**
 
-### 三个操作
+### The three operations
 
-| 操作 | 实现 | 正确性 | GB10 每 op |
+| operation | implementation | correctness | per op on GB10 |
 |---|---|---|---:|
-| decaps | Toeplitz GEMM（无 NTT）| NIST ACVP 3×10 条 | 125 ns |
-| encaps | Toeplitz GEMM（无 NTT）| NIST ACVP 3×25 条 | 88 ns |
-| keygen | NTT（必须）| 与 kyber-py 逐字节对拍 | 469 ns |
+| decaps | Toeplitz GEMM (no NTT) | NIST ACVP 3×10 | 125 ns |
+| encaps | Toeplitz GEMM (no NTT) | NIST ACVP 3×25 | 88 ns |
+| keygen | NTT (unavoidable) | byte-exact against kyber-py | 469 ns |
 
-### 已在真机验证
+### Verified on real hardware
 
-- Intel Arc B390（Xe3-LPG）/ triton-xpu 3.9 / torch 2.15
-- NVIDIA GB10（sm_121）/ triton 3.8 / torch 2.14
+- Intel Arc B390 (Xe3-LPG) / triton-xpu 3.9 / torch 2.15
+- NVIDIA GB10 (sm_121) / triton 3.8 / torch 2.14
 
-264 个测试在两台机器上全绿（无 GPU 时自动降级为 90 passed / 174 skipped）。
-ROCm **未测**（只有代码级推断）。
+264 tests green on both machines (degrading to 90 passed / 174 skipped with no GPU).
+ROCm is **untested** (code-level reasoning only).
 
-### 已知限制
+### Known limitations
 
-- keygen 比 cuPQC 慢约 2.7 倍（NTT 是它的结构性弱项，见
-  `results/comparison_prior_work.md` §0.1d）
-- 每把私钥 7.9 MB 显存 + 13.5 ms CPU 预处理（GPU 重建 0.158 ms）
-- ML-KEM-512 的 η₁=3 走通用 CBD 路径，慢约 3 倍
-- 承重接口需要大批量：Intel 核显上 B ≥ 1024 才追平 liboqs-16 线程
-- 没有形式化的常数时间验证（未做 dudect/ctgrind）
+- keygen is about 2.7× slower than cuPQC — the NTT is its structural weakness, see
+  [docs/compare.md](docs/compare.md) §0.4
+- 7.9 MB of VRAM and 13.5 ms of CPU pre-processing per private key (on-GPU rebuild: 0.158 ms)
+- ML-KEM-512 takes the generic CBD path because `η1 = 3`, about 3× slower
+- the load-bearing interface needs large batches: on the Intel iGPU B >= 1024 is required to
+  match 16-threaded liboqs
+- no formal constant-time validation (no dudect / ctgrind)
 
-### 测量方法学
+### Measured, then not done
 
-`results/comparison_prior_work.md` 记录了完整的对照数据、与 cuPQC 的同机对比、
-以及本项目里**被证伪的假设**（例如「pinned 中转不划算」其实是测错了 memcpy 的方式）。
+- **Fusing the keygen pipeline** (SampleNTT → NTT → `pow_mac`) was measured before being built.
+  It would remove one 37.7 MB write (0.200 ms) and one read (0.132 ms) of `Â` at B=4096, i.e.
+  **81 ns/key**. That is an upper bound of **1.21×** (466 → best case 385 ns/key), still 0.45×
+  of cuPQC's 174 ns. The work was declined on that basis; the measurement is recorded in
+  [docs/compare.md](docs/compare.md) §0.4 so nobody re-opens it on the assumption that fusion
+  closes the gap.
+- **Streaming double-buffered H2D** was ruled out by measurement rather than by argument: on
+  this Intel driver H2D cannot overlap compute (dual-stream zero-dependency 1.328 ms vs serial
+  1.307 ms).
+
+### Measurement methodology
+
+[docs/compare.md](docs/compare.md) records the full comparison data, the same-machine comparison
+against cuPQC, and — deliberately — **the hypotheses this project falsified**, for example that
+pinned staging was "not worth it" (it was: the memcpy had been measured with numpy assignment
+instead of `copy_`).
+
+### Documentation
+
+The long-form documents were rewritten in English and split into
+[design](docs/design.md), [benchmarks](docs/benchmarks.md), [support](docs/support.md) and
+[comparison](docs/compare.md). The original Chinese versions are kept as supplementary material
+in [docs/zh/](docs/zh/); the English versions are authoritative. The unused
+`data/acvp/internalProjection.json` (1.4 MB, never read by any code path) was dropped.

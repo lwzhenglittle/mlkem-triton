@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""逐内核耗时拆分（回答「时间花在哪」）。
+"""Per-kernel time breakdown (answers "where does the time go").
 
     python benchmarks/bench_kernels.py --device cuda --batch 4096
 
-用 `torch.profiler` 拿设备侧每个 kernel 的 self time。**注意用 `min × 调用次数`
-而不是 `avg`** —— 本项目的 `_pre` 内核有 26 倍的冷启动离散（min 92 µs / avg
-468 / max 2424），用平均值会把它的占比算成第一，和按 min 算出来的排名完全相反。
+Uses `torch.profiler` to get the self time of each device-side kernel. **Note: use
+`min × call count` rather than `avg`** — this project's `_pre` kernel has 26x cold-start
+spread (min 92 µs / avg 468 / max 2424); using the average would rank its share first,
+completely reversing the ranking from the min-based calculation.
 """
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ def main() -> int:
             dec.decaps_torch(tod, B)
     _sync(dev)
 
-    # 每个 kernel 的 min 单次耗时 × 每次调用次数
+    # per-kernel min single-call time × calls per invocation
     per_key = defaultdict(list)
     for ev in prof.events():
         if ev.device_type == torch.autograd.DeviceType.CPU:
@@ -69,7 +70,7 @@ def main() -> int:
         if t:
             per_key[ev.key].append(t)
 
-    # device_time 的单位是**微秒**
+    # device_time is in **microseconds**
     rows = []
     for key, ts in per_key.items():
         n_per_call = len(ts) / args.iters

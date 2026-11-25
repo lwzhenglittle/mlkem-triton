@@ -1,21 +1,26 @@
-"""封装侧的融合内核：`GEMM + mod q + Compress + ByteEncode`。
+"""Fused kernels on the encaps side: `GEMM + mod q + Compress + ByteEncode`.
 
-ML-KEM 的封装在有了 `W_enc`（Toeplitz 展开的重加密矩阵）之后是：
+With `W_enc` (the Toeplitz-expanded re-encryption matrix) in hand, ML-KEM
+encapsulation is:
 
-    [u; v] = W_enc @ r + [e1; e2 + Decompress_1(m)]      （系数域，无 NTT）
-    c1 = ByteEncode_du(Compress_du(u))                   （每行 256 系数 → 32·du 字节）
-    c2 = ByteEncode_dv(Compress_dv(v))                   （256 系数 → 32·dv 字节）
+    [u; v] = W_enc @ r + [e1; e2 + Decompress_1(m)]      (coefficient domain, no NTT)
+    c1 = ByteEncode_du(Compress_du(u))                   (256 coeffs per row → 32·du bytes)
+    c2 = ByteEncode_dv(Compress_dv(v))                   (256 coeffs → 32·dv bytes)
     c  = c1 ‖ c2
 
-前一步正好是 decaps 重加密那一趟（`fused_enc_gemm`）的 GEMM，只是 epilogue 从
-「与参考值比较、按列计数」换成「压缩、打包成密文」。所以这里复用
-`fused_gemm._gemm_tile` / `_tile_id`，只写新的 epilogue 和一个打包内核。
+The preceding step is exactly the GEMM of the decaps re-encryption pass
+(`fused_enc_gemm`); only the epilogue changes, from "compare against the
+reference value, count per column" to "compress and pack into a ciphertext". So
+we reuse `fused_gemm._gemm_tile` / `_tile_id` and write only the new epilogue
+plus one packing kernel.
 
-**位打包没有融进 GEMM 的 epilogue**：`du = 10` 时一个字节横跨 1~2 个系数，
-而系数在 tile 的行方向上，跨行取字节需要在 tile 内部做重排（和 Toeplitz 展开
-遇到的是同一类问题）。所以走两步：GEMM 先写出 `comp [M, B] int16`（8.4 MB @
-B=4096），再由打包内核按「每个多项式 32·D 字节对齐」重组。实测这两步加起来
-比 decaps 那一趟贵约 15 ns/op，可以接受。
+**Bit packing is not fused into the GEMM epilogue**: with `du = 10` a byte spans
+1~2 coefficients, and coefficients run along the tile rows, so taking a byte
+across rows needs reordering inside the tile (the same class of problem as the
+Toeplitz expansion). So it takes two steps: the GEMM first writes
+`comp [M, B] int16` (8.4 MB @ B=4096), then the packing kernel regroups it with
+"32·D bytes per polynomial" alignment. Measured, those two steps together cost
+about 15 ns/op more than the decaps pass, which is acceptable.
 """
 
 from __future__ import annotations
@@ -31,7 +36,7 @@ Q = 3329
 QL = tl.constexpr(Q)
 
 
-# --------------------------------------------------------------- 压缩 epilogue
+# --------------------------------------------------------------- compression epilogue
 @triton.jit
 def _compress_epi(
     acc,
@@ -45,7 +50,7 @@ def _compress_epi(
     BM: tl.constexpr,
     MASK_N: tl.constexpr,
 ):
-    """`(acc + E) mod q` → Compress_D → 写成 uint16 到 [M, N] 的 comp。"""
+    """`(acc + E) mod q` -> Compress_D -> written as uint16 into comp [M, N]."""
     cols = cbase + tl.arange(0, BN)
     if MASK_N:
         m = cols[None, :] < N
@@ -91,19 +96,21 @@ def encaps_kernel(
         _compress_epi(acc, E, OUT, offm, pid_n * BN, DV, BN, N, BM, MASK_N)
 
 
-# --------------------------------------------------------------- 位打包
+# --------------------------------------------------------------- bit packing
 @triton.jit
 def pack_seg_kernel(
     COMP, OUT, B, CTLEN, OUTOFF, NSEG, D: tl.constexpr, BLK: tl.constexpr, OBLK: tl.constexpr
 ):
-    """把 `NSEG` 个多项式的压缩系数按 `32*D` 字节/多项式写进密文缓冲。
+    """Write the compressed coefficients of `NSEG` polynomials into the
+    ciphertext buffer, `32*D` bytes per polynomial.
 
-    `COMP` [NSEG*256, B] int16；`OUT` [B, CTLEN] uint8（已清零）。
+    `COMP` [NSEG*256, B] int16; `OUT` [B, CTLEN] uint8 (already zeroed).
 
-    一个字节覆盖 8 个连续比特，可能横跨 **3 个**系数（D < 8 时，例如 dv=5）：
-    D=10/11 是 2 个，D=5 是 3 个，D=4 恰好 2 个。所以固定展开 3 项再按移位量
-    屏蔽，别按「2 个系数」硬编码 —— 我第一版就是硬编码 2 个，du=10/11 全对、
-    dv=4 全对、dv=5 错 40/160 字节。
+    One byte covers 8 consecutive bits and may span **3** coefficients (when
+    D < 8, e.g. dv=5): D=10/11 spans 2, D=5 spans 3, D=4 spans exactly 2. So
+    always unroll 3 terms and mask by the shift amount -- do not hardcode "2
+    coefficients": my first version hardcoded 2, and it was all correct for
+    du=10/11 and for dv=4, while dv=5 was wrong in 40/160 bytes.
     """
     pid_b = tl.program_id(0)
     pid_o = tl.program_id(1)
@@ -121,13 +128,13 @@ def pack_seg_kernel(
     acc = tl.zeros((OBLK, BLK), dtype=tl.int32)
     for t in tl.static_range(3):
         cc = c0 + t
-        cc = tl.where(cc < 256, cc, c0)  # 夹在段内，避免越界读
+        cc = tl.where(cc < 256, cc, c0)  # clamp inside the segment, no out-of-bounds read
         v = tl.load(
             COMP + (seg * 256 + cc)[:, None] * B + cols[None, :],
             mask=omask[:, None] & bmask[None, :],
             other=0,
         ).to(tl.int32)
-        sh = (t * D - s0)[:, None]  # 该系数 bit0 落在输出的第几位
+        sh = (t * D - s0)[:, None]  # which output bit this coefficient's bit0 lands on
         a = tl.where(sh >= 0, v << sh, v >> (-sh))
         acc |= tl.where((sh < 8) & (sh > -D), a, 0)
     byte = acc & 0xFF
@@ -138,9 +145,10 @@ def pack_seg_kernel(
     )
 
 
-# --------------------------------------------------------------- 入口
+# --------------------------------------------------------------- entry points
 def fused_encaps(W, Y, E, B: int, du: int, dv: int, pivot: int | None = None):
-    """→ comp [M, B] int16（已 Compress），或 None（约束不满足，未写输出）。"""
+    """→ comp [M, B] int16 (already Compressed), or None (constraints
+    unsatisfied, nothing written)."""
     if W.dim() != 2 or Y.dim() != 2 or E.dim() != 2:
         return None
     M, K = W.shape
@@ -194,9 +202,10 @@ def pack_ciphertext(
     blk: int = 32,
     oblk: int = 128,
 ) -> None:
-    """把 `comp [M, B]` 打包进 `padded [B, ≥ct_size]` 的 `[0, ct_size)`。
+    """Pack `comp [M, B]` into `[0, ct_size)` of `padded [B, ≥ct_size]`.
 
-    u 段（k 个多项式 × 32·du 字节）用 D=du；c2 段（1 个多项式 × 32·dv 字节）用 D=dv。
+    The u segment (k polynomials × 32·du bytes) uses D=du; the c2 segment
+    (1 polynomial × 32·dv bytes) uses D=dv.
     """
     B = comp.shape[1]
     grid_u = (triton.cdiv(B, blk), triton.cdiv(k * 32 * du, oblk))

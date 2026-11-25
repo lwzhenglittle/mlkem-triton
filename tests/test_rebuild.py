@@ -1,7 +1,8 @@
-"""GPU 上的密钥重建（`kernels/rebuild.py`）验收。
+"""Acceptance for key rebuild on the GPU (`kernels/rebuild.py`).
 
-这个模块只为测量而存在（对照 cuPQC 无状态 API 每 op 重算 Â），所以要求是
-**逐元素等于 CPU 的 `keyprep.parse_key`** —— 一旦不等，所有"同口径"结论都不成立。
+This module exists only for measurement (mirroring cuPQC's stateless API, which
+recomputes Â per op), so the requirement is **element-wise equality with the CPU's
+`keyprep.parse_key`** — if they differ, every "same-basis" conclusion is void.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from mlkem_triton.pipeline import Decapsulator
 
 pytest.importorskip("triton")
 
-pytestmark = pytest.mark.skipif(not HAS_GPU, reason="需要 GPU")
+pytestmark = pytest.mark.skipif(not HAS_GPU, reason="requires GPU")
 
 
 def _dk(ps: str) -> bytes:
@@ -28,7 +29,9 @@ def _dk(ps: str) -> bytes:
 
 
 def test_intt_matrix_is_exact():
-    """INTT 用 256×256 矩阵乘代替蝴蝶，必须逐位精确（fp64 下 2^53 够）。"""
+    """INTT uses a 256×256 matmul instead of butterflies and must be bit-exact (2^53 is
+    enough in fp64).
+    """
     mt = intt_matrix(DEV)
     for seed in range(4):
         np.random.seed(seed)
@@ -43,7 +46,7 @@ def test_intt_matrix_is_exact():
 
 @pytest.mark.parametrize("ps", ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"])
 def test_rebuild_matches_keyprep(ps):
-    """重建出的 W_dec / W_enc 必须与 CPU 路径逐元素相等（fp16 下）。"""
+    """The rebuilt W_dec / W_enc must equal the CPU path element by element (in fp16)."""
     dk = _dk(ps)
     kp = keyprep.parse_key(ps, dk)
     Wd, We = GpuKeyRebuilder(ps, device=DEV).rebuild(dk)
@@ -54,13 +57,15 @@ def test_rebuild_matches_keyprep(ps):
     We_ref = torch.from_numpy(kp.W_enc).to(torch.float16).cpu()
     assert tuple(Wd.shape) == tuple(Wd_ref.shape)
     assert tuple(We.shape) == tuple(We_ref.shape)
-    assert torch.equal(Wd.cpu(), Wd_ref), "W_dec 不一致"
-    assert torch.equal(We.cpu(), We_ref), "W_enc 不一致"
+    assert torch.equal(Wd.cpu(), Wd_ref), "W_dec mismatch"
+    assert torch.equal(We.cpu(), We_ref), "W_enc mismatch"
 
 
 @pytest.mark.parametrize("ps", ["ML-KEM-768"])
 def test_rebuilt_weights_give_correct_decaps(ps):
-    """用重建出来的权重跑完整流水线，ACVP 向量必须过 —— 这才证明权重语义对。"""
+    """Run the whole pipeline with the rebuilt weights; the ACVP vectors must pass —
+    only that proves the weight semantics are right.
+    """
 
     c = next(x for x in acvp.load() if x["function"] == "decapsulation" and x["parameterSet"] == ps)
     dk = bytes.fromhex(c["inputs"]["dk"])
@@ -68,11 +73,11 @@ def test_rebuilt_weights_give_correct_decaps(ps):
     want = bytes.fromhex(c["expected"]["k"])
 
     dec = Decapsulator(ps, dk, device=DEV)
-    assert dec.decaps([ct] * 4)[0].tobytes() == want  # 预展开路径
+    assert dec.decaps([ct] * 4)[0].tobytes() == want  # pre-expanded path
 
     dec.W_dec, dec.W_enc = GpuKeyRebuilder(ps, device=DEV).rebuild(dk)
     got = dec.decaps([ct] * 4)
-    assert all(x.tobytes() == want for x in got), "重建权重下解封装不正确"
+    assert all(x.tobytes() == want for x in got), "decapsulation with rebuilt weights is wrong"
 
 
 if __name__ == "__main__":

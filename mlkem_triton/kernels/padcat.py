@@ -1,35 +1,42 @@
-"""把 pad10*1 + 域分隔（含段拼接/广播/单字节后缀）压成**一次 launch**。
+"""Fold pad10*1 + domain separation (including segment concatenation,
+broadcast / single-byte suffix) into **one launch**.
 
-为什么需要它
-------------
-`pad_gpu(cat([a, b]))` 在 XPU 上是 3 次 launch（`cat`、`torch.zeros`、`copy_`），
-而且 `cat` 还要处理 `expand` 出来的 stride-0 源。B=4096 的 J 档
-（`z(32B) || ct(1088B)`，pad 到 9 块 × 136 B）实测 **192 µs**，
-而它服务的 sponge kernel 本身才 256 µs —— 也就是 4.5 MB 的输入准备
-吃掉了 J 阶段的 43 %。融合成一次 launch、整行写完（含零填充）后 **28 µs**。
+Why it is needed
+----------------
+`pad_gpu(cat([a, b]))` is 3 launches on XPU (`cat`, `torch.zeros`, `copy_`), and
+`cat` also has to handle stride-0 sources produced by `expand`. The J case at
+B=4096 (`z(32B) || ct(1088B)`, padded to 9 blocks × 136 B) measures **192 µs**,
+while the sponge kernel it serves is only 256 µs — i.e. preparing 4.5 MB of
+input eats 43 % of the J stage. Fused into one launch, with the whole row
+written (zero padding included), it is **28 µs**.
 
-语义严格等价于（逐字节）：
+Strictly equivalent to (byte for byte):
 
     out = torch.zeros((n, total), uint8)
     out[:, :L] = msgs
     out[:, L] = domain
     out[:, total - 1] |= 0x80
 
-三个变体
---------
-- `padcat2`：消息 = `a || b`，`a`/`b` 各自可广播（J：z 广播 + ct 逐行；
-  G：m' 逐行 + h_ek 广播）。
-- `padcat_sfx`：消息 = `a[row//mod] || [row % mod + off]`（PRF：r' || [j]）。
-- 没有 `padcat` 的普通单段情形继续用 `pad_gpu`（标量/小批量更划算）。
+Three variants
+--------------
+- `padcat2`: message = `a || b`, with `a`/`b` each independently broadcastable
+  (J: z broadcast + ct per row; G: m' per row + h_ek broadcast).
+- `padcat_sfx`: message = `a[row//mod] || [row % mod + off]` (PRF: r' || [j]).
+- The plain single-segment case without `padcat` keeps using `pad_gpu` (cheaper
+  for scalars / small batches).
 
-实现要点
---------
-- **word（int64）粒度**：要求段长、总长都是 8 的倍数（J/G/PRF 都满足），
-  指令数是字节粒度的 1/8。调用方不满足时自己回退。
-- 零填充区显式**排除** domain word 和最后一个 word，这两个用定点标量写，
-  避免同一次 kernel 里「先写 0 再写 domain」的跨 warp 写-写竞争。
-- tile 取 `[BR=32, <=128]`：BR=128 时会因为每线程 128 个 int64（=128 GRF）
-  而掉速 2.6×（实测 25 µs → 65 µs），所以 BR 不能大。
+Implementation notes
+--------------------
+- **word (int64) granularity**: segment lengths and the total length must both
+  be multiples of 8 (J/G/PRF all satisfy this), so the instruction count is 1/8
+  of the byte-granular one. Callers that do not satisfy this fall back on their
+  own.
+- The zero-fill region explicitly **excludes** the domain word and the last
+  word; those two are written with fixed-point scalar stores, avoiding a
+  cross-warp write-write race from "write 0 then write domain" within the same
+  kernel.
+- The tile is `[BR=32, <=128]`: at BR=128, holding 128 int64 per thread (=128
+  GRF), throughput drops 2.6× (measured 25 µs → 65 µs), so BR cannot be large.
 """
 
 from __future__ import annotations
@@ -46,16 +53,16 @@ from ..devices import warps
 
 BR_DEFAULT = 32
 WARPS_DEFAULT = 4
-_MAX_CHUNK = 128  # 每个 tile 最多 128 个 word（8 的倍数、2 的幂）
+_MAX_CHUNK = 128  # at most 128 words per tile (a multiple of 8 and a power of 2)
 
 
 def _sgn64(v: int) -> int:
-    """把无符号 64 位常量写进 Triton 的 int64（避免 >= 2^63 报错）。"""
+    """Write an unsigned 64-bit constant into a Triton int64 (avoids an error at >= 2^63)."""
     return v - (1 << 64) if v >= (1 << 63) else v
 
 
 def _chunks(n: int) -> list[tuple[int, int]]:
-    """把 n 拆成递减的 2 的幂之和（136 -> [(0,128),(128,8)]）。"""
+    """Split n into a descending sum of powers of 2 (136 -> [(0,128),(128,8)])."""
     out, off = [], 0
     while n > 0:
         p = min(1 << (n.bit_length() - 1), _MAX_CHUNK)
@@ -75,7 +82,7 @@ def gen_padcat2_source(
     L.append("    rows = pid * BR + tl.arange(0, BR)")
     L.append("    m = rows < n")
     L.append(f"    prow = OUT + rows[:, None] * {total_w}")
-    # ---- A 段 ----
+    # ---- segment A ----
     for off, sz in _chunks(la_w):
         tail = off + sz > la_w
         L.append(f"    c = tl.arange(0, {sz})")
@@ -98,7 +105,7 @@ def gen_padcat2_source(
                 )
             )
             L.append(f"    tl.store(prow + {off} + c[None, :], v, mask=m[:, None])")
-    # ---- B 段 ----
+    # ---- segment B ----
     for off, sz in _chunks(lb_w):
         tail = off + sz > lb_w
         o = la_w + off
@@ -122,14 +129,14 @@ def gen_padcat2_source(
                 )
             )
             L.append(f"    tl.store(prow + {o} + c[None, :], v, mask=m[:, None])")
-    # ---- 零区（排除 domain word 与最后一个 word）----
+    # ---- zero region (excludes domain word and last word) ----
     z0, z1 = la_w + lb_w + 1, total_w - 1
     for off, sz in _chunks(max(0, z1 - z0)):
         o = z0 + off
         L.append(f"    c = tl.arange(0, {sz})")
         L.append(f"    tl.store(prow + {o} + c[None, :], tl.zeros((BR, {sz}), dtype=tl.int64),")
         L.append(f"             mask=m[:, None] & (c[None, :] < {z1 - o}))")
-    # ---- domain word + 最后一个 word ----
+    # ---- domain word + last word ----
     dom_w, last_w = la_w + lb_w, total_w - 1
     dom_val = _sgn64(domain | (0x80 << 56)) if dom_w == last_w else _sgn64(domain)
     L.append(
@@ -153,18 +160,19 @@ def gen_padcat_sfx_source(
     stride_w: int | None = None,
     base_w: int = 0,
 ) -> str:
-    """消息 = a[row // mod] || bytes[row % mod + off] || pad10*1。
+    """message = a[row // mod] || bytes[row % mod + off] || pad10*1.
 
-    `prefix_w` 个 word 来自 a（每个消息只有 `mod` 个不同前缀，按 row//mod 取），
-    紧跟一个由后缀字节 + domain 组成的 word，然后零填充，最后一个 word 是 0x80。
-    `stride_w`/`base_w` 让前缀可以直接从一个大张量（如 G 的 64 B 输出）里原地取，
-    省掉一次 `contiguous()` 拷贝。
+    The first `prefix_w` words come from a (each message has only `mod` distinct
+    prefixes, taken by row//mod), followed by one word made up of the suffix byte
+    + domain, then zero fill; the last word is 0x80. `stride_w`/`base_w` let the
+    prefix be read in place directly from a large tensor (e.g. the 64 B output of
+    G), saving one `contiguous()` copy.
     """
     assert prefix_w > 0 and total_w > prefix_w + 1 and mod >= 1
     sw = prefix_w if stride_w is None else stride_w
     assert sw >= prefix_w + base_w
     dom_w, last_w = prefix_w, total_w - 1
-    assert dom_w < last_w, "后缀+domain 不能和 0x80 落在同一个 word（本实现用不到）"
+    assert dom_w < last_w, "suffix+domain cannot share a word with 0x80 (not needed here)"
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
     L.append("def padcat_sfx_kernel(A, OUT, n, MOD: tl.constexpr, OFF: tl.constexpr,")
     L.append("                      BR: tl.constexpr):")
@@ -185,7 +193,7 @@ def gen_padcat_sfx_source(
             )
         )
         L.append(f"    tl.store(prow + {o} + c[None, :], v, mask=m[:, None])")
-    # 后缀字节 + domain 共处一个 word（小端：后缀在最低字节）
+    # suffix byte + domain share one word (little-endian: suffix in the lowest byte)
     L.append("    sfx = (rows % MOD) + OFF")
     L.append(f"    w = (sfx.to(tl.int64) | {domain << 8})")
     L.append(f"    tl.store(OUT + rows * {total_w} + {dom_w}, w, mask=m)")
@@ -233,10 +241,11 @@ def padcat2(
     a_bcast: bool = False,
     b_bcast: bool = False,
 ) -> torch.Tensor:
-    """`pad_gpu(cat([a, b]))` 的一次 launch 版本；返回 [n, total_w*8] uint8。
+    """One-launch version of `pad_gpu(cat([a, b]))`; returns [n, total_w*8] uint8.
 
-    参数里的 `*_w` 都是 int64 word 数。a/b 需已 `.view(torch.int64)`（不可广播的
-    那一段必须是 [n, *_w] 连续张量；可广播的那段是 [*_w]）。
+    The `*_w` arguments are all int64 word counts. a/b must already be
+    `.view(torch.int64)` (the non-broadcast segment must be a contiguous
+    [n, *_w] tensor; the broadcast one is [*_w]).
     """
     key = ("c2", la_w, lb_w, total_w, domain, a_bcast, b_bcast)
     kern = _CACHE.get(key)
@@ -261,7 +270,7 @@ def padcat_sfx(
     stride_w: int | None = None,
     base_w: int = 0,
 ) -> torch.Tensor:
-    """`pad_gpu(cat([a[row//mod], [row%mod+off]]))` 的一次 launch 版本。"""
+    """One-launch version of `pad_gpu(cat([a[row//mod], [row%mod+off]]))`."""
     key = ("sfx", prefix_w, total_w, domain, mod, off, stride_w, base_w)
     kern = _CACHE.get(key)
     if kern is None:

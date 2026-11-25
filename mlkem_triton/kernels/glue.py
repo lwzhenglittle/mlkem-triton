@@ -1,31 +1,37 @@
-"""decaps 流水线里两块「纯 PyTorch glue」的融合 Triton 内核。
+"""Fused Triton kernels for the two pieces of "pure PyTorch glue" in the decaps
+pipeline.
 
-**(A) `compress_pack`** —— 替换
+**(A) `compress_pack`** -- replaces
 
-    w = (V.to(int32) - acc.to(int32)) % Q      # DEC 那趟 mod q
+    w = (V.to(int32) - acc.to(int32)) % Q      # the DEC pass mod q
     m_bits  = compress_gpu(w, 1)               # [256,B] ∈ {0,1}
     m_bytes = pack_bits_gpu(m_bits, 1)         # [B,32] uint8
 
-一个 program 负责「BN 列 × 8 行」= 每列 1 个字节：8 行按位移 OR 拼字节，
-不需要 reshape / 转置，也不落 m_bits 中间张量（下游 `build_ye` 直接读 m_bytes）。
+One program handles "BN columns × 8 rows" = 1 byte per column: 8 rows are
+shift-OR'ed into a byte, so there is no reshape / transpose and no m_bits
+intermediate tensor (downstream `build_ye` reads m_bytes directly).
 
-**(B) `build_ye`** —— 替换
+**(B) `build_ye`** -- replaces
 
     Y  = y.permute(1,2,0).reshape(k*256, B).to(fp16)
     E1 = e[:, :k].permute(1,2,0).reshape(k*256, B).to(int16)
     E2 = (e[:, k].T + 1665 * m_bits).to(int16)
     E  = torch.cat([E1, E2], dim=0)
 
-一个 launch 直接从 `y`/`e`/`m_bytes` 生成 `Y [256k,B] fp16` 与
-`E [256(k+1),B] int16`，不再经过 permute+reshape+cat 的中间张量。
-网格是 (列块, k+1)：前 k 个 program 各转置一个多项式，最后一个做
-`e[:,k] + 1665·bit`（bit 从 m_bytes 就地取，每个字节被广播给 8 行）。
+One launch produces `Y [256k,B] fp16` and `E [256(k+1),B] int16` straight from
+`y`/`e`/`m_bytes`, with no permute+reshape+cat intermediate tensors.
+The grid is (column block, k+1): the first k programs each transpose one
+polynomial, the last one computes `e[:,k] + 1665·bit` (the bit is read in place
+from m_bytes and every byte is broadcast to 8 rows).
 
-注意 `Y` 这里输出的是**连续**张量。旧代码 `y.permute(1,2,0).reshape(...).to(fp16)`
-实际返回 stride=(1, 256k) 的转置视图（reshape 是 view、`.to(fp16)` 保留 memory format），
-值相同但非连续 —— 而 `kernels/fused_enc_gemm.py` 要求 Y 连续，所以 ENC 那趟融合
-GEMM 之前一直没生效、整条流水线走的是 mm + `_cmp_kernel` 回退路径。
-形状/dtype/设备不满足约束时 `compress_pack` / `build_ye` 返回 None，调用方回退。
+Note that `Y` here is output as a **contiguous** tensor. The old code
+`y.permute(1,2,0).reshape(...).to(fp16)` actually returned a transposed view
+with stride=(1, 256k) (reshape is a view, `.to(fp16)` keeps the memory format):
+same values but non-contiguous -- and `kernels/fused_gemm.py` requires Y to
+be contiguous, so the fused GEMM on the ENC pass had never taken effect and the
+whole pipeline went through the mm + `_cmp_kernel` fallback path.
+When shape/dtype/device do not satisfy the constraints, `compress_pack` /
+`build_ye` return None and the caller falls back.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ Q = 3329
 QL = tl.constexpr(Q)
 NCOEF = 256
 
-# 取自 bench/gl_sweep.py 的扫描（B=4096, ML-KEM-768）
+# From a tile sweep at B=4096, ML-KEM-768
 PACK_BN = 256
 PACK_WARPS = 2
 YE_BN = 32
@@ -51,10 +57,11 @@ YE_WARPS = 2
 # --------------------------------------------------------------- (A) compress+pack
 @triton.jit
 def compress_pack_kernel(acc, V, mbytes, B, BN: tl.constexpr):
-    """acc [256,B] fp32, V [256,B] int16 -> mbytes [B,32] uint8。
+    """acc [256,B] fp32, V [256,B] int16 -> mbytes [B,32] uint8.
 
-    x = (v - acc) mod q（负数按 Python 语义补回非负），再 compress 到 1 bit，
-    8 行拼一个字节（第 j 个字节的 bit t 来自第 8j+t 行）。
+    x = (v - acc) mod q (negative results are shifted back to non-negative, per
+    Python semantics), then compress to 1 bit, and 8 rows are packed into one
+    byte (bit t of byte j comes from row 8j+t).
     """
     pid_b = tl.program_id(0)
     j = tl.program_id(1)
@@ -73,7 +80,8 @@ def compress_pack_kernel(acc, V, mbytes, B, BN: tl.constexpr):
 
 
 def can_compress_pack(V, acc, B: int) -> bool:
-    """形状/dtype/布局是否满足内核约束（只看元信息，静态可判定）。"""
+    """Whether shape/dtype/layout satisfy the kernel constraints (metadata
+    only, statically decidable)."""
     if not isinstance(B, int) or B <= 0:
         return False
     if V.dim() != 2 or acc.dim() != 2:
@@ -88,7 +96,7 @@ def can_compress_pack(V, acc, B: int) -> bool:
 
 
 def compress_pack(V, acc, B: int) -> torch.Tensor:
-    """[256,B] int16 / fp32 -> m_bytes [B,32] uint8。"""
+    """[256,B] int16 / fp32 -> m_bytes [B,32] uint8."""
     out = torch.empty((B, 32), dtype=torch.uint8, device=V.device)
     compress_pack_kernel[(triton.cdiv(B, PACK_BN), 32)](
         acc, V, out, B, BN=PACK_BN, num_warps=warps("glue_pack", PACK_WARPS)
@@ -111,7 +119,7 @@ def build_ye_kernel(
     N: tl.constexpr = 256,
 ):
     """y [B,K,256] int16, e [B,K+1,256] int16, mbytes [B,32] uint8
-    -> Y [K*256,B] fp16 (行序 r*256+n), E [(K+1)*256,B] int16。"""
+    -> Y [K*256,B] fp16 (row order r*256+n), E [(K+1)*256,B] int16."""
     pid_b = tl.program_id(0)
     pid_r = tl.program_id(1)
     cols = pid_b * BN + tl.arange(0, BN)
@@ -119,7 +127,7 @@ def build_ye_kernel(
     for c0 in range(0, N, CHUNK):
         n = c0 + tl.arange(0, CHUNK)
         if pid_r < K:
-            # Y 段：y[b, r, n] -> Y[r*256+n, b]
+            # Y segment: y[b, r, n] -> Y[r*256+n, b]
             v = tl.load(
                 y + cols[:, None] * (K * N) + (pid_r * N + n)[None, :], mask=m[:, None], other=0
             )
@@ -137,7 +145,7 @@ def build_ye_kernel(
                 E + (pid_r * N + n)[:, None] * B + cols[None, :], tl.trans(ve), mask=m[None, :]
             )
         else:
-            # E2 段：e[b, K, n] + 1665 * bit(n, b)
+            # E2 segment: e[b, K, n] + 1665 * bit(n, b)
             ve = tl.load(
                 e + cols[:, None] * ((K + 1) * N) + (K * N + n)[None, :], mask=m[:, None], other=0
             )
@@ -169,7 +177,8 @@ def can_build_ye(y, e, mbytes, B: int, K: int) -> bool:
 
 
 def build_ye(y, e, mbytes, B: int, K: int):
-    """-> (Y [K*256,B] fp16, E [(K+1)*256,B] int16)，都是新分配的连续张量。"""
+    """-> (Y [K*256,B] fp16, E [(K+1)*256,B] int16), both freshly allocated
+    contiguous tensors."""
     dev = y.device
     Y = torch.empty((K * NCOEF, B), dtype=torch.float16, device=dev)
     E = torch.empty(((K + 1) * NCOEF, B), dtype=torch.int16, device=dev)
@@ -180,16 +189,17 @@ def build_ye(y, e, mbytes, B: int, K: int):
 
 
 def unpack_mbits(mbytes: torch.Tensor, B: int) -> torch.Tensor:
-    """m_bytes [B,32] uint8 -> m_bits [256,B] int32（回退路径用）。"""
+    """m_bytes [B,32] uint8 -> m_bits [256,B] int32 (for the fallback path)."""
     b = mbytes.to(torch.int32)
     shifts = torch.arange(8, device=mbytes.device, dtype=torch.int32)
     bits = (b[:, :, None] >> shifts) & 1  # [B,32,8]
     return bits.reshape(B, 256).T.contiguous()
 
 
-# ------------------------------------------------- (C) CBD 直接写出 Y / E
-# 把 §B 再往前推一步：sponge 出来的 y_buf/e_buf 经 CBD 之后不再落 y/e 中间张量，
-# 而是直接转置写进 Y/E。流量（B=4096,k=3,eta=2）：48.4 MB -> 15.2 MB。
+# ------------------------------------------------- (C) CBD writes Y / E directly
+# Takes §B one step further: after CBD, the y_buf/e_buf coming out of the sponge
+# no longer lands in y/e intermediate tensors, but is transposed straight into
+# Y/E. Traffic (B=4096,k=3,eta=2): 48.4 MB -> 15.2 MB.
 CBD_BN = 32
 CBD_WARPS = 4
 
@@ -208,15 +218,17 @@ def cbd_ye_kernel(
     E2: tl.constexpr,
     N: tl.constexpr = 256,
 ):
-    """一只内核两种用法：
+    """One kernel, two uses:
 
-    - `F16=True, E2=False`：y_buf [B*K,64η] uint8 -> Y [K*256,B] fp16
-    - `F16=False, E2=True`：e_buf [B*(K+1),64η] uint8 -> E [(K+1)*256,B] int16
-      且当 pid_r == K 那一段（E2）要加上 1665·bit（bit 从 m_bytes 就地取）。
+    - `F16=True, E2=False`: y_buf [B*K,64η] uint8 -> Y [K*256,B] fp16
+    - `F16=False, E2=True`: e_buf [B*(K+1),64η] uint8 -> E [(K+1)*256,B] int16,
+      and the pid_r == K segment (E2) must add 1665·bit (the bit is read in
+      place from m_bytes).
 
-    bufs 的行序是 b*R + r（和 `cbd_gpu(...).reshape(B, R, 256)` 一致），
-    所以一个 program 固定 r、走 BN 个 b，产出 [256, BN] 的块，转置后写
-    Y/E 的行 r*256+n、列 b —— 与 §B 的布局完全一样。
+    The row order of bufs is b*R + r (consistent with
+    `cbd_gpu(...).reshape(B, R, 256)`), so one program fixes r and walks BN
+    values of b, producing a [256, BN] block that is written transposed to row
+    r*256+n, column b of Y/E -- exactly the layout of §B.
     """
     pid_b = tl.program_id(0)
     pid_r = tl.program_id(1)

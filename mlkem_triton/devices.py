@@ -1,15 +1,19 @@
-"""后端探测 + 每后端调优参数表。
+"""Backend detection + per-backend tuning parameter tables.
 
-这个包的内核全部是标准 Triton（``tl.dot`` / ``tl.trans`` / ``tl.interleave`` /
-``tl.atomic_add``），没有 CUDA / XPU 专属指令。需要按后端区分的只有 **tile 形状**
-和 **num_stages**，因为不同硬件的寄存器文件和流水深度不一样。
+Every kernel in this package is plain Triton (``tl.dot`` / ``tl.trans`` /
+``tl.interleave`` / ``tl.atomic_add``); there are no CUDA / XPU specific
+instructions. Only **tile shapes** and **num_stages** need to differ per backend,
+because different hardware has different register files and pipeline depths.
 
-已实测（不是猜）：
-- ``xpu``（Intel Arc B390 / Xe3-LPG，256 GRF/线程）：
-  ``BM*BN/(16*num_warps) <= 128`` —— 每线程 fp32 累加器超过 128 个就大量 spill。
-  ``num_stages=2`` 最优（片上内存小）。
-- ``cuda`` / ``hip``：没有 256 GRF 这个约束，``BK=64``、``num_stages=3`` 通常更好。
-  **这两个配置没有在真机上验证过** —— 见 README「支持矩阵」。
+Measured (not guessed):
+- ``xpu`` (Intel Arc B390 / Xe3-LPG, 256 GRF/thread):
+  ``BM*BN/(16*num_warps) <= 128`` — more than 128 fp32 accumulators per thread
+  spills heavily. ``num_stages=2`` is best (small on-chip memory).
+- ``cuda``: no 256 GRF constraint, so ``BK=64`` with ``num_stages=3`` is fine. The whole
+  suite does pass on a GB10 (sm_121), but **these tile values were never swept there** — they
+  are conservative values from public experience, not a measured optimum.
+- ``hip``: same as ``cuda`` except ``num_stages=2``. **Not run on real AMD hardware at all.**
+  See README.md section `Support matrix` and docs/support.md.
 """
 
 from __future__ import annotations
@@ -40,7 +44,10 @@ def _has(module: str, attr: str = "is_available") -> bool:
 
 
 def available_devices() -> list[torch.device]:
-    """按优先级返回可用的加速设备（cuda / xpu）。空列表表示只有 CPU。"""
+    """Return available accelerator devices in priority order (cuda / xpu).
+
+    An empty list means CPU only.
+    """
     out: list[torch.device] = []
     if _has("cuda"):
         out.append(torch.device("cuda"))
@@ -50,10 +57,11 @@ def available_devices() -> list[torch.device]:
 
 
 def resolve_device(name: str | torch.device | None = None) -> torch.device:
-    """把 ``None`` 解析成第一个可用加速设备。
+    """Resolve ``None`` to the first available accelerator device.
 
-    优先级：显式传入 > 环境变量 ``MLKEM_DEVICE`` > cuda > xpu。
-    都没有就抛 RuntimeError（本包没有 CPU 后端：Triton 没有可用的 CPU target）。
+    Priority: explicit argument > ``MLKEM_DEVICE`` environment variable > cuda > xpu.
+    If none is available, raise RuntimeError (this package has no CPU backend:
+    there is no usable CPU target in Triton).
     """
     if name is not None:
         dev = torch.device(name)
@@ -67,27 +75,28 @@ def resolve_device(name: str | torch.device | None = None) -> torch.device:
     devs = available_devices()
     if not devs:
         raise RuntimeError(
-            "找不到可用的 GPU。本包只支持 Triton 有后端的设备"
-            "（NVIDIA CUDA / AMD ROCm / Intel XPU），不支持纯 CPU 运行。"
-            "若要用 CPU 只做算法验证，请用 mlkem_triton.ntt_ref / keyprep 的 numpy 实现。"
+            "No usable GPU found. This package only supports devices that Triton has "
+            "a backend for (NVIDIA CUDA / AMD ROCm / Intel XPU) and does not support "
+            "pure CPU execution. To use the CPU only for algorithm validation, use the "
+            "numpy implementations in mlkem_triton.ntt_ref / keyprep."
         )
     return devs[0]
 
 
 def _check_available(dev: torch.device) -> None:
     if dev.type == "cuda" and not _has("cuda"):
-        raise RuntimeError("指定了 cuda 设备，但 torch.cuda.is_available() 为 False")
+        raise RuntimeError("cuda device specified, but torch.cuda.is_available() is False")
     if dev.type == "xpu" and not _has("xpu"):
-        raise RuntimeError("指定了 xpu 设备，但 torch.xpu.is_available() 为 False")
+        raise RuntimeError("xpu device specified, but torch.xpu.is_available() is False")
     if dev.type == "cpu":
-        raise RuntimeError("本包没有 CPU 后端；Triton 没有可用的 CPU target")
+        raise RuntimeError("this package has no CPU backend; Triton has no usable CPU target")
 
 
 def sync(device: torch.device | None = None) -> None:
-    """同步设备（``None`` = 当前解析出来的那块）。
+    """Synchronize the device (``None`` = whichever one is currently resolved).
 
-    存在的意义：调用方不该写死 `torch.cuda.synchronize()` /
-    `torch.xpu.synchronize()`，否则换后端就炸。
+    Why this exists: callers should not hard-code `torch.cuda.synchronize()` /
+    `torch.xpu.synchronize()`, or switching backends breaks.
     """
     dev = resolve_device(device)
     if dev.type == "cuda":
@@ -97,26 +106,27 @@ def sync(device: torch.device | None = None) -> None:
 
 
 def backend_of(dev: torch.device) -> str:
-    """归一化成 ``xpu`` / ``cuda`` / ``hip`` 三个键之一。"""
+    """Normalize to one of the three keys ``xpu`` / ``cuda`` / ``hip``."""
     if dev.type == "cuda":
         return "hip" if getattr(torch.version, "hip", None) else "cuda"
     return dev.type
 
 
-# 未在表里的后端用这个保守配置（能跑，不是最优）
+# Backends not in the table use this conservative config (it runs, it is not optimal)
 _FALLBACK_CFG = {"BM": 64, "BN": 64, "BK": 32, "GM": 8, "num_warps": 4, "num_stages": 2}
 
 _GEMM_CFG = {
-    # Intel Xe3-LPG 实测最优（B=4096，见 results/OPTIMIZATION_LOG.md）
+    # Measured optimum on Intel Xe3-LPG (B=4096; see docs/support.md)
     "xpu": {"BM": 128, "BN": 128, "BK": 32, "GM": 4, "num_warps": 8, "num_stages": 2},
-    # 以下两个**未实测**，按公开经验给的稳妥值
+    # The following two were never swept on their hardware; safe values from public
+    # experience. `cuda` runs correctly on GB10, `hip` has not been run at all.
     "cuda": {"BM": 128, "BN": 128, "BK": 64, "GM": 8, "num_warps": 8, "num_stages": 3},
     "hip": {"BM": 128, "BN": 128, "BK": 64, "GM": 8, "num_warps": 8, "num_stages": 2},
 }
 
 
 def gemm_cfg(dev: torch.device) -> dict:
-    """返回该后端适用的 tile 配置（已拷贝，调用方可随意改）。"""
+    """Return the tile config for this backend (already copied; callers may modify it)."""
     return dict(_GEMM_CFG.get(backend_of(dev), _FALLBACK_CFG))
 
 
@@ -124,17 +134,20 @@ _WARPS_OVERRIDE: dict[str, int] | None = None
 
 
 def warps(name: str, default: int) -> int:
-    """某个小内核的 `num_warps`，支持环境变量覆盖。
+    """`num_warps` for a small kernel, with environment-variable override.
 
-    这些值**只在 Intel Xe3 上扫过**（见 `results/comparison_prior_work.md` 的内核
-    占比表）。小内核（sponge / padcat / CBD / 打包）对 `num_warps` 不敏感，所以其他
-    后端沿用同一组值不会有量级差异；但**没有任何 CUDA/ROCm 上的调优数据**，所以这里
-    只提供一套默认值 + 一个覆盖入口，不编造「每后端最优」。
+    These values were **only swept on Intel Xe3** (see the kernel share table in
+    `docs/compare.md`). Small kernels (sponge / padcat / CBD / packing) are not
+    sensitive to `num_warps`, so other backends reusing the same set of values
+    will not differ by an order of magnitude; but there is **no tuning data for
+    CUDA/ROCm at all**, so this provides only one default set plus an override
+    hook, and does not invent a "per-backend optimum".
 
         MLKEM_WARPS="shake=8,ntt=4"  python benchmarks/bench_e2e.py
 
-    注意 GEMM 的 tile 配置不在这里 —— 那是 `gemm_cfg()`，因为 tile 形状还必须满足
-    `M % BM == 0` 之类的整除约束，不能随便改。
+    Note that the GEMM tile config is not here — that is `gemm_cfg()`, because tile
+    shapes must also satisfy divisibility constraints such as `M % BM == 0` and
+    cannot be changed at will.
     """
     global _WARPS_OVERRIDE
     if _WARPS_OVERRIDE is None:
@@ -150,7 +163,7 @@ def warps(name: str, default: int) -> int:
 
 
 def describe(dev: torch.device) -> str:
-    """一行人类可读的设备描述，给 README / 日志用。"""
+    """One-line human-readable device description, for README / logs."""
     be = backend_of(dev)
     try:
         if dev.type == "cuda":

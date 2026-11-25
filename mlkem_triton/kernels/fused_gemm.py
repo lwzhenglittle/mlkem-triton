@@ -1,33 +1,37 @@
-"""两趟 GEMM 的融合内核：fp32 累加 + 就地 epilogue。
+"""Fused kernels for the two GEMM passes: fp32 accumulation + in-place epilogue.
 
-两趟都是「固定权重矩阵 × 每批不同的变量」，所以用同一副骨架，只换 epilogue：
+Both passes are "a fixed weight matrix × per-batch variables", so they share one
+skeleton and only the epilogue changes:
 
-**ENC（重加密）** `fused_enc_gemm`
+**ENC (re-encryption)** `fused_enc_gemm`
 
-    替换掉这三步：
+    Replaces these three steps:
         acc2 = torch.mm(W_enc, Y, out_dtype=fp32)     # [1024, B] fp32 = 16.8 MB
-        cmp(acc2, E, c1r, ...)                        # du 段
-        cmp(acc2, E, c2r, ...)                        # dv 段
-    融合后 acc2 完全不落显存，只写一个 [M/BM, B] int32 的 partial 缓冲。
+        cmp(acc2, E, c1r, ...)                        # du segment
+        cmp(acc2, E, c2r, ...)                        # dv segment
+    After fusion acc2 never lands in GPU memory; only a [M/BM, B] int32 partial
+    buffer is written.
 
-**DEC（解密）** `fused_dec_gemm`
+**DEC (decryption)** `fused_dec_gemm`
 
-    替换掉这两步：
+    Replaces these two steps:
         acc = torch.mm(W_dec, U, out_dtype=fp32)      # [256, B] fp32 = 4.2 MB
-        m_bytes = compress_pack(V, acc, B)            # mod q → compress 1 bit → 打包
-    融合后同样不落 acc。实测（B=4096，Intel Xe3）比两步快 **1.36×**
-    （0.213 → 0.157 ms），输出逐字节一致。
+        m_bytes = compress_pack(V, acc, B)            # mod q → compress 1 bit → pack
+    After fusion acc does not land either. Measured (B=4096, Intel Xe3) it is **1.36×**
+    faster than the two steps (0.213 → 0.157 ms), with byte-identical output.
 
-为什么两个 epilogue 都要 `x %= q` 并补负
-----------------------------------------
-Triton / C 的 `int % int` 是向零取整（`-7 % 3 == -1`），而我们要的是
-`[0, q)` 的规范代表，所以统一 `x = x % q; if x < 0: x += q`。
+Why both epilogues need `x %= q` and an add-back for negatives
+--------------------------------------------------------------
+Triton / C `int % int` truncates toward zero (`-7 % 3 == -1`), but we want the
+canonical representative in `[0, q)`, so we uniformly do
+`x = x % q; if x < 0: x += q`.
 
-关于 `out_dtype=torch.float32`
-------------------------------
-`torch.mm` 没有这个公开参数（那是 torch-xpu 的私有 `aten::mm.dtype`）。
-而且 fp16 输出在这里不可用：`|sum|` 峰值约 1.8e5 > fp16 上限 65504 → inf。
-所以这两趟必须走我们自己的 Triton 内核。
+About `out_dtype=torch.float32`
+-------------------------------
+`torch.mm` has no such public argument (that is torch-xpu's private
+`aten::mm.dtype`). Also, an fp16 output is unusable here: the `|sum|` peak is about
+1.8e5 > the fp16 maximum of 65504 → inf. So these two passes must go through our own
+Triton kernels.
 """
 
 from __future__ import annotations
@@ -40,10 +44,10 @@ from ..devices import gemm_cfg
 
 Q = 3329
 QL = tl.constexpr(Q)
-BLOCK_OUT = 128  # partial 合并内核的列块
+BLOCK_OUT = 128  # column block of the partial-combining kernel
 
 
-# --------------------------------------------------------------- 共用 GEMM 骨架
+# --------------------------------------------------------------- shared GEMM skeleton
 @triton.jit
 def _gemm_tile(
     W,
@@ -56,7 +60,10 @@ def _gemm_tile(
     BN: tl.constexpr,
     BK: tl.constexpr,
 ):
-    """一块 (BM, BN) 的 fp16×fp16 → fp32 累加。M 只用来算行偏移，不需要传。"""
+    """One (BM, BN) tile of fp16×fp16 → fp32 accumulation.
+
+    M is only used to compute the row offsets, so it does not have to be passed in.
+    """
     offm = pid_m * BM + tl.arange(0, BM)
     offn = pid_n * BN + tl.arange(0, BN)
     offk = tl.arange(0, BK)
@@ -75,7 +82,7 @@ def _gemm_tile(
 def _tile_id(
     pid, M: tl.constexpr, N: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr, GM: tl.constexpr
 ):
-    """L2 友好的骨牌式分组（grouped ordering），返回 (pid_m, pid_n)。"""
+    """L2-friendly domino-style grouping (grouped ordering), returns (pid_m, pid_n)."""
     npm, npn = tl.cdiv(M, BM), tl.cdiv(N, BN)
     ng = GM * npn
     gid = pid // ng
@@ -102,7 +109,7 @@ def _epi_enc(
     BM: tl.constexpr,
     DSTOFF,
 ):
-    """mod q → compress → 与参考值比较 → 按列归约 → 写 partial。"""
+    """mod q → compress → compare with the reference → column reduce → write partial."""
     cols = cbase + tl.arange(0, BN)
     if MASK_N:
         m = cols[None, :] < N
@@ -112,8 +119,8 @@ def _epi_enc(
 
     x = acc.to(tl.int32) + e.to(tl.int32)
     x = x % QL
-    x = tl.where(x < 0, x + QL, x)  # Python 语义的 mod
-    comp = (((x << D) + 1664) // QL) & ((1 << D) - 1)  # x >= 0，// 即向零取整
+    x = tl.where(x < 0, x + QL, x)  # Python-semantics mod
+    comp = (((x << D) + 1664) // QL) & ((1 << D) - 1)  # x >= 0, so // truncates toward zero
 
     if MASK_N:
         r = tl.load(REF + (offm - rrow0)[:, None] * N + cols[None, :], mask=m, other=-1)
@@ -159,7 +166,7 @@ def fused_enc_kernel(
 
 @triton.jit
 def _combine_parts(parts, cnt, NPM: tl.constexpr, N: tl.constexpr, BN: tl.constexpr):
-    """[NPM, N] 的 row-block 部分和 → 原子累加到 cnt[N]。只有 N*NPM 个整数。"""
+    """[NPM, N] row-block partial sums → atomically add into cnt[N]. Only N*NPM integers."""
     cols = tl.program_id(0) * BN + tl.arange(0, BN)
     m = cols < N
     s = tl.zeros((BN,), dtype=tl.int32)
@@ -183,13 +190,14 @@ def _epi_dec(
     BM: tl.constexpr,
     MASK_N: tl.constexpr,
 ):
-    """`(V - acc) mod q` → compress 到 1 bit → 8 行拼成一个字节 → 写 m_bytes。
+    """`(V - acc) mod q` → compress to 1 bit → pack 8 rows into one byte → write m_bytes.
 
-    m_bytes[b][j] 的第 t 位来自第 `8j+t` 行 —— 和 `glue.compress_pack_kernel`
-    的语义逐位一致（那里按 8 行循环，这里用一次 reshape 归约）。
+    Bit t of m_bytes[b][j] comes from row `8j+t` — bit-for-bit identical to the
+    semantics of `glue.compress_pack_kernel` (which loops over 8 rows; here a single
+    reshape reduction does it).
 
-    `tl.reshape([BM, BN] -> [BM//8, 8, BN])` 是行主序的拆分，所以
-    元素 (i, j) 落到 (i//8, i%8, j)，正好是我们要的分组。
+    `tl.reshape([BM, BN] -> [BM//8, 8, BN])` is a row-major split, so element (i, j)
+    lands at (i//8, i%8, j), which is exactly the grouping we want.
     """
     cols = cbase + tl.arange(0, BN)
     if MASK_N:
@@ -232,13 +240,15 @@ def fused_dec_kernel(
     _epi_dec(acc, V, MB, offm, pid_n * BN, pid_m * (BM // 8), M // 8, BN, N, BM, MASK_N)
 
 
-# --------------------------------------------------------------- 配置选择
+# --------------------------------------------------------------- config selection
 def _pick_cfg(M: int, dev) -> dict:
-    """挑 tile。
+    """Pick a tile.
 
-    先取该后端的基准配置（`devices.gemm_cfg`），再按问题规模修一下：
-    M 很小时（DEC 的 M=256、ML-KEM-512 的 M=512）128 宽的 CTA 太少，
-    改成 BN=64 实测快 8~17%（B=512: 48.2 vs 57.1 µs；B=2048: 116 vs 133 µs）。
+    Start from the backend's baseline config (`devices.gemm_cfg`), then adjust for
+    problem size: when M is small (the DEC pass has M=256; the ENC pass always has
+    M = 256*(k+1) >= 768, so this only ever fires for DEC) there are too few
+    128-wide CTAs, so switching to BN=64 measured 8~17% faster
+    (B=512: 48.2 vs 57.1 µs; B=2048: 116 vs 133 µs).
     """
     cfg = gemm_cfg(dev)
     if 2 * cfg["BM"] >= M:
@@ -247,24 +257,26 @@ def _pick_cfg(M: int, dev) -> dict:
     return cfg
 
 
-# --------------------------------------------------------------- ENC 入口
+# --------------------------------------------------------------- ENC entry point
 def fused_enc_gemm(W, Y, E, ref, cnt, B: int, du: int, dv: int, pivot: int | None = None) -> bool:
-    """ENC 重加密的 GEMM + mod q + compress + 比较 + 按列累加，一个内核。
+    """ENC re-encryption GEMM + mod q + compress + compare + column sum, one kernel.
 
-    参数
-    ----
-    W    : [M, K] fp16，重加密矩阵（已按行展平）
-    Y    : [K, B] fp16，采样出的 y
-    E    : [M, B] int16，E1 || E2（E2 里已加过 1665*m_bits）
-    ref  : (c1r, c2r) 两个 int16 张量，或单个 [M, B] int16
-    cnt  : [B] int32，**累加**（调用前清零）
-    du, dv : 两个压缩位宽（ENC: du 覆盖前 pivot 行，dv 覆盖剩下 256 行）
-    pivot  : du 段的行数，默认 M - 256
+    Parameters
+    ----------
+    W    : [M, K] fp16, re-encryption matrix (already flattened row by row)
+    Y    : [K, B] fp16, the sampled y
+    E    : [M, B] int16, E1 || E2 (E2 already has 1665*m_bits added)
+    ref  : (c1r, c2r) two int16 tensors, or a single [M, B] int16
+    cnt  : [B] int32, **accumulated into** (zero it before the call)
+    du, dv : the two compression widths (ENC: du covers the first pivot rows, dv the
+             remaining 256 rows)
+    pivot  : number of rows in the du segment, defaults to M - 256
 
-    返回
-    ----
-    True 表示已执行；False 表示形状/dtype 不满足约束、**未写任何输出**，
-    调用方应回退到「通用 GEMM + 逐元素比较」。
+    Returns
+    -------
+    True if it ran; False if the shapes/dtype do not satisfy the constraints, in
+    which case **no output was written** and the caller should fall back to
+    "generic GEMM + element-wise compare".
     """
     if W.dim() != 2 or Y.dim() != 2 or E.dim() != 2:
         return False
@@ -339,18 +351,19 @@ def fused_enc_gemm(W, Y, E, ref, cnt, B: int, du: int, dv: int, pivot: int | Non
     return True
 
 
-# --------------------------------------------------------------- DEC 入口
+# --------------------------------------------------------------- DEC entry point
 def fused_dec_gemm(W, U, V, B: int):
-    """DEC 解密的 GEMM + `(V - W@U) mod q` + compress(1 bit) + 打包。
+    """DEC decryption GEMM + `(V - W@U) mod q` + compress(1 bit) + packing.
 
     Args:
-        W: [M, K] fp16，解密矩阵（`keyprep` 产出的 `W_dec`）
-        U: [K, B] fp16，解压后的 u
-        V: [M, B] int16，解压后的 v
+        W: [M, K] fp16, decryption matrix (`W_dec` produced by `keyprep`)
+        U: [K, B] fp16, decompressed u
+        V: [M, B] int16, decompressed v
 
     Returns:
-        m_bytes [B, M/8] uint8，或 **None**（形状/dtype/布局不满足约束，
-        此时未写任何输出，调用方应回退）。
+        m_bytes [B, M/8] uint8, or **None** (shapes/dtype/layout do not satisfy the
+        constraints, in which case no output was written and the caller should fall
+        back).
     """
     if W.dim() != 2 or U.dim() != 2 or V.dim() != 2:
         return None

@@ -1,33 +1,38 @@
 #!/usr/bin/env python
-"""主机侧开销拆解 + 三种输入形态对比。
+"""Host-side overhead breakdown + comparison of three input forms.
 
     python benchmarks/bench_host.py --batch 4096
 
-`decaps()` 的端到端 = 主机侧（打包 + H2D + D2H）+ 设备侧。设备侧再快，
-主机侧那几毛钱不省掉也到不了 ceil。这个脚本把它拆开。
+The end-to-end `decaps()` = host side (packing + H2D + D2H) + device side. No matter how
+fast the device side is, you cannot reach the ceiling without removing that small
+host-side cost. This script breaks it down.
 
-**注意：这个脚本里的绝对值不能信到 10% 以内。** 本机 GPU 时钟在 0.9 GHz（空载）
-到 2.2 GHz（压满）之间跳，而 `xe` 驱动没有暴露任何调频接口
-（`/sys/class/drm/*/gt_*_freq_mhz` 不存在），所以同一个脚本跑两遍能差 30%。
-只看**同一轮内的比值**。
+**Warning: absolute values in this script are not trustworthy to within 10%.** On this
+machine the GPU clock swings between 0.9 GHz (idle) and 2.2 GHz (fully loaded), and the
+`xe` driver exposes no frequency-control interface
+(`/sys/class/drm/*/gt_*_freq_mhz` does not exist), so two runs of the same script can
+differ by 30%. Only look at **ratios within the same run**.
 
-几条结论（都是实测，逐条有数）：
+A few conclusions (all measured, each with numbers):
 
-- **pinned 中转在 Intel 上划算、在 NVIDIA 上不划算。** 这台 Arc 的 pageable→device
-  只有 ~14 GB/s（驱动要过 bounce buffer），pinned→device 的纯 DMA 有 ~83 GB/s；
-  多一次 numpy→pinned 的 memcpy（~178 GB/s）之后仍然净赚约 2 倍（0.50 → 0.28 ms）。
-  但 GB10（Grace-Blackwell，CPU/GPU 一致性互连）的 pageable 直拷本来就有 50 GB/s，
-  pinned 反而更慢。所以 `pipeline._prefer_pinned()` 第一次调用时用 4 MiB 缓冲
-  两边各测一遍，按结果决定，不写死。
-- **H2D 没法靠双流重叠藏掉。** 本机驱动上「两个流、零依赖」的 DMA ∥ 计算实测
-  1.328 ms，而同流串行 1.307 ms —— 完全没有并行；双缓冲流水更慢（1.401 ms）。
-  原因大概率是 pageable 拷贝那一段是**调用线程上的 CPU memcpy**，本来就没法和
-  CPU 侧的入队并行。
-- **逐条长度校验是纯浪费。** `all(len(c) == n0 for c in lst)` 在 B=4096 时要
-  ~0.13 ms（占端到端 6%），改成「拼起来的总长 == n0 × 条数」是 O(1) 的。
+- **Pinned staging pays off on Intel but not on NVIDIA.** On this Arc, pageable→device
+  reaches only ~14 GB/s (the driver goes through a bounce buffer), while pinned→device
+  pure DMA reaches ~83 GB/s; even after the extra numpy→pinned memcpy (~178 GB/s) it
+  still nets about 2x (0.50 → 0.28 ms). But on GB10 (Grace-Blackwell, coherent CPU/GPU
+  interconnect) pageable direct copy already reaches 50 GB/s, and pinned is actually
+  slower. So `pipeline._prefer_pinned()` measures both with a 4 MiB buffer on first
+  call and decides from the result, rather than hardcoding it.
+- **H2D cannot be hidden by two-stream overlap.** On this machine's driver, "two
+  streams, zero dependencies" DMA ∥ compute measures 1.328 ms, while same-stream
+  serial is 1.307 ms — no overlap at all; double-buffered pipelining is even slower
+  (1.401 ms). The likely reason is that the pageable copy segment is a **CPU memcpy on
+  the calling thread**, which cannot overlap with CPU-side enqueue in the first place.
+- **Per-item length validation is pure waste.** `all(len(c) == n0 for c in lst)` costs
+  ~0.13 ms at B=4096 (6% of end-to-end); changing it to "total joined length == n0 ×
+  count" is O(1).
 
-所以真正能省的是**调用方式**：让 `decaps()` 少拷一次、少校验一次，并且在
-值得的时候走 pinned。
+So what can actually be saved is the **calling convention**: make `decaps()` copy once
+less, validate once less, and use pinned when it is worth it.
 """
 
 from __future__ import annotations
@@ -100,30 +105,30 @@ def main() -> int:
 
     ct_dev = torch.from_numpy(arr_rw).to(dev)
     rows = [
-        ("torch.Tensor（已在设备）", lambda: dec.decaps(ct_dev)),
-        ("bytes 一整块", lambda: dec.decaps(joined)),
+        ("torch.Tensor (already on device)", lambda: dec.decaps(ct_dev)),
+        ("bytes (single block)", lambda: dec.decaps(joined)),
         ("np.ndarray [B,L]", lambda: dec.decaps(arr_rw)),
         ("list[bytes]", lambda: dec.decaps(lst)),
     ]
     warm_s = args.warm_seconds
     dev_only, _ = _bench(lambda: dec.decaps_torch(ct_dev, B), dev, warm_seconds=warm_s)
-    print(f"{'输入形态':<28} {'min':>8} {'med':>8} {'主机侧净开销':>12}")
-    print(f"{'（仅设备侧作为基准）':<28} {dev_only:>7.3f}m")
+    print(f"{'Input form':<32} {'min':>8} {'med':>8} {'Host-side net overhead':>22}")
+    print(f"{'(device-only baseline)':<32} {dev_only:>7.3f}m")
     for name, fn in rows:
         out = fn()
         assert out.shape == (B, 32), (name, out.shape)
         assert all(out[i].tobytes() == want for i in range(0, B, max(1, B // 8))), name
         mn, md = _bench(fn, dev, warm_seconds=warm_s)
-        print(f"{name:<28} {mn:>7.3f}m {md:>7.3f}m {mn - dev_only:>+11.3f}m")
+        print(f"{name:<32} {mn:>7.3f}m {md:>7.3f}m {mn - dev_only:>+21.3f}m")
 
-    print(f"\n# 单段成本（B={B}）")
+    print(f"\n# per-segment cost (B={B})")
     pin = torch.empty(B, L, dtype=torch.uint8, pin_memory=True)
     dbuf = torch.empty(B, L, dtype=torch.uint8, device=dev)
     seg = [
         ('b"".join(list)', lambda: b"".join(lst)),
-        ("逐条长度校验 all(len==L)", lambda: all(len(c) == L for c in lst)),
+        ("per-item length check all(len==L)", lambda: all(len(c) == L for c in lst)),
         ("H2D pageable -> device", lambda: dbuf.copy_(torch.from_numpy(arr_rw))),
-        ("H2D pinned  -> device (纯 DMA)", lambda: dbuf.copy_(pin, non_blocking=True)),
+        ("H2D pinned  -> device (pure DMA)", lambda: dbuf.copy_(pin, non_blocking=True)),
         ("memcpy bytes -> pinned", lambda: pin.view(-1).copy_(torch.from_numpy(arr.reshape(-1)))),
     ]
     for name, fn in seg:

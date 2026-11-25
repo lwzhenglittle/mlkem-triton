@@ -1,4 +1,6 @@
-"""ntt_ref 与 FIPS 203 的自洽性测试，以及方案核心等式 T(a)@b == a*b 的验证。"""
+"""Self-consistency tests of ntt_ref with FIPS 203, plus verification of the scheme's
+core identity T(a)@b == a*b.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ def _rnd(n=N):
     return np.random.randint(0, Q, size=n, dtype=np.int64)
 
 
-# ---------------- 基础 ----------------
+# ---------------- basics ----------------
 
 
 def test_bitrev7():
@@ -46,7 +48,7 @@ def test_zetas_shape():
     assert ZETAS.shape == (128,)
     assert GAMMAS.shape == (128,)
     assert int(ZETAS[0]) == 1
-    # γ_i 全是奇数指数，且与 ZETAS 不同源
+    # the γ_i are all odd exponents and come from a different source than ZETAS
     for i in range(4):
         assert int(GAMMAS[i]) == pow(17, 2 * bitrev7(i) + 1, Q)
 
@@ -68,7 +70,7 @@ def test_ntt_is_linear():
     assert np.array_equal(lhs, rhs)
 
 
-# ---------------- 乘法 ----------------
+# ---------------- multiplication ----------------
 
 
 @pytest.mark.parametrize("seed", range(3))
@@ -77,11 +79,11 @@ def test_multiply_ntts_matches_negacyclic(seed):
     a, b = _rnd(), _rnd()
     got = intt(multiply_ntts(ntt(a), ntt(b)))
     ref = negacyclic_conv(a, b)
-    assert np.array_equal(got, ref), f"最大差 {np.abs(got - ref).max()}"
+    assert np.array_equal(got, ref), f"max diff {np.abs(got - ref).max()}"
 
 
 def test_base_case_multiply_consistency():
-    # BaseCaseMultiply 与两个二次多项式直接在 Z_q[X]/(X^2-γ) 中相乘一致
+    # BaseCaseMultiply agrees with multiplying the two quadratics in Z_q[X]/(X^2-γ)
     for _ in range(20):
         a0, a1, b0, b1, g = np.random.randint(0, Q, size=5)
         c0, c1 = base_case_multiply(a0, a1, b0, b1, g)
@@ -89,21 +91,25 @@ def test_base_case_multiply_consistency():
         assert c1 == (a0 * b1 + a1 * b0) % Q
 
 
-# ---------------- 方案核心等式 ----------------
+# ---------------- core scheme identity ----------------
 
 
 @pytest.mark.parametrize("seed", range(3))
 def test_toeplitz_equals_negacyclic(seed):
-    """T(a) @ b == a * b mod (X^256+1)。这是整个 GEMM 方案的正确性基础。"""
+    """T(a) @ b == a * b mod (X^256+1). This is the correctness basis of the whole
+    GEMM scheme.
+    """
     np.random.seed(seed)
     a, b = _rnd(), _rnd()
     lhs = (toeplitz(a) @ b) % Q
     rhs = negacyclic_conv(a, b)
-    assert np.array_equal(lhs, rhs), f"最大差 {np.abs(lhs - rhs).max()}"
+    assert np.array_equal(lhs, rhs), f"max diff {np.abs(lhs - rhs).max()}"
 
 
 def test_toeplitz_centered_equals_mod_q():
-    """用中心化表示 [-1664,1664] 做整数矩阵乘，取模后与 mod-q 卷积一致。"""
+    """Integer matmul with the centered representation [-1664,1664]; after reduction
+    it matches mod-q convolution.
+    """
     np.random.seed(0)
     a = np.random.randint(0, Q, size=N).astype(np.int64)
     b = np.random.randint(0, Q, size=N).astype(np.int64)
@@ -114,7 +120,7 @@ def test_toeplitz_centered_equals_mod_q():
     assert np.array_equal(lhs, rhs)
 
 
-# ---------------- 编解码 / 压缩 ----------------
+# ---------------- codec / compression ----------------
 
 
 @pytest.mark.parametrize("d", [1, 4, 10, 11, 12])
@@ -152,16 +158,17 @@ def test_decompress_1_is_1665():
     assert int(decompress(1, 1)) == 1665
 
 
-# ---------------- 直接对拍 kyber-py ----------------
+# ---------------- direct cross-check against kyber-py ----------------
 
 
 def test_against_kyberpy_ntt():
-    """与 kyber-py 的 NTT 实现逐项对拍。
+    """Element-wise cross-check against kyber-py's NTT implementation.
 
-    注意：kyber-py 的 `to_ntt()` 会**原地改写**传入的 list（`_parse_coefficients`
-    在 len == 256 时直接返回原对象，不拷贝），所以每次都要传新副本，否则会污染输入。
+    Note: kyber-py's `to_ntt()` **rewrites in place** the list passed in
+    (`_parse_coefficients` returns the original object when len == 256, without
+    copying), so a fresh copy must be passed every time, otherwise the input is polluted.
     """
-    pytest.importorskip("kyber_py", reason="这个用例是对拍第三方实现，需要 kyber-py")
+    pytest.importorskip("kyber_py", reason="cross-checks third-party kyber-py")
     from kyber_py.polynomials.polynomials import PolynomialRing
 
     R = PolynomialRing()
@@ -172,13 +179,13 @@ def test_against_kyberpy_ntt():
     def their_ntt(v):
         return R(list(v)).to_ntt()
 
-    assert np.array_equal(ntt(f0), their_ntt(f0).coeffs), "ntt 不一致"
-    assert np.array_equal(intt(ntt(f0)), their_ntt(f0).from_ntt().coeffs), "intt 不一致"
+    assert np.array_equal(ntt(f0), their_ntt(f0).coeffs), "ntt mismatch"
+    assert np.array_equal(intt(ntt(f0)), their_ntt(f0).from_ntt().coeffs), "intt mismatch"
     assert np.array_equal(
         multiply_ntts(ntt(f0), ntt(g0)),
         (their_ntt(f0) * their_ntt(g0)).coeffs,
-    ), "multiply_ntts 不一致"
+    ), "multiply_ntts mismatch"
     assert np.array_equal(
         (their_ntt(f0) * their_ntt(g0)).from_ntt().coeffs,
         negacyclic_conv(f0, g0),
-    ), "kyber-py 乘积 != 负循环卷积"
+    ), "kyber-py product != negacyclic convolution"

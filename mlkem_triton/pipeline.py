@@ -1,27 +1,30 @@
-"""全设备常驻的批量解封装流水线（快路径）。
+"""Fully device-resident batched decapsulation pipeline (fast path).
 
-整条链路（位解包 → 解压 → 两个 GEMM → mod q → G/J/PRF → CBD → 压缩 →
-比较 → 选择）全部留在 GPU 上，**整批只在最后同步一次**（只把 32 字节的
-共享密钥拷回主机）。
+The whole chain (bit unpack → decompress → two GEMMs → mod q → G/J/PRF → CBD →
+compress → compare → select) stays on the GPU, and **the whole batch is
+synchronized only once at the end** (only the 32-byte shared key of each
+ciphertext, i.e. 32*B bytes in total, is copied back to the host).
 
-数值基础
---------
-所有乘法都在 **fp16 tensor core 上做、fp32 累加**：
+Numeric basis
+-------------
+All multiplications run on the **fp16 tensor cores with fp32 accumulation**:
 
     |a| <= 1664 < 2^11,  |b| <= 2,  K = 768
-    -> 每个部分和的绝对值 < 768 * 3328 = 2.56e6 < 2^24
-    -> fp32 尾数 24 bit，**任意累加顺序都逐元素精确**
+    -> the absolute value of every partial sum < 768 * 3328 = 2.56e6 < 2^24
+    -> fp32 has a 24-bit mantissa, so **any accumulation order is exact elementwise**
 
-所以这里不需要 NTT：`keyprep` 把每个多项式乘法折叠成一个固定的 Toeplitz
-矩阵 `T(a)`，`T(a) @ b == a * b mod (X^256+1)`，直接喂给 GEMM（见
-`tests/test_ntt.py`）。
+So no NTT is needed here: `keyprep` folds each polynomial multiplication into a
+fixed Toeplitz matrix `T(a)`, with `T(a) @ b == a * b mod (X^256+1)`, fed
+straight into the GEMM (see `tests/test_ntt.py`).
 
-为什么不用 `torch.mm(..., out_dtype=torch.float32)`
----------------------------------------------------
-那个参数是 torch-xpu 的私有扩展（`aten::mm.dtype`），公开签名只有
-`mm(input, mat2, *, out=None)`。fp16 输出也不行 —— `|sum|` 峰值约 1.8e5，
-超过 fp16 上限 65504，直接变 inf。所以两趟 GEMM 都用本包自己的 Triton
-内核（`kernels/fused_gemm.py`），fp32 累加 + 就地 epilogue，既精确又可移植。
+Why not `torch.mm(..., out_dtype=torch.float32)`
+------------------------------------------------
+That argument is a torch-xpu private extension (`aten::mm.dtype`); the public
+signature only has `mm(input, mat2, *, out=None)`. fp16 output does not work
+either — the `|sum|` peak is about 1.8e5, above the fp16 maximum of 65504, so it
+turns into inf. Both GEMM passes therefore use this package's own Triton
+kernels (`kernels/fused_gemm.py`): fp32 accumulation plus an in-place epilogue,
+exact and portable.
 """
 
 from __future__ import annotations
@@ -51,7 +54,7 @@ BLOCK = 128
 WARPS = 4
 
 
-# ---------------- 设备上的基础算子 ----------------
+# ---------------- basic operators on device ----------------
 
 
 @triton.jit
@@ -68,9 +71,10 @@ def _pre_kernel(
     BC: tl.constexpr,
     JT: tl.constexpr,
 ):
-    """unpack + decompress (+ center) + 转置，一次完成；顺带存一份 int16 参考值。
+    """unpack + decompress (+ center) + transpose, all in one pass; also keeps an
+    int16 reference copy.
 
-    COUNT（256/512/768/1024）不是 2 的幂，所以按 JT=256 分块。
+    COUNT (256/512/768/1024) is not a power of 2, so it is tiled by JT=256.
     """
     pid = tl.program_id(0)
     rows = pid * BC + tl.arange(0, BC)
@@ -81,14 +85,16 @@ def _pre_kernel(
         b0 = bitpos // 8
         sh = (bitpos % 8).to(tl.int32)
         off = rows[:, None] * CTLEN + b0[None, :]
-        # 掩码到行边界内：D=10/4 时窗口可能越过行尾，靠掩码兜住，不再需要 padding
+        # Mask within the row bounds: with D=10/4 the window may cross the row end;
+        # the mask covers it, so padding is no longer needed
         ok = mask[:, None] & (b0[None, :] < CTLEN)
         v0 = tl.load(ct + off, mask=ok, other=0).to(tl.int32)
         v1 = tl.load(ct + off + 1, mask=ok & (b0[None, :] + 1 < CTLEN), other=0).to(tl.int32)
         v2 = tl.load(ct + off + 2, mask=ok & (b0[None, :] + 2 < CTLEN), other=0).to(tl.int32)
         val = ((v0 | (v1 << 8) | (v2 << 16)) >> sh[None, :]) & ((1 << D) - 1)
 
-        # ref 用 [COUNT, B] 布局：写沿 rows 连续，正好也是 _cmp_kernel 沿 cols 读的方向
+        # ref uses a [COUNT, B] layout: writes are contiguous along rows, which is
+        # exactly the direction _cmp_kernel reads along cols
         tl.store(
             ref + j[:, None] * B + rows[None, :], tl.trans(val.to(tl.int16)), mask=mask[None, :]
         )
@@ -106,7 +112,8 @@ def _pre_kernel(
 def _cmp_kernel(
     acc2, E, ref, cnt, B, ROW0, ROWS, D: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr
 ):
-    """mod q + compress + 与参考比较，按列累加相等计数。"""
+    """mod q + compress + compare against the reference, accumulating the
+    equality count per column."""
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     rows = ROW0 + pid_m * BM + tl.arange(0, BM)
@@ -123,26 +130,32 @@ def _cmp_kernel(
     tl.atomic_add(cnt + cols, s, mask=cols < B)
 
 
-# 每个后端一次：pinned 中转到底值不值得
+# once per backend: whether pinned staging is worth it at all
 _PINNED_PREF: dict[str, bool] = {}
-# 探测用 4 MiB：1 MiB 太小，固定开销会盖住真实差距（实测 1 MiB 只差 1.2x，
-# 4.5 MiB 差到 1.9x，而这个函数的调用方本来就在 MB 级批量上）。
+# Probe with 4 MiB: 1 MiB is too small, fixed overhead would mask the real gap
+# (measured only 1.2x at 1 MiB, up to 1.9x at 4.5 MiB, and this function's
+# callers are on MB-scale batches anyway).
 _PINNED_PROBE_BYTES = 1 << 22
-_PINNED_MIN_BYTES = 1 << 20  # 小于 1 MiB 的批量不值得探测，直接用 pageable
+_PINNED_MIN_BYTES = 1 << 20  # batches below 1 MiB: not worth probing, just use pageable
 
 
 def _prefer_pinned(dev: torch.device, nbytes: int = 0) -> bool:
-    """是否用 pinned 暂存中转（每后端只判一次）。
+    """Whether to use pinned staging (decided once per backend).
 
-    这件事**没有跨平台统一的答案**，实测两边结论相反：
+    There is **no cross-platform uniform answer** here; measurements on the two
+    sides reached opposite conclusions:
 
-    - Intel Arc B390：pageable 直拷 12–14 GB/s（驱动过 bounce buffer），
-      pinned 纯 DMA 78 GB/s。多一次 memcpy（127 GB/s）之后净赚 ~2x。
-    - NVIDIA GB10（Grace-Blackwell，CPU/GPU 一致性互连）：pageable 直拷已经有
-      50 GB/s，pinned 反而更慢 —— 0.092 ms → memcpy 0.346 + DMA 0.084 ms。
+    - Intel Arc B390: direct pageable copy 12–14 GB/s (the driver goes through
+      a bounce buffer), pinned pure DMA 78 GB/s. After one extra memcpy
+      (127 GB/s) it nets ~2x.
+    - NVIDIA GB10 (Grace-Blackwell, CPU/GPU coherent interconnect): direct
+      pageable copy already reaches 50 GB/s, and pinned is actually slower —
+      0.092 ms → memcpy 0.346 + DMA 0.084 ms.
 
-    所以不写死，第一次调用时用 1 MiB 缓冲两边各测 3 次，只有快 10% 以上才用。
-    `MLKEM_PINNED=1/0` 可以强制。
+    So it is not hardcoded: the first call times both sides 3 times on a 4 MiB
+    buffer (1 MiB is too small -- fixed overhead masks the real gap), and pinned
+    is used only if it is more than 15% faster. `MLKEM_PINNED=1/0` forces the
+    choice.
     """
     v = _PINNED_PREF.get(dev.type)
     if v is not None:
@@ -153,7 +166,7 @@ def _prefer_pinned(dev: torch.device, nbytes: int = 0) -> bool:
         _PINNED_PREF[dev.type] = v
         return v
     if nbytes and nbytes < _PINNED_MIN_BYTES:
-        return False  # 小批量：H2D 不是瓶颈，也别花时间探测
+        return False  # small batch: H2D is not the bottleneck; skip probing
     v = _probe_pinned(dev)
     _PINNED_PREF[dev.type] = v
     return v
@@ -186,23 +199,26 @@ def _probe_pinned(dev: torch.device) -> bool:
 
 
 def total_is_uniform(buf, count: int, n0: int) -> bool:
-    """`count` 条密文拼起来的总长是否正好 `count * n0`。
+    """Whether the concatenated length of `count` ciphertexts is exactly `count * n0`.
 
-    这是 O(1) 的；逐条 `all(len(c) == n0 for c in lst)` 在 B=4096 时要 0.13 ms
-    （占端到端 6%），不值得。误判的唯一可能是「混了长短不一的密文、而总长
-    恰好等于 count*n0」—— 固定参数集的合法输入不会出现。
+    This is O(1); the per-item `all(len(c) == n0 for c in lst)` costs 0.13 ms at
+    B=4096 (6% of end-to-end), which is not worth it. The only way to misjudge
+    is "ciphertexts of differing lengths mixed together whose total length
+    happens to equal count*n0" — impossible for valid inputs of a fixed
+    parameter set.
     """
     return n0 > 0 and len(buf) == count * n0
 
 
 def _cpu_tensor(arr: np.ndarray) -> torch.Tensor:
-    """numpy（可能是只读）→ CPU 张量，零拷贝。
+    """numpy (possibly read-only) → CPU tensor, zero-copy.
 
-    `np.frombuffer(b"...")` 出来的是只读数组，`torch.from_numpy` 会报一条
-    UserWarning（"numpy array is not writable"）。那条警告针对的是「之后
-    可能写这个张量」的场景，而我们这里只读、并且立刻拷走，所以静音。
-    反过来用 `bytearray(...)` 消警告会多一次 4.4 MB 的 memcpy（+0.15 ms），
-    不值得。
+    `np.frombuffer(b"...")` yields a read-only array, and `torch.from_numpy`
+    emits a UserWarning ("numpy array is not writable"). That warning targets
+    the case where the tensor may be written later, but here we only read it
+    and copy it away immediately, so it is silenced. Suppressing the warning
+    with `bytearray(...)` instead would add another 4.4 MB memcpy (+0.15 ms),
+    which is not worth it.
     """
     if arr.flags.writeable:
         return torch.from_numpy(arr)
@@ -212,33 +228,40 @@ def _cpu_tensor(arr: np.ndarray) -> torch.Tensor:
 
 
 def _to_device(arr: np.ndarray, dev: torch.device) -> torch.Tensor:
-    """把 uint8 数组搬到设备上，**零拷贝**构造源张量。
+    """Move a uint8 array to the device, building the source tensor **zero-copy**.
 
-    `np.frombuffer(b"...")` 出来的是只读数组，`torch.from_numpy` 会报一条
-    UserWarning（"numpy array is not writable"）。那条警告针对的是「之后
-    可能写这个张量」的场景，而我们这里只读、并且立刻 `.to(dev)` 拷走，
-    所以直接静音。反过来用 `bytearray(...)` 消警告会多一次 4.4 MB 的
-    memcpy（B=4096 时约 +0.4 ms），不值得。
+    `np.frombuffer(b"...")` yields a read-only array, and `torch.from_numpy`
+    emits a UserWarning ("numpy array is not writable"). That warning targets
+    the case where the tensor may be written later, but here we only read it
+    and copy it away immediately with `.to(dev)`, so it is silenced directly.
+    Suppressing the warning with `bytearray(...)` instead would add another
+    4.4 MB memcpy (about +0.4 ms at B=4096), which is not worth it.
     """
     return _cpu_tensor(arr).to(dev)
 
 
 def _gemm_fp32(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """通用兜底 GEMM：fp16 输入、fp32 输出的**精确**矩阵乘。
+    """Generic fallback GEMM: an **exact** matrix multiplication with fp16 inputs
+    and fp32 output.
 
-    为什么不能直接 `torch.mm(a, b)`：fp16 输出上限 65504，而这里的结果峰值
-    约 1.8e5，会变 inf（实测）。`torch.mm(..., out_dtype=fp32)` 是 torch-xpu
-    的私有扩展，公开 API 里没有，`out=` 又要求 dtype 一致。
+    Why not just `torch.mm(a, b)`: the fp16 output ceiling is 65504, while the
+    result peak here is about 1.8e5, which turns into inf (measured).
+    `torch.mm(..., out_dtype=fp32)` is a torch-xpu private extension, absent
+    from the public API, and `out=` requires a matching dtype.
 
-    把两个操作数都升到 fp32 是最可移植的做法（任何后端都支持），代价是
-    失去 fp16 tensor core，慢 1.7–3.7x。**只在 `fused_*_gemm` 返回 None
-    时走这条路**，正常路径不会用到。
+    Upcasting both operands to fp32 is the most portable approach (every
+    backend supports it); the cost is losing the fp16 tensor cores, 1.7–3.7x
+    slower. **This path is taken only when `fused_*_gemm` returns None**; the
+    normal path never uses it.
     """
     return torch.mm(a.to(torch.float32), b.to(torch.float32))
 
 
 def pad_gpu(msgs: torch.Tensor, rate: int, domain: int) -> torch.Tensor:
-    """pad10*1 + 域分隔，全在设备上。msgs [n,L] uint8 -> [n, 多倍 rate]。"""
+    """pad10*1 + domain separation, all on device.
+
+    msgs [n,L] uint8 -> [n, a multiple of rate].
+    """
     n, L = msgs.shape
     total = ((L + 1 + rate - 1) // rate) * rate
     out = torch.zeros((n, total), dtype=torch.uint8, device=msgs.device)
@@ -249,12 +272,14 @@ def pad_gpu(msgs: torch.Tensor, rate: int, domain: int) -> torch.Tensor:
 
 
 def _pad2_gpu(a: torch.Tensor, b: torch.Tensor, n: int, rate: int, domain: int) -> torch.Tensor:
-    """`pad_gpu(cat([a, b]))` 的一次 launch 等价实现。
+    """Single-launch equivalent of `pad_gpu(cat([a, b]))`.
 
-    a/b 中 1 维的按「广播到 n 行」处理（等价于 `.expand(n, L)`），2 维的按逐行。
-    这就是 J（z 广播 + ct 逐行）和 G（m' 逐行 + h_ek 广播）的形状。
-    老路径是 `cat` + `zeros` + `copy_` 三次 launch，J 档（B=4096）实测 192 µs；
-    这里 28 µs。段长不是 8 的倍数时回退（当前三套参数都满足）。
+    1-D `a`/`b` are treated as "broadcast to n rows" (equivalent to
+    `.expand(n, L)`), 2-D ones row by row. These are exactly the shapes of J
+    (z broadcast + ct row-wise) and G (m' row-wise + h_ek broadcast). The old
+    path was three launches (`cat` + `zeros` + `copy_`), measured 192 µs for
+    the J case (B=4096); here it is 28 µs. Falls back when a segment length is
+    not a multiple of 8 (all three current parameter sets satisfy this).
     """
     la = a.shape[1] if a.dim() == 2 else a.numel()
     lb = b.shape[1] if b.dim() == 2 else b.numel()
@@ -279,10 +304,11 @@ def _pad2_gpu(a: torch.Tensor, b: torch.Tensor, n: int, rate: int, domain: int) 
 def _pad_prf_gpu(
     prefix: torch.Tensor, n: int, rate: int, domain: int, mod: int, off: int
 ) -> torch.Tensor:
-    """`pad_gpu(cat([prefix[row // mod], [row % mod + off]]))` 的一次 launch 版本。
+    """Single-launch version of `pad_gpu(cat([prefix[row // mod], [row % mod + off]]))`.
 
-    PRF 的输入是 `r'`（32 B）接一个 1 字节的 j，即 33 B/条；`prefix` 可以是大张量
-    里的一列切片（例如 G 的 64 B 输出里的后 32 B），只要最后一维连续。
+    The PRF input is `r'` (32 B) followed by a 1-byte j, i.e. 33 B per item;
+    `prefix` may be a column slice of a larger tensor (e.g. the last 32 B of
+    the 64 B G output), as long as the last dimension is contiguous.
     """
     total = ((prefix.shape[-1] + 1 + 1 + rate - 1) // rate) * rate
     last_ok = prefix.dim() == 2 and prefix.shape[-1] % 8 == 0 and prefix.stride(-1) == 1
@@ -296,7 +322,7 @@ def _pad_prf_gpu(
 
 
 def sponge_gpu(padded: torch.Tensor, rate: int, outlen: int) -> torch.Tensor:
-    """已填充的 [n, 多倍 rate] uint8 -> [n, outlen] uint8，全程设备端。"""
+    """Padded [n, a multiple of rate] uint8 -> [n, outlen] uint8, all on device."""
     _n, tot = padded.shape
     nblocks = tot // rate
     assert nblocks * rate == tot
@@ -324,9 +350,11 @@ def _unpack_kernel(buf, out, B, STRIDE, COUNT, D: tl.constexpr, BR: tl.constexpr
 
 
 def unpack_bits_gpu(buf: torch.Tensor, d: int, count: int) -> torch.Tensor:
-    """[B, nb] uint8 -> [B, count] int32，按小端位序取 d-bit 字段。
+    """[B, nb] uint8 -> [B, count] int32, reading d-bit fields in little-endian
+    bit order.
 
-    用 Triton 逐字节读取（比 PyTorch 的 3 次高级索引 gather 快约 3 倍）。
+    Reads bytes one by one in Triton (about 3 times faster than PyTorch's 3
+    advanced-index gathers).
     """
     B, nb = buf.shape
     padded = torch.zeros((B, nb + 2), dtype=torch.uint8, device=buf.device)
@@ -339,7 +367,7 @@ def unpack_bits_gpu(buf: torch.Tensor, d: int, count: int) -> torch.Tensor:
 
 
 def pack_bits_gpu(vals: torch.Tensor, d: int) -> torch.Tensor:
-    """[count, B] 整数 -> [B, count*d/8] uint8（ByteEncode 的位打包）。"""
+    """[count, B] integers -> [B, count*d/8] uint8 (ByteEncode bit packing)."""
     count, B = vals.shape
     nbits = count * d
     assert nbits % 8 == 0
@@ -362,10 +390,12 @@ def compress_gpu(x: torch.Tensor, d: int) -> torch.Tensor:
 
 @triton.jit
 def _cbd2_kernel(buf, out, n, BLOCK: tl.constexpr):
-    """eta=2 的 CBD：一个字节恰好两个系数，一次读入、一次写出。
+    """CBD for eta=2: one byte holds exactly two coefficients, read once and
+    written once.
 
-    原 PyTorch 实现在 [n,128] 上串了 6 个中间张量（&、>>、popcount…），
-    纯带宽就吃掉 1 ms；这里把整段压进一个 kernel。
+    The original PyTorch implementation chained 6 intermediate tensors over
+    [n,128] (&, >>, popcount...), and pure bandwidth alone ate 1 ms; here the
+    whole thing is packed into one kernel.
     """
     pid = tl.program_id(0)
     rows = pid * BLOCK + tl.arange(0, BLOCK)
@@ -382,14 +412,14 @@ def _cbd2_kernel(buf, out, n, BLOCK: tl.constexpr):
 
 
 def cbd_gpu(bufs: torch.Tensor, eta: int) -> torch.Tensor:
-    """[n, 64·eta] uint8 -> [n, 256] int32。"""
+    """[n, 64·eta] uint8 -> [n, 256] int32."""
     n = bufs.shape[0]
     assert bufs.shape[1] == 64 * eta
 
     if eta == 2:
         return ops.cbd(bufs, eta)
 
-    # 通用路径（eta=3 等）
+    # generic path (eta=3 etc.)
     b = bufs.to(torch.int32)
     shifts = torch.arange(8, device=bufs.device, dtype=torch.int32)
     bits = (b[:, :, None] >> shifts) & 1  # [n, 64·eta, 8] int32
@@ -404,18 +434,21 @@ def center_gpu(x: torch.Tensor) -> torch.Tensor:
     return torch.where(x > (Q - 1) // 2, x - Q, x)
 
 
-# ---------------- 主类 ----------------
+# ---------------- main class ----------------
 
 
 class Decapsulator:
-    """把一个 ML-KEM 私钥装到设备上，之后可以批量解封装任意多条密文。
+    """Load one ML-KEM private key onto the device, then decapsulate any number
+    of ciphertexts in batches.
 
     Args:
-        ps: 参数集名，``"ML-KEM-512"`` / ``"ML-KEM-768"`` / ``"ML-KEM-1024"``。
-        dk: 私钥字节串（长度 ``768k+96``）。
-        device: ``None`` 表示自动选第一个可用加速设备；也可显式给
-            ``"cuda"`` / ``"xpu"`` / ``"cuda:1"``。环境变量 ``MLKEM_DEVICE``
-            优先级低于显式参数、高于自动探测。
+        ps: parameter set name, ``"ML-KEM-512"`` / ``"ML-KEM-768"`` /
+            ``"ML-KEM-1024"``.
+        dk: private key byte string (length ``768k+96``).
+        device: ``None`` selects the first available accelerator automatically;
+            a value may also be given explicitly, e.g. ``"cuda"`` / ``"xpu"`` /
+            ``"cuda:1"``. The ``MLKEM_DEVICE`` environment variable has lower
+            priority than an explicit argument and higher than auto-detection.
     """
 
     def __init__(self, ps: str, dk: bytes, device=None):
@@ -438,22 +471,23 @@ class Decapsulator:
         )
         self._staging: dict[tuple[int, int], tuple] = {}
 
-    # ---- 哈希批处理 ----
+    # ---- hash batching ----
     def _G(self, m_bytes: torch.Tensor, B: int) -> torch.Tensor:
-        # m' || h_ek，pad 到 1 块 72 B；一次 launch（原来是 cat+zeros+copy 三次）
+        # m' || h_ek, padded to 1 block of 72 B; one launch (previously three: cat+zeros+copy)
         return sponge_gpu(
             _pad2_gpu(m_bytes, self.h_ek, B, RATE_SHA3_512, SHA3_DOMAIN), RATE_SHA3_512, 64
         )
 
     def _J(self, cts: torch.Tensor, B: int) -> torch.Tensor:
-        # z || ct，pad 到 9 块 136 B；一次 launch（原来 192 µs，现在 28 µs）
+        # z || ct, padded to 9 blocks of 136 B; one launch (previously 192 µs, now 28 µs)
         return sponge_gpu(_pad2_gpu(self.z, cts, B, RATE_SHAKE, SHAKE_DOMAIN), RATE_SHAKE, 32)
 
     def _prf_bufs(self, r_prime: torch.Tensor, B: int):
-        """PRF：r' → 两个 sponge 输出（还没做 CBD），供融合的 CBD→Y/E 用。"""
+        """PRF: r' → two sponge outputs (CBD not applied yet), for the fused CBD→Y/E path."""
         p, k = self.p, self.p.k
-        # r' || [j]（33 B）→ pad 到 1 块 136 B。r_prime 通常是 G 输出的后 32 B
-        # （[B,64] 的切片，最后一维连续），可以让 kernel 带 stride 原地读，不用拷。
+        # r' || [j] (33 B) → padded to 1 block of 136 B. r_prime is usually the
+        # last 32 B of the G output (a slice of [B,64], contiguous in the last
+        # dimension), so the kernel can read it in place with a stride, no copy.
         y_pad = _pad_prf_gpu(r_prime, B * k, RATE_SHAKE, SHAKE_DOMAIN, mod=k, off=0)
         e_pad = _pad_prf_gpu(r_prime, B * (k + 1), RATE_SHAKE, SHAKE_DOMAIN, mod=k + 1, off=k)
         return (
@@ -468,32 +502,35 @@ class Decapsulator:
         e = cbd_gpu(e_buf, p.eta2).reshape(B, k + 1, 256)
         return y, e
 
-    # ---- 主流程 ----
+    # ---- main flow ----
     def decaps(self, cts) -> np.ndarray:
-        """批量解封装。
+        """Batched decapsulation.
 
-        `cts` 支持四种形态，换算成设备张量所需的**主机侧成本差很多**
-        （B=4096 实测，见 benchmarks/bench_host.py）：
+        `cts` accepts four forms, and the **host-side cost** of converting them
+        into a device tensor differs a lot (measured at B=4096, see
+        benchmarks/bench_host.py):
 
         ============================================  ===========
-        形态                                            主机侧
+        form                                              host side
         ============================================  ===========
-        `torch.Tensor`（已在设备上）                      ~0 ms
-        `bytes` / `bytearray` / `memoryview`（一整块）     ~0.11 ms
-        `np.ndarray` [B, ct_size]                        ~0.14 ms
-        `list[bytes]`（每条一条密文）                     ~0.36 ms
+        `torch.Tensor` (already on device)                ~0 ms
+        `bytes` / `bytearray` / `memoryview` (one block)  ~0.11 ms
+        `np.ndarray` [B, ct_size]                         ~0.14 ms
+        `list[bytes]` (one ciphertext each)               ~0.36 ms
         ============================================  ===========
 
-        差别全在 `b"".join` 和「每条长度是否一致」的校验上。服务端从网络收
-        密文时，如果能直接收进一整块缓冲（`socket.recv_into` 或 pinned 内存），
-        就走前两行；如果是别处解析出来的 `list[bytes]`，就付那 0.36 ms。
+        The difference is all in `b"".join` and the "all items have the same
+        length" check. When a server receives ciphertexts from the network and
+        can read them straight into one contiguous buffer (`socket.recv_into`
+        or pinned memory), it takes the first two rows; with a `list[bytes]`
+        parsed elsewhere, it pays the 0.36 ms.
         """
         n0_expected = self.p.ct_size
         if isinstance(cts, torch.Tensor):
             self._check_shape(cts.shape[-2:] if cts.dim() > 1 else cts.shape, n0_expected)
             ct = cts.reshape(-1, n0_expected)
             if ct.dtype != torch.uint8:
-                raise TypeError(f"cts 需要 uint8，收到 {ct.dtype}")
+                raise TypeError(f"cts must be uint8, got {ct.dtype}")
             if ct.device != self.device:
                 ct = ct.to(self.device)
             return self.decaps_torch(ct, ct.shape[0]).cpu().numpy()
@@ -501,28 +538,29 @@ class Decapsulator:
         arr = self._to_numpy2d(cts, n0_expected)
         B = arr.shape[0]
 
-        # 唯一一次 H2D（走 pinned 暂存，见 _h2d）。
+        # the only H2D (via pinned staging, see _h2d).
         ct = self._h2d(arr)
 
-        # 唯一一次 D2H。
+        # the only D2H.
         return self.decaps_torch(ct, B).cpu().numpy()
 
     def _h2d(self, arr: np.ndarray) -> torch.Tensor:
-        """主机 → 设备的单次拷贝，尽量走 **pinned 暂存**。
+        """Single host → device copy, using **pinned staging** where possible.
 
-        为什么值得：这一台机器上 pageable → device 只有 12 GB/s（驱动要经过
-        一个 bounce buffer），而 pinned → device 的纯 DMA 有 78 GB/s。
-        多出来的那一次「numpy → pinned」memcpy 只要 0.035 ms（4.46 MB @127 GB/s），
-        所以净赚：
+        Why it is worth it: on this machine pageable → device is only 12 GB/s
+        (the driver goes through a bounce buffer), while pinned → device pure
+        DMA is 78 GB/s. The extra "numpy → pinned" memcpy takes only 0.035 ms
+        (4.46 MB @127 GB/s), so it nets:
 
-            pageable 直拷        join 0.157 + 0.362 = 0.519 ms
-            pinned 中转          join 0.157 + 0.035 + 0.057 = 0.249 ms
+            pageable direct      join 0.157 + 0.362 = 0.519 ms
+            pinned staging       join 0.157 + 0.035 + 0.057 = 0.249 ms
 
-        （B=4096 实测，见 benchmarks/bench_host.py。）
+        (measured at B=4096, see benchmarks/bench_host.py.)
 
-        暂存缓冲按 (B, ct_size) 缓存并复用；`MLKEM_NO_PINNED=1` 可关掉。
-        设备侧那块缓冲也是复用的 —— `decaps_torch` 只读它，而且返回前已经
-        同步过，所以下一次调用覆盖它是安全的。
+        The staging buffer is cached and reused per (B, ct_size); set
+        `MLKEM_PINNED=0` to disable it. The device-side buffer is reused
+        too — `decaps_torch` only reads it and has already synchronized before
+        returning, so overwriting it on the next call is safe.
         """
         n, L = arr.shape
         key = (n, L)
@@ -549,11 +587,12 @@ class Decapsulator:
     @staticmethod
     def _check_shape(shape, n0: int) -> None:
         if len(shape) >= 1 and shape[-1] != n0:
-            raise ValueError(f"每条密文应为 {n0} 字节，收到 {tuple(shape)}")
+            raise ValueError(f"each ciphertext must be {n0} bytes, got {tuple(shape)}")
 
     @staticmethod
     def _to_numpy2d(cts, n0: int) -> np.ndarray:
-        """把各种输入形态归一成 [B, n0] uint8 的 CPU 数组（尽量零/单次拷贝）。"""
+        """Normalize the various input forms into a [B, n0] uint8 CPU array
+        (zero or single copy where possible)."""
         if isinstance(cts, np.ndarray):
             if cts.dtype != np.uint8:
                 cts = cts.astype(np.uint8)
@@ -561,46 +600,50 @@ class Decapsulator:
             if arr.ndim == 1:
                 arr = arr[None, :]
             if arr.ndim != 2 or (n0 > 0 and arr.shape[1] != n0):
-                raise ValueError(f"期望 [B, {n0}] 的 uint8 数组，收到 {arr.shape}")
+                raise ValueError(f"expected a [B, {n0}] uint8 array, got {arr.shape}")
             return arr
 
         if isinstance(cts, (bytes, bytearray, memoryview)):
             n = len(cts)
             if n0 <= 0 or n % n0:
-                raise ValueError(f"输入长度 {n} 不是密文长度 {n0} 的整数倍")
+                raise ValueError(f"input length {n} is not a multiple of ciphertext length {n0}")
             return np.frombuffer(cts, np.uint8).reshape(n // n0, n0)
 
         lst = list(cts)
         if not lst:
             return np.empty((0, n0), np.uint8)
         try:
-            buf = b"".join(lst)  # 只接受 bytes-like，否则 TypeError
+            buf = b"".join(lst)  # accepts bytes-like only, otherwise TypeError
         except TypeError:
             buf = None
-        # O(1) 校验：总长正好是 n0 * len(lst) 就认为是等长的。
-        # 之前逐条 `all(len(c) == n0 for c in lst)`，B=4096 时白花 0.13 ms
-        # （占端到端 6%）。代价：如果调用方混了不同长度的密文、而它们的总长
-        # 又恰好等于 n0*len，会被误判 —— 对固定参数集的合法输入不可能发生。
+        # O(1) check: if the total length is exactly n0 * len(lst), treat the
+        # items as equal-length. The per-item `all(len(c) == n0 for c in lst)`
+        # previously wasted 0.13 ms at B=4096 (6% of end-to-end). The cost: if
+        # the caller mixes ciphertexts of differing lengths whose total length
+        # happens to equal n0*len, this is misjudged — impossible for valid
+        # inputs of a fixed parameter set.
         if buf is not None and total_is_uniform(buf, len(lst), n0):
             return np.frombuffer(buf, np.uint8).reshape(len(lst), n0)
-        # 慢路径：元素不是 bytes-like，或者长度确实不等
+        # slow path: elements are not bytes-like, or the lengths really differ
         return np.stack([np.frombuffer(bytes(c), np.uint8) for c in lst])
 
     def decaps_torch(self, ct: torch.Tensor, B: int) -> torch.Tensor:
-        """纯 device 侧流程，输入 ct[B, ct_size] uint8，输出 K[B, 32] uint8。"""
+        """Pure device-side flow: input ct[B, ct_size] uint8, output K[B, 32] uint8."""
         p, k, dev = self.p, self.p.k, self.device
 
-        # 1. 融合：unpack + 解压 (+center) + 转置  →  U[256k,B] fp16, V[256,B] int16
-        #    顺带产出 int16 参考值 c1r/c2r 供最后比较（避免再解包一次）
+        # 1. fused: unpack + decompress (+center) + transpose  →  U[256k,B] fp16, V[256,B] int16
+        #    also emits int16 reference values c1r/c2r for the final comparison
+        #    (avoids a second unpacking pass)
         KK = 256 * k
         U, c1r = ops.pre(ct, B, p.ct_size, 0, KK, p.du, 1, 16, 256)
         V, c2r = ops.pre(ct, B, p.ct_size, 32 * p.du * k, 256, p.dv, 0, 16, 256)
 
-        # 2. w = v − W_dec @ u，再 mod q → compress(1 bit) → 打包成 m_bytes。
-        #    GEMM 和整段 epilogue 融成一个内核（acc 不落显存，4.2 MB 的
-        #    写出 + 读回全省掉）。实测比「mm + compress_pack」快 1.36x。
+        # 2. w = v − W_dec @ u, then mod q → compress(1 bit) → pack into m_bytes.
+        #    The GEMM and the whole epilogue are fused into one kernel (acc never
+        #    hits VRAM, saving the 4.2 MB write + read-back). Measured 1.36x
+        #    faster than "mm + compress_pack".
         m_bytes = fused_dec_gemm(self.W_dec, U, V, B)
-        if m_bytes is None:  # 形状/后端不满足约束
+        if m_bytes is None:  # shape/backend does not meet the constraints
             acc = _gemm_fp32(self.W_dec, U)
             if glue.can_compress_pack(V, acc, B):
                 m_bytes = ops.compress_pack(acc, V, B)  # [B,32] uint8
@@ -608,13 +651,14 @@ class Decapsulator:
                 w = (V.to(torch.int32) - acc.to(torch.int32)) % Q
                 m_bytes = pack_bits_gpu(compress_gpu(w, 1), 1)  # [B,32] uint8
 
-        # 4. G / J
+        # 3. G / J
         gr = self._G(m_bytes, B)
         K_prime = gr[:, :32]
         r_prime = gr[:, 32:]
         K_bar = self._J(ct, B)
 
-        # 5. PRF + CBD（+ 转置）。eta=2 时 CBD 直接写进 Y/E，不落 y/e 中间张量。
+        # 4. PRF + CBD (+ transpose). With eta=2, CBD writes straight into Y/E,
+        #    with no y/e intermediate tensors.
         y_buf, e_buf = self._prf_bufs(r_prime, B)
         YE = None
         if glue.can_cbd_y(y_buf, B, k, p.eta1) and glue.can_cbd_e(e_buf, m_bytes, B, k, p.eta2):
@@ -623,24 +667,27 @@ class Decapsulator:
             y = cbd_gpu(y_buf, p.eta1).reshape(B, k, 256)
             e = cbd_gpu(e_buf, p.eta2).reshape(B, k + 1, 256)
 
-        # 6. 重加密：y / e / m_bytes → Y [256k,B] fp16 + E [256(k+1),B] int16，一个 kernel
-        #    Y 必须**连续**（fused_enc_gemm 的约束）。旧写法
-        #    `permute(1,2,0).reshape(...).to(fp16)` 实际是 stride=(1,256k) 的转置视图，
-        #    值一样但非连续，会让融合 GEMM 静默返回 False、整条流水线走 mm + cmp 回退。
+        # 5. re-encryption: y / e / m_bytes → Y [256k,B] fp16 + E [256(k+1),B] int16, one kernel
+        #    Y must be **contiguous** (a fused_enc_gemm constraint). The old
+        #    `permute(1,2,0).reshape(...).to(fp16)` was actually a transposed view
+        #    with stride=(1,256k): same values but non-contiguous, which made the
+        #    fused GEMM silently return False and sent the whole pipeline down the
+        #    mm + cmp fallback.
         if YE is not None:
             Y, E = YE
         elif glue.can_build_ye(y, e, m_bytes, B, k):
             Y, E = ops.build_ye(y, e, m_bytes, B, k)
         else:
             Y = y.permute(1, 2, 0).reshape(k * 256, B).to(torch.float16).contiguous()
-            # int16 足够：E1 ∈ [-2,2]，E2+1665*m_bits ∈ [-2, 1667]。
+            # int16 is enough: E1 ∈ [-2,2], E2+1665*m_bits ∈ [-2, 1667].
             E1 = e[:, :k].permute(1, 2, 0).reshape(k * 256, B).to(torch.int16)
             E2 = (e[:, k].T + 1665 * glue.unpack_mbits(m_bytes, B)).to(torch.int16)
             E = torch.cat([E1, E2], dim=0)  # [256(k+1),B]
 
-        # 7. 融合：GEMM + mod q + compress + 比较（按列累加相等计数）
-        #    fused_enc_gemm 返回 False 表示形状/dtype 不满足其约束且未写任何输出，
-        #    此时回退到 mm + cmp 两步。
+        # 6. fused: GEMM + mod q + compress + compare (accumulates the equality count per column)
+        #    fused_enc_gemm returning False means the shape/dtype does not
+        #    satisfy its constraints and no output was written; in that case fall
+        #    back to the two steps mm + cmp.
         cnt = torch.zeros(B, dtype=torch.int32, device=dev)
         if not fused_enc_gemm(self.W_enc, Y, E, (c1r, c2r), cnt, B, p.du, p.dv):
             acc2 = _gemm_fp32(self.W_enc, Y)
@@ -649,12 +696,13 @@ class Decapsulator:
             ops.cmp(acc2, E, c2r, cnt, B, KK, 256, p.dv, BM, BN)
         eq = cnt == (KK + 256)
 
-        # 8. 常数时间选择
+        # 7. constant-time selection
         return torch.where(eq[:, None], K_prime, K_bar)  # [B,32] uint8
 
 
 def decaps_batch(ps: str, dk: bytes, cts, device=None) -> np.ndarray:
-    """一次性解封装一批密文（每次都重新预处理私钥，批量小的时候别用它）。"""
+    """Decapsulate a batch of ciphertexts in one call (the private key is
+    re-prepared every time; do not use it for small batches)."""
     return Decapsulator(ps, dk, device=device).decaps(cts)
 
 

@@ -1,13 +1,14 @@
 #!/usr/bin/env python
-"""不依赖 pytest 跑测试的入口（远程 / CI 上常常没有 pytest）。
+"""Entry point for running the tests without pytest (remote / CI often has none).
 
-    python tests/run_all.py                       # 自动选设备
-    python tests/run_all.py --device cuda         # 指定设备
-    python tests/run_all.py --only test_glue      # 只跑一个模块
-    python tests/run_all.py --list                # 只列用例
+    python tests/run_all.py                       # auto-select device
+    python tests/run_all.py --device cuda         # specify device
+    python tests/run_all.py --only test_glue      # run only one module
+    python tests/run_all.py --list                # list cases only
 
-如果环境里有 pytest，`pytest` 才是正确选择（这个运行器只覆盖本仓库用到的
-pytest 子集）。没有 pytest 时它会注入 `tests/_pytest_shim.py`。
+If pytest is available in the environment, `pytest` is the right choice (this
+runner covers only the subset of pytest this repo uses). With no pytest it
+injects `tests/_pytest_shim.py`.
 """
 
 from __future__ import annotations
@@ -27,9 +28,9 @@ for p in (str(_ROOT), str(_HERE)):
 
 
 def _resolve_fixtures(mod, fn, provided):
-    """把模块里 `_is_fixture` 标了的无参函数按参数名注入。
+    """Inject the no-arg functions in the module marked `_is_fixture`, by param name.
 
-    `provided` 是 parametrize 已经填掉的参数名，跳过它们。
+    `provided` holds the parameter names already filled by parametrize; skip them.
     """
     import inspect
 
@@ -43,7 +44,7 @@ def _resolve_fixtures(mod, fn, provided):
         try:
             kwargs[name] = f()
         except TypeError:
-            # fixture 依赖 pytest 的 `request` 之类；这个运行器不模拟，直接跳过。
+            # fixture relies on pytest's `request` etc.; this runner does not emulate it, skip.
             return None
     return kwargs
 
@@ -51,9 +52,9 @@ def _resolve_fixtures(mod, fn, provided):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default=None)
-    ap.add_argument("--only", default=None, help="只跑指定模块（可省略 test_ 前缀）")
-    ap.add_argument("--list", action="store_true", help="只列出用例，不执行")
-    ap.add_argument("-x", action="store_true", help="第一个失败就停")
+    ap.add_argument("--only", default=None, help="run the given module (`test_` prefix optional)")
+    ap.add_argument("--list", action="store_true", help="list cases only, do not run")
+    ap.add_argument("-x", action="store_true", help="stop at the first failure")
     args = ap.parse_args()
     if args.device:
         os.environ["MLKEM_DEVICE"] = args.device
@@ -65,7 +66,7 @@ def main() -> int:
     import pytest
 
     if getattr(pytest, "__file__", None) is not None:
-        # 环境里有真 pytest，直接交给它（支持 fixture / parametrize / -x 等）。
+        # real pytest is present, hand over to it (supports fixture / parametrize / -x etc.).
         argv = [str(_HERE)]
         if args.only:
             want = args.only if args.only.startswith("test_") else "test_" + args.only
@@ -74,7 +75,7 @@ def main() -> int:
             argv.append("--collect-only")
         if args.x:
             argv.append("-x")
-        print(f"# 检测到 pytest {pytest.__version__}，交给它跑")
+        print(f"# detected pytest {pytest.__version__}, handing over to it")
         return int(pytest.main(["-q", *argv]))
 
     import _common
@@ -82,14 +83,14 @@ def main() -> int:
 
     is_shim = getattr(sys.modules.get("pytest"), "__file__", None) is None
     print(f"# device: {_common.dev_name()}")
-    print(f"# runner: {'内置 shim（环境里没有 pytest）' if is_shim else 'pytest'}\n")
+    print(f"# runner: {'built-in shim (no pytest in the environment)' if is_shim else 'pytest'}\n")
 
     mods = sorted(p.stem for p in _HERE.glob("test_*.py"))
     if args.only:
         want = args.only if args.only.startswith("test_") else "test_" + args.only
         mods = [m for m in mods if m == want]
         if not mods:
-            print(f"找不到模块 {args.only}", file=sys.stderr)
+            print(f"module not found: {args.only}", file=sys.stderr)
             return 2
 
     total_pass = total_fail = total_skip = 0
@@ -120,7 +121,7 @@ def main() -> int:
                     continue
                 fx = _resolve_fixtures(mod, fn, set(kwargs))
                 if fx is None:
-                    print(f"  SKIP {label}: 无法解析 fixture")
+                    print(f"  SKIP {label}: cannot resolve fixture")
                     total_skip += 1
                     continue
                 try:

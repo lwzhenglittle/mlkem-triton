@@ -1,10 +1,11 @@
 #!/usr/bin/env python
-"""密钥生成吞吐（FIPS 203 Alg. 16）。
+"""Key generation throughput (FIPS 203 Alg. 16).
 
     python benchmarks/bench_keygen.py --batch 1024,4096,8192
 
-keygen 是三个操作里**唯一必须用 NTT 的一个** —— decaps/encaps 的乘法都被折成了
-固定矩阵的 GEMM，而 keygen 的 `s`/`e` 每把钥匙都是新的，没有可复用的矩阵。
+keygen is **the only one of the three operations that must use the NTT** — the
+multiplications in decaps/encaps are folded into fixed-matrix GEMMs, while keygen's
+`s`/`e` are new for every key, with no reusable matrix.
 """
 
 from __future__ import annotations
@@ -24,9 +25,10 @@ from mlkem_triton import describe, resolve_device
 from mlkem_triton.devices import sync
 from mlkem_triton.keygen import KeyGenerator
 
-# cuPQC 在 GB10 上同机实测（纯 kernel）：keygen 173.9 ns（BD=32）/ 194.9 ns（默认）
+# cuPQC on GB10, same machine (pure kernel): keygen 173.9 ns (BD=32) / 194.9 ns (default)
 CUPQC_KEYGEN_NS = {"tuned": 173.9, "default": 194.9}
-# liboqs 0.16.0 同机单线程 keygen 7.73 µs；16 并发进程聚合见 comparison_prior_work.md
+# liboqs 0.16.0 same-machine single-thread keygen 7.73 µs; for the aggregate over 16
+# concurrent processes see docs/compare.md
 LIBOQS_KEYGEN_US = 7.731
 
 
@@ -61,7 +63,7 @@ def main() -> int:
     print(
         f"{'B':>7} {'e2e ms':>9} {'e2e µs/op':>10} {'dev µs/op':>10} "
         f"{'Mops/s':>9} {'vs liboqs-1T':>13}"
-        f"{'   vs cuPQC 调优' if same_hw else ''}"
+        f"{'    vs cuPQC tuned' if same_hw else ''}"
     )
     for B in [int(x) for x in args.batch.split(",")]:
         d = np.random.default_rng(1).integers(0, 256, (B, 32), dtype=np.uint8)
@@ -79,8 +81,8 @@ def main() -> int:
         )
     if same_hw:
         print(
-            f"\n# cuPQC 在 GB10 上同机实测：keygen {CUPQC_KEYGEN_NS['tuned']} ns/op（BD=32）"
-            f" / {CUPQC_KEYGEN_NS['default']} ns（默认）"
+            f"\n# cuPQC on GB10, same machine: keygen {CUPQC_KEYGEN_NS['tuned']} ns/op "
+            f"(BD=32) / {CUPQC_KEYGEN_NS['default']} ns (default)"
         )
     return 0
 

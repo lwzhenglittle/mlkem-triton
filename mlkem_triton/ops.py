@@ -1,11 +1,13 @@
-"""把 decaps_gpu 里的手写 Triton 内核包装成 torch.library 自定义算子。
+"""Wrap the device-side Triton kernels as torch.library custom ops.
 
-目的：Triton 内核是直接 Python 调用，Dynamo 遇到就 graph break，
-两侧的 elementwise 融合被切断。包成 custom_op 后 Dynamo 把它们当黑盒节点放进图里，
-Inductor 就能跨它们调度 / 融合其它算子，同时发射开销也降下来。
+Rationale: the Triton kernels are called directly from Python, so Dynamo graph-breaks
+on them and the elementwise fusion on both sides is cut. Once wrapped as custom_op,
+Dynamo places them in the graph as black-box nodes, so Inductor can schedule / fuse
+other ops across them, and launch overhead also goes down.
 
-注意：这些算子内部是原地写输出张量的，所以用 mutates_args 声明（或干脆内部自己分配再返回），
-fake 实现只描述形状/dtype，供 Dynamo 追踪用。
+Note: these ops write the output tensors in place internally, so they are declared
+with mutates_args (or they simply allocate internally and return); the fake
+implementations only describe shapes/dtypes, for Dynamo to trace.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from .devices import warps
 
 LIB = "mlkem_triton"
 
-# 与 decaps_gpu 保持一致的常量
+# constants kept in sync with kernels/shake.py
 BLOCK = 128
 WARPS = 4
 
@@ -27,9 +29,11 @@ WARPS = 4
 # ---------------------------------------------------------------- sponge (Keccak)
 @custom_op(f"{LIB}::sponge", mutates_args=())
 def sponge(padded: Tensor, rate: int, outlen: int) -> Tensor:
-    # 纯 Triton 实现。开发原型里还有一个手写 SYCL 版本（Intel 专属，n=4096 上
-    # 快 2.2–2.6×），因为要走子进程调 icpx 构建、彻底破坏可移植性，没有包含在
-    # 这个包里 —— 见 README「限制与说明」。
+    # Pure Triton implementation. The development prototype also carried a
+    # hand-written SYCL version (Intel-only, 2.2–2.6× faster at n=4096); it is not
+    # included in this package because it has to shell out to icpx in a subprocess
+    # to build, which completely destroys portability — see `README.md` section
+    # `Limitations`.
     from .kernels.shake import get_sponge
 
     n, tot = padded.shape
@@ -128,7 +132,7 @@ def _(y, e, mbytes, B, K):
     ]
 
 
-# ---------------------------------------------------------------- CBD 直接写 Y / E
+# ---------------------------------------------------------------- CBD writes Y / E directly
 @custom_op(f"{LIB}::cbd_y", mutates_args=())
 def cbd_y(y_buf: Tensor, B: int, K: int) -> Tensor:
     from .kernels.glue import cbd_y as impl

@@ -1,7 +1,8 @@
-"""测试公用：设备解析。
+"""Shared test helpers: device resolution.
 
-`MLKEM_DEVICE` 环境变量（或 `pytest --device`）决定跑在哪块卡上；
-都不给就自动选第一个可用加速设备。
+The `MLKEM_DEVICE` environment variable (or `pytest --device`) decides which
+card the tests run on; if neither is given, the first available accelerator is
+selected automatically.
 """
 
 from __future__ import annotations
@@ -11,10 +12,10 @@ from mlkem_triton.devices import describe, resolve_device
 try:
     DEV = resolve_device()
     HAS_GPU = True
-except RuntimeError:  # 纯 CPU 机器：只跑不需要 GPU 的那些用例
+except RuntimeError:  # pure CPU machine: only run the cases that do not need a GPU
     DEV = None
     HAS_GPU = False
 
 
 def dev_name() -> str:
-    return describe(DEV) if HAS_GPU else "(无 GPU)"
+    return describe(DEV) if HAS_GPU else "(no GPU)"

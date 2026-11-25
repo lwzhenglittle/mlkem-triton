@@ -1,7 +1,8 @@
-"""GPU 批量哈希：把 FIPS 203 的 G / J / PRF 换成一次 launch 处理整批。
+"""GPU batched hashing: one launch handles the whole batch for the FIPS 203 G / J / PRF.
 
-与 `hashlib` 版本逐字节一致，但吞吐高两个数量级
-（见 results/keccak_gpu_feasibility.md）。
+Byte-for-byte identical to the `hashlib` version, but it keeps the whole batch on the device
+instead of crossing to the host and back once per message. The sponge kernel and its input
+padding account for 16.5% of device time on GB10 and 24.5% on Intel - see docs/benchmarks.md.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ DEFAULT_WARPS = 4
 
 
 def pad_batch(msgs: np.ndarray, rate: int, domain: int) -> np.ndarray:
-    """向量化 pad10*1 + 域分隔。msgs [n, L] uint8 -> [n, ceil((L+1)/rate)*rate]。"""
+    """Vectorized pad10*1 + domain separation. msgs [n, L] uint8 ->
+    [n, ceil((L+1)/rate)*rate]."""
     msgs = np.ascontiguousarray(msgs, dtype=np.uint8)
     n, L = msgs.shape
     total = ((L + 1 + rate - 1) // rate) * rate
@@ -55,21 +57,21 @@ def _sponge_batch(
 
 
 def sha3_512_batch(msgs: np.ndarray, device=None) -> np.ndarray:
-    """G: [n, L] -> [n, 64]。"""
+    """G: [n, L] -> [n, 64]."""
     return _sponge_batch(
         pad_batch(msgs, RATE_SHA3_512, SHA3_DOMAIN), RATE_SHA3_512, 64, device=device
     )
 
 
 def sha3_256_batch(msgs: np.ndarray, device=None) -> np.ndarray:
-    """H: [n, L] -> [n, 32]。"""
+    """H: [n, L] -> [n, 32]."""
     return _sponge_batch(
         pad_batch(msgs, RATE_SHA3_256, SHA3_DOMAIN), RATE_SHA3_256, 32, device=device
     )
 
 
 def shake256_batch(msgs: np.ndarray, outlen: int = 32, device=None) -> np.ndarray:
-    """J / PRF: [n, L] -> [n, outlen]，outlen <= 136 且是 8 的倍数。"""
+    """J / PRF: [n, L] -> [n, outlen], outlen <= 136 and a multiple of 8."""
     assert outlen % 8 == 0
     return _sponge_batch(
         pad_batch(msgs, RATE_SHAKE, SHAKE_DOMAIN), RATE_SHAKE, outlen, device=device
@@ -77,7 +79,7 @@ def shake256_batch(msgs: np.ndarray, outlen: int = 32, device=None) -> np.ndarra
 
 
 def cbd_batch(bufs: np.ndarray, eta: int) -> np.ndarray:
-    """[n, 64·eta] -> [n, 256] 的中心化二项分布采样（FIPS 203 Alg. 8，向量化）。"""
+    """[n, 64·eta] -> [n, 256] centered binomial sampling (FIPS 203 Alg. 8, vectorized)."""
     bufs = np.ascontiguousarray(bufs, dtype=np.uint8)
     n = bufs.shape[0]
     assert bufs.shape[1] == 64 * eta

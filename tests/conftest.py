@@ -1,7 +1,8 @@
-"""pytest 配置：`--device cuda` / `--device xpu` 选择设备。
+"""pytest configuration: `--device cuda` / `--device xpu` selects the device.
 
-设备在 **conftest 导入时**就写进 `MLKEM_DEVICE`，因为测试模块在收集阶段
-就会 `import _common`（那里 `DEV = resolve_device()` 已经定了）。
+The device is written into `MLKEM_DEVICE` at **conftest import time**, because
+test modules import `_common` during collection (where
+`DEV = resolve_device()` is already fixed by then).
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ def pytest_addoption(parser):
         "--device",
         action="store",
         default=None,
-        help="cuda / xpu / cuda:1 ...（默认自动选第一个可用设备）",
+        help="cuda / xpu / cuda:1 ... (default: auto-select the first available device)",
     )
 
 
@@ -31,9 +32,10 @@ def pytest_configure(config):
         os.environ["MLKEM_DEVICE"] = dev
 
 
-# 无 GPU 时：**集中**把需要显卡的模块整体 skip 掉。
-# 在各测试文件里逐个写 skipif 容易漏（新增文件就会漏），所以放在这里兜底。
-# 白名单里的几个模块是纯 numpy / 纯数学，不需要 GPU。
+# Without a GPU: **centrally** skip the modules that need a graphics card.
+# Writing skipif in each test file is easy to get wrong (a newly added file
+# would be missed), so the fallback lives here. The whitelisted modules are
+# pure numpy / pure math and do not need a GPU.
 _NO_GPU_OK = {"test_ntt.py", "test_keyprep.py", "test_ref.py"}
 
 
@@ -44,7 +46,7 @@ def pytest_collection_modifyitems(config, items):
         return
     import pytest
 
-    skip = pytest.mark.skip(reason="无可用 GPU（只有数学/参考实现用例能在 CPU 上跑）")
+    skip = pytest.mark.skip(reason="no usable GPU (only the math/reference cases can run on CPU)")
     for item in items:
         if item.path.name not in _NO_GPU_OK:
             item.add_marker(skip)

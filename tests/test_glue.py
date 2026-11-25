@@ -1,9 +1,11 @@
-"""`kernels/glue.py` 的验收测试：两块 glue 的融合内核必须与旧实现逐字节相等。
+"""Acceptance tests for `kernels/glue.py`: both glue fused kernels must be byte-identical
+to the old implementation.
 
-- (A) `compress_pack`：mod q + compress(1 bit) + 位打包 → m_bytes [B,32] uint8
-- (B) `build_ye`：y/e/m_bytes → Y [256k,B] fp16 + E [256(k+1),B] int16
-另外覆盖：回退判定、回退路径（从 m_bytes 还原 m_bits）的等价性、
-以及 `build_ye` 产出的连续 Y 确实能被 `fused_enc_gemm` 接受。
+- (A) `compress_pack`: mod q + compress(1 bit) + bit packing → m_bytes [B,32] uint8
+- (B) `build_ye`: y/e/m_bytes → Y [256k,B] fp16 + E [256(k+1),B] int16
+It also covers: the fallback checks, the equivalence of the fallback path (restoring
+m_bits from m_bytes), and that the contiguous Y produced by `build_ye` is indeed
+accepted by `fused_enc_gemm`.
 """
 
 from __future__ import annotations
@@ -14,17 +16,17 @@ from _common import DEV
 
 from mlkem_triton.kernels import glue
 
-pytest.importorskip("kyber_py", reason="refimpl 需要可选的 kyber-py")
+pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
 pytest.importorskip("triton")
-XPU = True  # 见 _common.DEV：能 import 就说明有可用 GPU
-pytestmark = pytest.mark.skipif(not XPU, reason="需要 GPU")
+XPU = True  # device availability is skipped centrally by tests/conftest.py (HAS_GPU)
+pytestmark = pytest.mark.skipif(not XPU, reason="requires GPU")
 
 Q = 3329
 
 
 def _acc_data(rows, B, seed=0):
-    """V ∈ [0,Q)，acc 取到实际范围（|W_dec|≤2、u<q、K=768 → |acc| < 5.2e6）。"""
+    """V ∈ [0,Q); acc covers the real range (|W_dec|≤2, u<q, K=768 → |acc| < 5.2e6)."""
     g = torch.Generator(device="cpu").manual_seed(seed)
     V = torch.randint(0, Q, (rows, B), generator=g, dtype=torch.int32).to(torch.int16).to(DEV)
     acc = (torch.rand((rows, B), generator=g) * 12.0e6 - 6.0e6).to(DEV)
@@ -87,13 +89,14 @@ def test_unpack_mbits_roundtrip():
 
 def test_fallback_checks():
     V, acc = _acc_data(256, 128, seed=1)
-    # 行数不对
+    # wrong number of rows
     assert not glue.can_compress_pack(V[:128], acc[:128], 128)
-    # dtype 不对
+    # wrong dtype
     assert not glue.can_compress_pack(V, acc.half(), 128)
-    # 非连续
-    assert not glue.can_compress_pack(V, acc.T.contiguous().T, 128)  # 全零 stride 的转置视图
-    # B 不对
+    # non-contiguous
+    # non-contiguous (transposed twice)
+    assert not glue.can_compress_pack(V, acc.T.contiguous().T, 128)
+    # wrong B
     assert not glue.can_compress_pack(V, acc, 64)
     assert not glue.can_compress_pack(V, acc, 0)
 
@@ -102,12 +105,12 @@ def test_fallback_checks():
     assert not glue.can_build_ye(y, e, mb, 128, 2)
     assert not glue.can_build_ye(y[:, :, :64].contiguous(), e, mb, 128, 3)
     assert not glue.can_build_ye(y, e, mb, 0, 3)
-    # 非连续 y
+    # non-contiguous y
     assert not glue.can_build_ye(y.transpose(0, 1).contiguous().transpose(0, 1), e, mb, 128, 3)
 
 
 def test_fused_enc_gemm_accepts_built_ye():
-    """回归测试：build_ye 的 Y 必须是连续的，否则 fused_enc_gemm 静默回退。"""
+    """Regression: build_ye's Y must be contiguous, else fused_enc_gemm silently falls back."""
     from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
 
     k, B = 3, 512
@@ -121,7 +124,9 @@ def test_fused_enc_gemm_accepts_built_ye():
 
 
 def test_decaps_matches_legacy_formula():
-    """整条 decaps 与「旧写法」在随机输入上逐字节一致（B=37，两种参数集）。"""
+    """Whole decaps is byte-identical to the "legacy formulation" on random input
+    (B=37, two parameter sets).
+    """
     from mlkem_triton import refimpl
     from mlkem_triton.pipeline import Decapsulator
 
@@ -169,18 +174,18 @@ def test_cbd_ye_bitwise(k, B):
 
 def test_cbd_ye_fallback_checks():
     y_buf, e_buf, mb = _buf_data(3, 64, seed=3)
-    assert not glue.can_cbd_y(y_buf, 64, 3, 3)  # eta=3 没有融合内核
-    assert not glue.can_cbd_y(y_buf, 64, 2, 2)  # 行数不对
+    assert not glue.can_cbd_y(y_buf, 64, 3, 3)  # no fused kernel for eta=3
+    assert not glue.can_cbd_y(y_buf, 64, 2, 2)  # wrong number of rows
     assert not glue.can_cbd_e(e_buf, mb.half(), 64, 3, 2)
     assert not glue.can_cbd_e(e_buf, mb, 64, 3, 3)
     assert not glue.can_cbd_e(e_buf, torch.zeros((64, 64), dtype=torch.uint8, device=DEV), 64, 3, 2)
-    # 非连续 bufs
+    # non-contiguous bufs
     nc = torch.zeros((y_buf.shape[0], 256), dtype=torch.uint8, device=DEV)[:, :128]
     assert not glue.can_cbd_y(nc, 64, 3, 2)
 
 
 def test_all_paramsets_decaps_bytewise():
-    """三个参数集（含 ML-KEM-512 的 eta1=3 回退路径）端到端逐字节。"""
+    """All three parameter sets (incl. ML-KEM-512's eta1=3 fallback) end to end, bytewise."""
     from mlkem_triton import refimpl
     from mlkem_triton.pipeline import Decapsulator
 
@@ -197,7 +202,7 @@ def test_all_paramsets_decaps_bytewise():
 
 
 def test_decaps_fallback_paths(monkeypatch):
-    """把融合判定强制关掉，验证两条回退链路仍逐字节正确。"""
+    """Force the fusion checks off; verify both fallback paths are still bytewise correct."""
     from mlkem_triton import refimpl
     from mlkem_triton.kernels import glue
     from mlkem_triton.pipeline import Decapsulator
@@ -212,12 +217,12 @@ def test_decaps_fallback_paths(monkeypatch):
         exp.append(K)
     ref = [refimpl.ref_decaps(ps, dk, c) for c in cts]
 
-    # 1) 只关 CBD 融合 → 走 cbd_gpu + build_ye
+    # 1) disable only the CBD fusion → goes through cbd_gpu + build_ye
     monkeypatch.setattr(glue, "can_cbd_y", lambda *a, **k: False)
     got = dec.decaps(cts)
     assert [got[i].tobytes() for i in range(9)] == ref
 
-    # 2) 再关 compress_pack 和 build_ye → 全回退（含 unpack_mbits 还原 E2）
+    # 2) also disable compress_pack and build_ye → full fallback (incl. unpack_mbits restoring E2)
     monkeypatch.setattr(glue, "can_compress_pack", lambda *a, **k: False)
     monkeypatch.setattr(glue, "can_build_ye", lambda *a, **k: False)
     got = dec.decaps(cts)

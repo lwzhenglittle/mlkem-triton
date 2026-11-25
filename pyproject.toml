@@ -26,7 +26,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# kyber-py 只用于随机生成密钥对做往返测试；正确性主 gate 用 NIST ACVP 向量，不需要它。
+# kyber-py is only used for random key-pair round-trip tests; the primary correctness
+# gate is the NIST ACVP vectors, which do not need it.
 ref = ["kyber-py>=1.0"]
 test = ["pytest>=7"]
 
@@ -38,28 +39,31 @@ include = ["mlkem_triton*"]
 pythonpath = [".", "tests"]
 testpaths = ["tests"]
 markers = [
-    "slow: 跑得比较久的用例",
+    "slow: cases that take a long time to run",
 ]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["results", "data", "build", "*.egg-info"]
+extend-exclude = ["docs", "data", "build", "*.egg-info"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
 ignore = [
-    "E501",    # 行宽由 formatter 管
-    "RUF001",  # 中文全角标点在注释里很正常
+    "E501",    # line width is the formatter's job
+    # The docs and comments deliberately use math/typographic characters that RUF001-003
+    # consider ambiguous: ×, µ, ‖, Â, η, and the § section sign.
+    "RUF001",
     "RUF002",
     "RUF003",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]        # 生成的 parametrize 用例里 assert 写法自由
-"benchmarks/*" = ["E402"]   # 先 sys.path 再 import，是脚本惯例
-# Triton kernel 里 `if CONST: ... else: ...` 是**编译期**分支，比三元表达式清楚得多，
-# 而且三元在 jit 里会生成两条分支再 select。SIM108/SIM102 在这里不适用。
+"tests/*" = ["B011"]        # generated parametrize cases are allowed a bare assert
+"benchmarks/*" = ["E402"]   # sys.path first, import after: normal for a script
+# Inside a Triton kernel `if CONST: ... else: ...` is a **compile-time** branch, far clearer
+# than a conditional expression -- and a conditional expression lowers to two branches plus a
+# select under jit. SIM108/SIM102 do not apply here.
 "mlkem_triton/kernels/*" = ["SIM108", "SIM102"]
 
 [tool.ruff.format]

@@ -1,11 +1,13 @@
-"""Phase 3.1：Triton GEMM + 融合 epilogue。
+"""Phase 3.1: Triton GEMM + fused epilogue.
 
-    out = (W @ X + E) mod q      (MODE=0, 重加密)
-    out = (E - W @ X) mod q      (MODE=1, 解密)
+    out = (W @ X + E) mod q      (MODE=0, re-encryption)
+    out = (E - W @ X) mod q      (MODE=1, decryption)
 
 - W [M,K] fp16, X [K,B] fp16, E [M,B] int16, out [M,B] int16 ∈ [0, q)
-- FP32 累加：已验证在本项目的数据范围内**逐元素精确**（见 tests/test_dot_exact.py）
-- 批大小 B 无需是 16 的倍数：tile 固定 BN>=16，用 mask 兜住越界列
+- FP32 accumulation: verified **element-wise exact** over this project's data range
+  (see tests/test_dot_exact.py)
+- Batch size B need not be a multiple of 16: the tile has a fixed BN>=16, and a mask
+  guards out-of-range columns
 """
 
 from __future__ import annotations
@@ -76,7 +78,8 @@ def _gemm_modq_kernel(
     else:
         r = e.to(tl.int32) - acc_i
 
-    # 取模：浮点估商 + 两次修正。|r| < 2^24 时 fp32 精确，floor 至多差 1。
+    # Modulo: estimate the quotient in float, then two corrections. For |r| < 2^24
+    # fp32 is exact, so floor is off by at most 1.
     q_est = tl.math.floor(r.to(tl.float32) * (1.0 / 3329.0)).to(tl.int32)
     r = r - q_est * 3329
     r = tl.where(r < 0, r + 3329, r)
@@ -131,9 +134,11 @@ _MIN_B = 16
 
 
 def _pad_if_degenerate(W, X, E, mode: str, launcher) -> torch.Tensor:
-    """B == 1 时 `[K,1]` 的 stride 退化为 (1,1)，Triton 的块加载/存储会算错。
+    """At B == 1 the strides of `[K,1]` degenerate to (1,1) and Triton's block
+    loads/stores compute the wrong addresses.
 
-    这里临时补到 16 列、算完再切回 1 列。B >= 2 时 stride 正常，直接走。
+    So we temporarily pad to 16 columns and slice back to 1 column afterwards.
+    For B >= 2 the strides are normal, so the direct path is used.
     """
     M, K = W.shape
     B = X.shape[1]
@@ -151,14 +156,14 @@ def _pad_if_degenerate(W, X, E, mode: str, launcher) -> torch.Tensor:
 def gemm_modq(
     W: torch.Tensor, X: torch.Tensor, E: torch.Tensor, mode: str = "enc", tile=None, num_warps=None
 ) -> torch.Tensor:
-    """W [M,K] fp16, X [K,B] fp16, E [M,B] int16 -> [M,B] int16。"""
+    """W [M,K] fp16, X [K,B] fp16, E [M,B] int16 -> [M,B] int16."""
     assert W.dtype == torch.float16 and X.dtype == torch.float16
     assert E.dtype == torch.int16
     M, K = W.shape
     K2, B = X.shape
     assert K2 == K and E.shape == (M, B)
     if tile is not None or num_warps is not None:
-        # 基准用途：直接指定 tile/num_warps
+        # Benchmarking: pass tile/num_warps explicitly
         if X.shape[1] == 1:
             return _pad_if_degenerate(W, X, E, mode, lambda w, x, e, m: _launch(w, x, e, m, tile))
         out = torch.empty((W.shape[0], X.shape[1]), device=X.device, dtype=torch.int16)
@@ -193,7 +198,7 @@ def gemm_modq(
     return _pad_if_degenerate(W, X, E, mode, _launch)
 
 
-# ---------------- INT8 limb 版本（对照/兜底） ----------------
+# ---------------- INT8 limb version (reference/fallback) ----------------
 
 
 @triton.jit
@@ -298,7 +303,7 @@ def _launch_i8(hi, lo, X, E, mode: str) -> torch.Tensor:
 def gemm_modq_int8(
     hi: torch.Tensor, lo: torch.Tensor, X: torch.Tensor, E: torch.Tensor, mode: str = "enc"
 ) -> torch.Tensor:
-    """W = 64*hi + lo，两次 int8 dot 合成。"""
+    """W = 64*hi + lo, composed from two int8 dots."""
     M, K = hi.shape
     K2, B = X.shape
     assert X.dtype == torch.int8 and hi.dtype == torch.int8 and lo.dtype == torch.int8

@@ -1,27 +1,30 @@
-"""批量 SHAKE256 / SHA3-512 的 Triton sponge 实现（代码生成）。
+"""Batched SHAKE256 / SHA3-512 sponge in Triton (code generation).
 
-映射：一个线程 = 一个 sponge 实例，25 个 lane 各一个 `[BLOCK]` uint64 张量。
-输入在 host 侧预填充（pad10*1 + domain separation），GPU 侧只做整块的
-absorb XOR + 24 轮 permute + 单块 squeeze（我们所有用途的输出都 <= rate）。
+Mapping: one thread = one sponge instance, each of the 25 lanes is a `[BLOCK]`
+uint64 tensor. Input is pre-padded on the host side (pad10*1 + domain
+separation); the GPU side only does a whole-block absorb XOR + 24-round permute
++ single-block squeeze (all our uses have output <= rate).
 
-**24 轮走运行时 for 循环，轮常数从一张 24 元素的 uint64 表里读**（见下方
-「为什么滚动」）。滚动后 kernel 的静态指令数从 15254 降到 790，
-每线程 scratch 溢出（spill）从 3584 B 降到 0，吞吐在 rate=136/out=128 上
-提升约 1.3x，编译时间从 ~25 s 降到 ~3 s。
+**The 24 rounds run in a runtime for loop, with round constants read from a
+24-element uint64 table** (see "why rolling" below). After rolling, the kernel's
+static instruction count drops from 15254 to 790, per-thread scratch spill drops
+from 3584 B to 0, throughput at rate=136/out=128 improves by about 1.3x, and
+compile time drops from ~25 s to ~3 s.
 
-为什么滚动（实测证据，见 results/keccak_optimization.md）：
-- Xe 上一个 lane 的 uint64 占 8 GRF（SIMD32 下每 lane 8 字节），
-  25 个 lane 的状态 = 200 GRF，而硬件只有 256 GRF/线程
-  （`-cl-intel-256-GRF-per-thread`，512-GRF 在该平台不支持）。
-- 全展开时 ρπ 的 25 个 b 还要再 200 GRF，峰值 ~400 GRF，
-  IGC 只能把状态溢出到 scratch：zeinfo 里 `spill_size: 3584`，
-  ISA 里 1202 条 `// spill to offset[..]` / `fill from ..`。
-- 滚动后同一段代码的活跃区间缩短，spill_size = 0。
+Why rolling (measured evidence, see docs/design.md):
+- On Xe the uint64 of one lane takes 8 GRF (8 bytes per lane under SIMD32), so
+  the 25-lane state = 200 GRF, while the hardware only has 256 GRF/thread
+  (`-cl-intel-256-GRF-per-thread`; 512-GRF is unsupported on that platform).
+- Fully unrolled, the 25 b values of ρπ need another 200 GRF, peaking at
+  ~400 GRF, so IGC can only spill the state to scratch: `spill_size: 3584` in
+  zeinfo, and 1202 `// spill to offset[..]` / `fill from ..` lines in the ISA.
+- After rolling, the live range of the same code shrinks and spill_size = 0.
 
-用法:
-    K = get_sponge(rate=136, outlen=32)
-    K(X, OUT, n, nblocks, nblocks*rate/8, OUTW=32//8, BLOCK=128, num_warps=4)
-    X: [n, nblocks*rate/8] int64（已填充）
+Usage:
+    kern = get_sponge(rate=136, outlen=32)
+    kern[(triton.cdiv(n, BLOCK),)](X, OUT, n, nblocks, nblocks*rate//8,
+                                   OUTW=32//8, BLOCK=128, num_warps=4)
+    X: [n, nblocks*rate/8] int64 (already padded)
     OUT: [n, outlen/8] int64
 """
 
@@ -36,10 +39,12 @@ import torch
 
 from .keccak import RC, ROT, _rotl_expr
 
-# 轮常数表：作为 kernel 的运行时参数（uint64 视图用 int64 承载，逐位一致）。
+# Round constant table: passed as a runtime kernel argument (the uint64 view is
+# carried as int64, bit-for-bit identical).
 #
-# 按 device 缓存 —— 早先是模块级单例硬编码在 "xpu" 上，导致非 Intel 后端
-# 第一次调用就炸。表只有 24 个 int64 = 192 B，按设备各存一份没有成本。
+# Cached per device — this used to be a module-level singleton hard-coded to
+# "xpu", which blew up on the first call on any non-Intel backend. The table is
+# only 24 int64 = 192 B, so one copy per device costs nothing.
 _RC_SIGNED = [c - (1 << 64) if c >= (1 << 63) else c for c in RC]
 _RC_TENSORS: dict[torch.device, torch.Tensor] = {}
 
@@ -80,11 +85,12 @@ def _emit_rounds(L: list[str], rnd: int, ind: str = "        ", rc_expr: str | N
 def gen_sponge_source(rate: int, outlen: int) -> str:
     nw = rate // 8
     assert rate % 8 == 0 and outlen % 8 == 0
-    assert outlen <= 16 * rate, "squeeze 块数太多"
+    assert outlen <= 16 * rate, "too many squeeze blocks"
 
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
-    # NB / ROW 用运行时参数：块数不再需要展开（24 轮已经滚成循环，
-    # 静态指令数与 NB 无关）。RCP = 轮常数表（uint64 视图）。
+    # NB / ROW are runtime arguments: the block count no longer has to be
+    # unrolled (24 rounds are already a loop, so the static instruction count
+    # is independent of NB). RCP = round constant table (uint64 view).
     L.append("def sponge_kernel(X, OUT, RCP, n, NB, ROW, OUTW: tl.constexpr, BLOCK: tl.constexpr):")
     L.append("    pid = tl.program_id(0)")
     L.append("    offs = pid * BLOCK + tl.arange(0, BLOCK)")
@@ -98,12 +104,13 @@ def gen_sponge_source(rate: int, outlen: int) -> str:
             f"        a{lane} = a{lane} ^ tl.load(X + base + _b * {nw} + {lane}, "
             f"mask=m, other=0).to(tl.uint64, bitcast=True)"
         )
-    # 24 轮 permute（滚动；必须在 `for _b` 内部，多块 absorb 才是正确 sponge）
+    # 24-round permute (rolled; it must be inside `for _b` for a correct
+    # multi-block sponge)
     L.append("        for _r in range(0, 24, 1):")
     L.append("            rc = tl.load(RCP + _r)")
     _emit_rounds(L, 0, ind="            ", rc_expr="rc")
 
-    # squeeze：可能是多块（例如 eta=3 时 PRF 要 192B > rate 136B）
+    # squeeze: may take multiple blocks (e.g. at eta=3 PRF needs 192B > rate 136B)
     nfull = outlen // rate
     rem = outlen - nfull * rate
     blocks = [rate] * nfull + ([rem] if rem else [])
@@ -121,13 +128,16 @@ def gen_sponge_source(rate: int, outlen: int) -> str:
 
 
 class _SpongeLauncher:
-    """`sponge_kernel[grid](X, OUT, ...)` 的薄包装：自动注入轮常数表。
+    """Thin wrapper around `sponge_kernel[grid](X, OUT, ...)`: injects the round
+    constant table.
 
-    这样 `ops.py` / `gpu_hash.py` 里的调用点不需要改（接口保持原样），
-    kernel 本身又能用一张运行时表驱动 24 轮循环。
+    That way the call sites in `ops.py` / `gpu_hash.py` need no change (the
+    interface stays as is), while the kernel itself is driven by a runtime table
+    across the 24-round loop.
 
-    轮常数表在**启动时**按 `X.device` 取，不在 `get_sponge()` 时绑定 ——
-    否则一个进程里换设备就错了。
+    The round constant table is fetched from `X.device` **at launch time**, not
+    bound at `get_sponge()` time — otherwise switching devices within one
+    process would be wrong.
     """
 
     __slots__ = ("_kern",)
@@ -168,7 +178,7 @@ def get_sponge(rate: int, outlen: int):
 
 
 def pad10star1(msg: bytes, rate: int, domain: int) -> bytes:
-    """pad10*1 + 域分隔，返回 len 为 rate 整数倍的字节串。"""
+    """pad10*1 + domain separation; returns a byte string whose len is a multiple of rate."""
     p = bytearray(msg)
     p.append(domain)
     p.extend(b"\x00" * ((-len(p)) % rate))

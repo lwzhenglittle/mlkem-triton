@@ -1,17 +1,21 @@
-"""Triton 上的 Kyber/ML-KEM 正向 NTT（FIPS 203 Alg. 9）。
+"""Forward Kyber/ML-KEM NTT on Triton (FIPS 203 Alg. 9).
 
-**这是本仓库里唯一和 Toeplitz 技巧无关的部件。** decaps / encaps 都不需要 NTT
-（多项式乘法被折叠成固定矩阵的 GEMM），但 keygen 不行：`ek` 里必须放 `t̂` 的
-NTT 域表示，而 `s`/`e` 每个密钥都是新的，没有任何「跨操作固定的矩阵」可用。
-所以这里就是老老实实一遍蝴蝶。
+**This is the only component in this repo unrelated to the Toeplitz trick.**
+Neither decaps nor encaps needs an NTT (polynomial multiplication is folded into
+a GEMM with fixed matrices), but keygen does: `ek` must carry the NTT-domain
+representation of `t̂`, and `s`/`e` are new for every key, so no
+"matrix fixed across operations" is available. So here it is just one plain
+butterfly.
 
-映射：一个 program 处理 `BR` 条多项式（每条 256 个 int32）。
-7 级蝴蝶（length = 128, 64, …, 2），每级用 `tl.gather` 做 `idx ^ L` 的配对交换。
+Mapping: one program handles `BR` polynomials (256 int32 each).
+7 butterfly stages (length = 128, 64, …, 2), each stage uses `tl.gather` to swap
+pairs by `idx ^ L`.
 
-配对索引 `idx ^ L` 是等价的：在按 `2L` 对齐的块内，`idx ^ L` 正好把两个半区互换。
-`ZETAS` 每级各有 `2^s` 个，偏移也是 `2^s`（i 从 1 开始累加 1,2,4,…）。
+The pairing index `idx ^ L` is equivalent: inside a block aligned to `2L`,
+`idx ^ L` swaps the two halves exactly. `ZETAS` has `2^s` entries per stage, and
+the offset is `2^s` too (i accumulates 1,2,4,… starting from 1).
 
-实测（GB10，B=8192 等价规模）：见 `benchmarks/bench_keygen.py`。
+Measured (GB10, B=8192 equivalent scale): see `benchmarks/bench_keygen.py`.
 """
 
 from __future__ import annotations
@@ -35,10 +39,12 @@ _ZT_FLAT: dict = {}
 
 
 def _zt_flat(dev):
-    """每个 stage × 每个元素位置的 ζ，展平成 [7*256]，一次 load 就够。
+    """ζ for each stage × each element position, flattened to [7*256], so a
+    single load suffices.
 
-    原来每级每个元素都要算 `idx // (2*L)` 再 gather 常数表 —— 7 级就是 7 次整数
-    除法 + 7 次小表 gather。整除在 GPU 上是 20+ 条指令。
+    Previously every element at every stage had to compute `idx // (2*L)` and
+    then gather the constant table -- 7 stages meant 7 integer divisions + 7
+    small table gathers. Integer division is 20+ instructions on the GPU.
     """
     t = _ZT_FLAT.get(dev)
     if t is None:
@@ -74,7 +80,8 @@ def _modq(v):
 
 @triton.jit
 def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
-    """[P, 256] 系数域 int32 → NTT 域 int32。原地不必要，输入输出可同一块。"""
+    """[P, 256] coefficient domain int32 → NTT domain int32. In-place is
+    unnecessary; input and output may be the same buffer."""
     pid = tl.program_id(0)
     rows = pid * BR + tl.arange(0, BR)
     m = rows < P
@@ -87,10 +94,12 @@ def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
         pv = tl.gather(x, (idx ^ L)[None, :].broadcast_to((BR, N)), axis=1)
         z = tl.load(ZT + _s * N + idx).to(tl.int32)[None, :]
         lo = ((idx & L) == 0)[None, :]
-        # 低半 out = a + z·b，高半 out = a − z·b（a 是块内第 j 个、b 是第 j+L 个）。
-        # 把 a/b 用 where 归一到两个半区，就只需要 **一次** 乘法 + 两次 modq，
-        # 而不是「两个分支各算一遍」（那样是两次乘法 + 四次 modq）。
-        # 实测：这一改 + BR 从 16 降到 2，NTT 从 15.2 ms 降到 1.5 ms（P=24576）。
+        # low half out = a + z·b, high half out = a − z·b (a is the j-th element
+        # of the block, b is the (j+L)-th). Folding a/b into the two halves with
+        # where needs only **one** multiply + two modq, instead of "compute both
+        # branches" (which is two multiplies + four modq).
+        # Measured: this change + BR going from 16 to 2 took the NTT from
+        # 15.2 ms to 1.5 ms (P=24576).
         a = tl.where(lo, x, pv)
         b = tl.where(lo, pv, x)
         sg = tl.where(lo, 1, -1)
@@ -104,16 +113,17 @@ def ntt_kernel(X, OUT, ZT, P, N: tl.constexpr, BR: tl.constexpr):
 def pow_mac_kernel(
     A, S, E, OUT, GAM, P, K: tl.constexpr, N: tl.constexpr, HALF: tl.constexpr, BR: tl.constexpr
 ):
-    """`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]`（FIPS 203 Alg. 11/12）。
+    """`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]` (FIPS 203 Alg. 11/12).
 
-    `multiply_ntts` 是 128 个**二次扩域**乘法：
+    `multiply_ntts` is 128 **quadratic-extension-field** multiplications:
 
         c0 = a0·b0 + (a1·b1 mod q)·γ
         c1 = a0·b1 + a1·b0
 
-    所以偶数/奇数系数是两个独立的通道。**直接在加载时按 stride=2 取**，就完全
-    不需要 gather —— 这一版把 16 次 `tl.gather` 换成了纯 strided load/store。
-    （GB10 上 keygen 里这一步原本占 33%，是整个 keygen 最大的一块。）
+    So even/odd coefficients form two independent channels. **Loading them
+    directly with stride=2** removes any need for a gather -- this version
+    turned 16 `tl.gather` calls into plain strided load/store. (On GB10 this
+    step used to be 33% of keygen, its single largest part.)
     """
     pid = tl.program_id(0)
     rows = pid * BR + tl.arange(0, BR)
@@ -129,7 +139,7 @@ def pow_mac_kernel(
     acc1 = tl.load(e_base + 2 * h[None, :] + 1, mask=m[:, None], other=0).to(tl.int32)
     g = tl.load(GAM + h).to(tl.int32)[None, :]
 
-    for j in tl.static_range(4):  # K ∈ {2,3,4}，跑满 4 次
+    for j in tl.static_range(4):  # K ∈ {2,3,4}, always run the full 4
         if j < K:
             ab = A + (arow + j)[:, None] * N + 2 * h[None, :]
             sb = S + (srow + j)[:, None] * N + 2 * h[None, :]
@@ -146,7 +156,7 @@ def pow_mac_kernel(
 
 
 def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
-    """[P, 256] int32（系数域，[0,q)）→ [P, 256] int32（NTT 域）。"""
+    """[P, 256] int32 (coefficient domain, [0,q)) → [P, 256] int32 (NTT domain)."""
     P = x.shape[0]
     out = torch.empty_like(x, dtype=torch.int32)
     ntt_kernel[(triton.cdiv(P, br),)](
@@ -156,7 +166,7 @@ def forward_ntt(x: torch.Tensor, br: int = 2) -> torch.Tensor:
 
 
 def pow_mac(a, s, e, k: int, br: int = 16) -> torch.Tensor:
-    """[B*k*k,256] × [B*k,256] → t̂ [B*k,256]；必须已经过 NTT。"""
+    """[B*k*k,256] × [B*k,256] → t̂ [B*k,256]; inputs must already be NTT'ed."""
     P = s.shape[0]
     out = torch.empty_like(s, dtype=torch.int32)
     pow_mac_kernel[(triton.cdiv(P, br),)](
@@ -181,9 +191,11 @@ __all__ = ["forward_ntt", "ntt_kernel", "pow_mac", "pow_mac_kernel"]
 # --------------------------------------------------------------- ByteEncode_12
 @triton.jit
 def encode12_kernel(V, OUT, N: tl.constexpr, BYTES: tl.constexpr, OBLK: tl.constexpr):
-    """`ByteEncode_12`：一条多项式的 256 个 [0,4096) 系数 → 384 字节。
+    """`ByteEncode_12`: the 256 coefficients in [0,4096) of one polynomial →
+    384 bytes.
 
-    D=12 > 8，所以一个字节最多横跨 **2** 个系数（和封装那边 dv=5 会跨 3 个不同）。
+    D=12 > 8, so a byte spans at most **2** coefficients (unlike dv=5 on the
+    encaps side, which spans 3).
     """
     p = tl.program_id(0)
     o = tl.program_id(1) * OBLK + tl.arange(0, OBLK)
@@ -199,7 +211,7 @@ def encode12_kernel(V, OUT, N: tl.constexpr, BYTES: tl.constexpr, OBLK: tl.const
 
 
 def byte_encode12(vals: torch.Tensor) -> torch.Tensor:
-    """[P, 256] int32（[0,4096)）→ [P, 384] uint8。"""
+    """[P, 256] int32 ([0,4096)) → [P, 384] uint8."""
     P = vals.shape[0]
     out = torch.empty((P, 384), dtype=torch.uint8, device=vals.device)
     encode12_kernel[(P, 3)](vals, out, N, 384, 128, num_warps=warps("encode12", 4))

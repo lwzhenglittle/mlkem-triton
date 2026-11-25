@@ -1,4 +1,5 @@
-"""CPU 侧的 FIPS 203 采样与哈希（v1：hashlib，单线程，只求正确）。"""
+"""CPU-side FIPS 203 sampling and hashing (v1: hashlib, single-threaded,
+correctness only)."""
 
 from __future__ import annotations
 
@@ -21,12 +22,12 @@ def J(b: bytes) -> bytes:
 
 
 def prf(eta: int, s: bytes, b: int) -> bytes:
-    """PRF_eta(s, b) = SHAKE256(s ‖ b, 64·eta)。"""
+    """PRF_eta(s, b) = SHAKE256(s ‖ b, 64·eta)."""
     return hashlib.shake_256(s + bytes([b])).digest(64 * eta)
 
 
 def cbd(buf: bytes, eta: int) -> np.ndarray:
-    """SamplePolyCBD_eta（FIPS 203 Algorithm 8）。"""
+    """SamplePolyCBD_eta (FIPS 203 Algorithm 8)."""
     bits = np.unpackbits(np.frombuffer(buf, dtype=np.uint8), bitorder="little")
     assert bits.size == 256 * 2 * eta
     bits = bits.reshape(256, 2 * eta).astype(np.int64)

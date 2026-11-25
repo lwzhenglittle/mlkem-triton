@@ -1,8 +1,9 @@
-"""极简 pytest 替身 —— 只在环境里没有 pytest 时由 `run_all.py` 注入。
+"""A minimal stand-in for pytest — injected by `run_all.py` only when pytest is
+missing from the environment.
 
-覆盖本仓库实际用到的子集：`mark.parametrize`、`fixture`、`raises`、`skip`、
-`importorskip`、`mark.skipif`。**不是** pytest 的替代品，不要拿它跑复杂用例；
-有 pytest 的时候走 pytest。
+It covers the subset this repo actually uses: `mark.parametrize`, `fixture`,
+`raises`, `skip`, `importorskip`, `mark.skipif`. It is **not** a replacement for
+pytest; do not use it to run complex cases. When pytest is present, use pytest.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ __all__ = ["Skipped", "install"]
 
 
 class Skipped(Exception):
-    """相当于 `pytest.skip()`。"""
+    """Equivalent to `pytest.skip()`."""
 
 
 def _split(argnames):
@@ -35,7 +36,7 @@ def _parametrize(argnames, argvalues, **kwargs):
             new.append(dict(zip(names, vals, strict=False)))
         inner = getattr(fn, "_param_cases", None)
         if inner:
-            # 叠了两层 parametrize：笛卡尔积
+            # two stacked parametrize layers: Cartesian product
             fn._param_cases = [{**a, **b} for a in new for b in inner]
         else:
             fn._param_cases = new
@@ -82,7 +83,7 @@ def raises(exc, **kwargs):
         yield
     except exc:
         return
-    raise AssertionError(f"expected 抛出 {exc}, 但没有")
+    raise AssertionError(f"expected {exc} to be raised, but nothing was")
 
 
 def skip(reason="", **kwargs):
@@ -97,11 +98,11 @@ def importorskip(name, reason=None, **kwargs):
     try:
         return importlib.import_module(name)
     except ImportError as e:
-        raise Skipped(reason or f"缺少 {name}") from e
+        raise Skipped(reason or f"missing {name}") from e
 
 
 def approx(v, rel=None, abs=None):
-    """只支持 `==` 比较的最小实现。"""
+    """Minimal implementation that supports only `==` comparison."""
 
     class _Approx:
         def __eq__(self, other):
@@ -112,7 +113,7 @@ def approx(v, rel=None, abs=None):
 
 
 def install() -> None:
-    """把替身塞进 `sys.modules["pytest"]`（如果还没装 pytest）。"""
+    """Put the stand-in into `sys.modules["pytest"]` (if pytest is not installed)."""
     if "pytest" in sys.modules:
         return
     try:

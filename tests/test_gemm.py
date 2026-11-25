@@ -1,4 +1,4 @@
-"""Phase 3.1 验收：Triton GEMM 与 CPU int64 参考在多种批大小下完全一致。"""
+"""Phase 3.1 acceptance: Triton GEMM matches the CPU int64 reference for many batch sizes."""
 
 from __future__ import annotations
 
@@ -15,10 +15,10 @@ from _common import DEV
 
 from mlkem_triton.kernels.gemm_modq import gemm_modq, gemm_modq_int8
 
-pytest.importorskip("kyber_py", reason="refimpl 需要可选的 kyber-py")
+pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
-XPU = True  # 见 _common.DEV：能 import 就说明有可用 GPU
-pytestmark = pytest.mark.skipif(not XPU, reason="需要 GPU")
+XPU = True  # device availability is skipped centrally by tests/conftest.py (HAS_GPU)
+pytestmark = pytest.mark.skipif(not XPU, reason="requires GPU")
 
 
 def _f16(a):
@@ -102,7 +102,7 @@ def test_int8_limb_matches_cpu(kp, B):
 
 
 def test_identical_across_runs(kp):
-    """确定性：同一输入跑两次结果必须一致。"""
+    """Determinism: the same input run twice must give identical results."""
     Y, E = _enc_inputs(kp, 64)
     a = gemm_modq(_f16(kp.W_enc), _f16(Y), _i16(E), mode="enc").cpu().numpy()
     b = gemm_modq(_f16(kp.W_enc), _f16(Y), _i16(E), mode="enc").cpu().numpy()

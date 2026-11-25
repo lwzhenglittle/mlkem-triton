@@ -1,15 +1,16 @@
 #!/usr/bin/env python
-"""端到端批量解封装基准。
+"""End-to-end batched decapsulation benchmark.
 
-    python benchmarks/bench_e2e.py                       # ML-KEM-768, 自动选设备
+    python benchmarks/bench_e2e.py                       # ML-KEM-768, auto-select device
     python benchmarks/bench_e2e.py --device cuda
     python benchmarks/bench_e2e.py --ps ML-KEM-512 --batch 1,256,1024,4096,8192
 
-测的是**完整入口** `Decapsulator.decaps()`，包含 numpy 打包 / H2D / 设备侧
-全流程 / D2H —— 也就是调用方真正看到的延迟。同时报告仅设备侧的耗时
-（`decaps_torch`），方便区分「GPU 算得快不快」和「端到端快不快」。
+Measures the **full entry point** `Decapsulator.decaps()`, including numpy packing / H2D /
+the entire device-side flow / D2H — i.e. the latency the caller actually sees. It also
+reports device-only time (`decaps_torch`), to separate "is the GPU fast" from "is
+end-to-end fast".
 
-密文用 NIST ACVP 官方向量（`data/acvp/`），不需要 kyber-py。
+Ciphertexts use official NIST ACVP vectors (`data/acvp/`), no kyber-py needed.
 """
 
 from __future__ import annotations
@@ -37,16 +38,17 @@ def _h2b(v):
 
 
 def _load_cases(ps: str):
-    """取**一对** (dk, ct, K)。
+    """Take **one pair** (dk, ct, K).
 
-    注意：ACVP 的每个 decapsulation 向量都有**自己的 dk**（实测 10 条向量
-    10 个不同 dk）。所以批量基准必须拿同一对 (dk, ct) 复制 B 份 —— 之前
-    用 cases[0].dk 配所有 cases 的 ct 是错的（9/10 解密出垃圾，虽然不影响
-    计时，但会让正确性检查看着莫名其妙地失败）。
+    Note: every ACVP decapsulation vector has **its own dk** (10 vectors measured,
+    10 different dks). So a batch benchmark must replicate the same (dk, ct) pair B
+    times — using cases[0].dk with the ct of all cases was wrong (9/10 decrypted to
+    garbage; it did not affect timing, but made the correctness check fail for no
+    obvious reason).
     """
     cases = [c for c in acvp.load() if c["function"] == "decapsulation" and c["parameterSet"] == ps]
     if not cases:
-        raise SystemExit(f"data/acvp 里没有 {ps} 的 decapsulation 向量")
+        raise SystemExit(f"no decapsulation vectors for {ps} in data/acvp")
     c = cases[0]
     return _h2b(c["inputs"]["dk"]), _h2b(c["inputs"]["c"]), _h2b(c["expected"]["k"])
 
@@ -56,8 +58,9 @@ def _bench(fn, n: int, warmup: int, warm_seconds: float = 0.0):
         fn()
     torch_sync()
     if warm_seconds:
-        # GPU 时钟会从 900 MHz 空载一路 boost 到 ~2.2 GHz。不先压满就这么测，
-        # 前几轮会撞上低频，min/med 都能差一倍（本机实测）。
+        # GPU clocks boost from 900 MHz idle to ~2.2 GHz. Measuring without first
+        # saturating it means the first few rounds hit low clocks, and min/med can
+        # differ twofold (measured on this machine).
         import time as _t
 
         t0 = _t.perf_counter()
@@ -90,10 +93,13 @@ def main() -> int:
         "--warm-seconds",
         type=float,
         default=0.0,
-        help="按墙钟时间预热，用来把 GPU 时钟顶到 boost（建议 2-3 秒）",
+        help="warm up by wall-clock time to push GPU clocks to boost (2-3 s recommended)",
     )
     ap.add_argument(
-        "--baseline", type=float, default=None, help="可选：单线程基线 µs/op，用来打印加速比"
+        "--baseline",
+        type=float,
+        default=None,
+        help="optional: single-thread baseline µs/op, used to print the speedup",
     )
     args = ap.parse_args()
 
@@ -137,32 +143,35 @@ def main() -> int:
         )
 
     if args.baseline:
-        print(f"\n# 单线程基线 {args.baseline:.3f} µs/op")
+        print(f"\n# single-thread baseline {args.baseline:.3f} µs/op")
 
     _selfcheck(dec, ct1, dev)
     return 0
 
 
 def _selfcheck(dec, ct1, dev):
-    """确认融合内核真的生效，且与全回退路径**逐字节相同**。
+    """Confirm the fused kernel really takes effect and is **byte-identical** to the
+    full fallback path.
 
-    这是这个项目踩过的坑之一：融合内核因为一个 `is_contiguous()` 判定静默
-    返回 False，整条流水线偷偷退回慢路径，数字看着正常但白算。所以基准
-    脚本自己把回退路径也跑一遍做对照。
+    This is one of the traps this project has hit: the fused kernel silently returns
+    False because of one `is_contiguous()` check, the whole pipeline quietly falls back
+    to the slow path, and the numbers look normal while being meaningless. So the
+    benchmark script runs the fallback path itself as a control.
     """
     import mlkem_triton.pipeline as pl
 
-    # 必须 patch `pipeline` 模块里的名字：`pipeline.py` 用的是
-    # `from .kernels.fused_gemm import fused_dec_gemm, fused_enc_gemm`，
-    # 导入时已经绑定，改 `kernels.fused_gemm` 模块里的属性**不会**生效
-    # （我第一次就是这么干的，测出来的「收益」是 0.003 ms —— 全是假的）。
+    # Must patch the names in the `pipeline` module: `pipeline.py` does
+    # `from .kernels.fused_gemm import fused_dec_gemm, fused_enc_gemm`,
+    # already bound at import time; changing attributes in the `kernels.fused_gemm`
+    # module does **not** take effect (my first attempt did exactly that, and the
+    # measured "gain" was 0.003 ms — all fake).
     B = 1024
     batch = [ct1] * B
     fused = dec.decaps(batch)
 
     saved = (pl.fused_dec_gemm, pl.fused_enc_gemm)
     try:
-        pl.fused_dec_gemm = lambda *a, **k: None  # 强制回退
+        pl.fused_dec_gemm = lambda *a, **k: None  # force fallback
         pl.fused_enc_gemm = lambda *a, **k: False
         fallback = dec.decaps(batch)
         fb_min, _ = _bench(lambda: dec.decaps(batch), 8, 2)
@@ -171,11 +180,14 @@ def _selfcheck(dec, ct1, dev):
 
     ok = all(fused[i].tobytes() == fallback[i].tobytes() for i in range(B))
     full_min, _ = _bench(lambda: dec.decaps(batch), 8, 2)
-    print("\n# 自检")
-    print(f"  融合路径 vs 全回退路径输出一致 : {ok}")
-    print(f"  端到端 融合 {full_min:.3f} ms vs 全回退 {fb_min:.3f} ms -> {fb_min / full_min:.2f}x")
+    print("\n# self-check")
+    print(f"  fused vs full-fallback outputs identical : {ok}")
+    print(
+        f"  end-to-end fused {full_min:.3f} ms vs full fallback {fb_min:.3f} ms"
+        f" -> {fb_min / full_min:.2f}x"
+    )
     if not ok:
-        raise SystemExit("融合路径与回退路径输出不一致！")
+        raise SystemExit("fused and fallback paths produced different outputs!")
 
 
 if __name__ == "__main__":

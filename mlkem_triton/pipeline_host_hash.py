@@ -1,15 +1,15 @@
-"""Phase 4：端到端批量解封装流水线。
+"""Phase 4: end-to-end batch decapsulation pipeline.
 
-数据流（单个批次 B 条密文）：
-  1. 解包 c → c1/c2 整数        （CPU, numpy 位解包）
-  2. 解压 u,v；w = v − W_dec @ u （GPU, Triton GEMM）
-  3. m' = Compress_1(w)          （CPU）
-  4. (K',r') = G(m'‖H(ek))；K̄ = J(z‖c)  （CPU hashlib 或 GPU 批量 sponge）
-  5. PRF + CBD 采样 y,e1,e2      （CPU hashlib 或 GPU 批量 sponge）
-  6. [u';v'] = W_enc @ y + [e1; e2 + 1665·m']  （GPU, Triton GEMM）
-  7. 压缩并比较；常数时间选 K    （CPU）
+Data flow (one batch of B ciphertexts):
+  1. unpack c → c1/c2 integers                    (CPU, numpy bit unpacking)
+  2. decompress u,v; w = v − W_dec @ u            (GPU, Triton GEMM)
+  3. m' = Compress_1(w)                           (CPU)
+  4. (K',r') = G(m'‖H(ek)); K̄ = J(z‖c)           (CPU hashlib or GPU batched sponge)
+  5. PRF + CBD sample y,e1,e2                     (CPU hashlib or GPU batched sponge)
+  6. [u';v'] = W_enc @ y + [e1; e2 + 1665·m']     (GPU, Triton GEMM)
+  7. compress and compare; constant-time select K (CPU)
 
-`use_gpu_hash=True` 时第 4/5 步全部换成 GPU 批量 sponge。
+With `use_gpu_hash=True`, steps 4/5 are both replaced by the GPU batched sponge.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ from .sampling_cpu import G, J, cbd, prf
 
 
 class ReferenceDecapsulator:
-    """哈希在 CPU 上做的对照实现（用来做基准比较，**不是**推荐入口）。"""
+    """Comparison implementation that hashes on the CPU (for benchmark comparisons,
+    **not** the recommended entry point)."""
 
     def __init__(self, ps: str, dk: bytes, device=None, use_gpu_hash: bool = False):
         p = PARAMS[ps]
@@ -45,7 +46,7 @@ class ReferenceDecapsulator:
             torch.from_numpy(np.ascontiguousarray(self.kp.W_enc)).to(torch.float16).to(device)
         )
 
-    # ---- 采样：CPU 路径 ----
+    # ---- sampling: CPU path ----
     def _sample_cpu(self, r_prime: np.ndarray, B: int):
         p, k = self.p, self.p.k
         y = np.empty((256 * k, B), dtype=np.int64)
@@ -59,7 +60,7 @@ class ReferenceDecapsulator:
             e2[:, i] = cbd(prf(p.eta2, r, 2 * k), p.eta2)
         return y, e1, e2
 
-    # ---- 采样：GPU 批量路径 ----
+    # ---- sampling: GPU batched path ----
     def _sample_gpu(self, r_prime: np.ndarray, B: int):
         from . import gpu_hash
 
@@ -69,7 +70,7 @@ class ReferenceDecapsulator:
         inp[:, :, :32] = r_prime[:, None, :]
         inp[:, :, 32] = idx[None, :]
 
-        # eta1（y）与 eta2（e1,e2）输出长度可能不同，分两次批量 PRF
+        # eta1 (y) and eta2 (e1,e2) may have different output lengths, so two batched PRFs
         y_buf = gpu_hash.shake256_batch(
             inp[:, :k, :].reshape(B * k, 33), 64 * p.eta1, device=self.device
         )
@@ -88,7 +89,7 @@ class ReferenceDecapsulator:
         E2 = e[:, k, :].T
         return Y, E1, E2
 
-    # ---- 哈希：CPU 路径 ----
+    # ---- hashing: CPU path ----
     def _hash_cpu(self, m_bytes, cts, B):
         K_prime = np.empty((B, 32), np.uint8)
         r_prime = np.empty((B, 32), np.uint8)
@@ -100,7 +101,7 @@ class ReferenceDecapsulator:
             K_bar[i] = np.frombuffer(J(self.z + cts[i].tobytes()), np.uint8)
         return K_prime, r_prime, K_bar
 
-    # ---- 哈希：GPU 批量路径 ----
+    # ---- hashing: GPU batched path ----
     def _hash_gpu(self, m_bytes, cts, B):
         from . import gpu_hash
 
@@ -113,14 +114,14 @@ class ReferenceDecapsulator:
         k_bar = gpu_hash.shake256_batch(j_in, 32, device=self.device)
         return gr[:, :32], gr[:, 32:64], k_bar
 
-    # ---- 辅助 ----
+    # ---- helpers ----
     def _to_f16(self, a: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(np.ascontiguousarray(a)).to(torch.float16).to(self.device)
 
     def _to_i16(self, a: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(np.ascontiguousarray(np.asarray(a, np.int16))).to(self.device)
 
-    # ---- 主流程 ----
+    # ---- main flow ----
     def decaps(self, cts) -> np.ndarray:
         cts = np.asarray(cts, dtype=np.uint8)
         if cts.ndim == 1:
@@ -128,7 +129,7 @@ class ReferenceDecapsulator:
         B = cts.shape[0]
         p, k = self.p, self.p.k
 
-        # 1. 解包 + 解压
+        # 1. unpack + decompress
         c1, c2 = ew.unpack_ct(cts, k, p.du, p.dv)  # [k,256,B], [256,B]
         u = ew.decompress_np(c1, p.du).reshape(k * 256, B)  # [256k,B]
         v = ew.decompress_np(c2, p.dv)  # [256,B]
@@ -147,22 +148,22 @@ class ReferenceDecapsulator:
         else:
             K_prime, r_prime, K_bar = self._hash_cpu(m_bytes, cts, B)
 
-        # 5. 采样
+        # 5. sampling
         if self.use_gpu_hash:
             y, e1, e2 = self._sample_gpu(r_prime, B)
         else:
             y, e1, e2 = self._sample_cpu(r_prime, B)
 
-        # 6. 重加密
+        # 6. re-encrypt
         E = np.vstack([e1, e2 + 1665 * m_bits])
         out = gemm_modq(self.W_enc, self._to_f16(y), self._to_i16(E), mode="enc").cpu().numpy()
 
-        # 7. 压缩 + 比较
+        # 7. compress + compare
         c1p = ew.compress_np(out[: k * 256], p.du)
         c2p = ew.compress_np(out[k * 256 :], p.dv)
         eq = np.all(c1p == c1.reshape(k * 256, B), axis=0) & np.all(c2p == c2, axis=0)
 
-        # 8. 常数时间选择
+        # 8. constant-time selection
         return ew.select_bytes(K_prime, K_bar, eq)
 
 

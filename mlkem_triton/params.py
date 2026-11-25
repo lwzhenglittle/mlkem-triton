@@ -1,4 +1,4 @@
-"""ML-KEM 参数集（FIPS 203）。"""
+"""ML-KEM parameter sets (FIPS 203)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ class Params:
     du: int
     dv: int
 
-    # ---- 字节长度（FIPS 203 §7）----
+    # ---- byte lengths (FIPS 203 §7) ----
     @property
     def ek_size(self) -> int:
         return 384 * self.k + 32

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""封装（encaps）吞吐，和 cuPQC 的同机实测数字对照。
+"""Encapsulation (encaps) throughput, compared against same-machine cuPQC numbers.
 
 python benchmarks/bench_encaps.py --batch 1024,4096,8192
 """
@@ -21,7 +21,7 @@ from mlkem_triton import acvp, describe, resolve_device
 from mlkem_triton.devices import sync
 from mlkem_triton.encaps import Encapsulator
 
-# cuPQC 在 GB10 上的同机实测（BD=32 / SDK 默认 BD=128），纯 kernel
+# cuPQC on GB10, same machine (BD=32 / SDK default BD=128), pure kernel
 CUPQC_ENCAPS_NS = {"tuned": 199.7, "default": 243.5}
 
 
@@ -61,11 +61,11 @@ def main() -> int:
     c, K = enc.encapsulate([m0] * 8)
     assert all(c[i].tobytes() == bytes.fromhex(cs[0]["expected"]["c"]) for i in range(8))
     assert all(K[i].tobytes() == bytes.fromhex(cs[0]["expected"]["k"]) for i in range(8))
-    print("ACVP 校验通过\n")
+    print("ACVP check passed\n")
 
-    # cuPQC 的数字是 GB10 上测的，只有 CUDA 机器上才可比
+    # cuPQC numbers were measured on GB10; only comparable on CUDA machines
     same_hw = dev.type == "cuda"
-    hdr = (f"{'vs cuPQC 调优':>14} {'vs cuPQC 默认':>14}") if same_hw else ""
+    hdr = (f"{'vs cuPQC tuned':>14} {'vs cuPQC default':>16}") if same_hw else ""
     print(f"{'B':>7} {'e2e ms':>9} {'e2e µs/op':>10} {'dev µs/op':>10} {'Mops/s':>9} {hdr}")
     for B in [int(x) for x in args.batch.split(",")]:
         msgs = [m0] * B
@@ -76,7 +76,7 @@ def main() -> int:
         us = e_min * 1e3 / B
         ns = d_min * 1e6 / B
         tail = (
-            (f"{CUPQC_ENCAPS_NS['tuned'] / ns:>13.2f}x {CUPQC_ENCAPS_NS['default'] / ns:>13.2f}x")
+            (f"{CUPQC_ENCAPS_NS['tuned'] / ns:>13.2f}x {CUPQC_ENCAPS_NS['default'] / ns:>15.2f}x")
             if same_hw
             else ""
         )
@@ -86,10 +86,14 @@ def main() -> int:
         )
     if same_hw:
         print(
-            f"\n# 对照 cuPQC 同机实测（GB10）：调优 {CUPQC_ENCAPS_NS['tuned']} ns/op，"
-            f"SDK 默认 {CUPQC_ENCAPS_NS['default']} ns/op"
+            f"\n# against cuPQC same-machine measurements (GB10): tuned "
+            f"{CUPQC_ENCAPS_NS['tuned']} ns/op, SDK default "
+            f"{CUPQC_ENCAPS_NS['default']} ns/op"
         )
-        print("# 我们是设备侧（含 Python 入队），cuPQC 是纯 kernel —— 口径对我们略不利。")
+        print(
+            "# Our number is device-side (including Python enqueue), cuPQC's is pure "
+            "kernel — the comparison slightly disfavours us."
+        )
     return 0
 
 

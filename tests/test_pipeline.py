@@ -1,4 +1,4 @@
-"""Phase 3.2/4 验收：elementwise 与端到端解封装。"""
+"""Phase 3.2/4 acceptance: elementwise ops and end-to-end decapsulation."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ pytest.importorskip("triton")
 
 from mlkem_triton.kernels import elementwise as ew
 
-pytest.importorskip("kyber_py", reason="refimpl 需要可选的 kyber-py")
+pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
-XPU = True  # 见 _common.DEV：能 import 就说明有可用 GPU
-pytestmark = pytest.mark.skipif(not XPU, reason="需要 GPU")
+XPU = True  # device availability is skipped centrally by tests/conftest.py (HAS_GPU)
+pytestmark = pytest.mark.skipif(not XPU, reason="requires GPU")
 
 
 # ---------------- elementwise ----------------
@@ -50,7 +50,7 @@ def test_select_bytes_constant_shape():
     assert np.array_equal(out, np.array([[1, 2, 3], [8, 8, 8]]))
 
 
-# ---------------- 端到端 ----------------
+# ---------------- end to end ----------------
 
 PARAM_SETS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
 
@@ -68,7 +68,7 @@ def test_pipeline_roundtrip(ps):
         expect.append(K)
     got = dec.decaps(np.stack(cts))
     for i, K in enumerate(expect):
-        assert got[i].tobytes() == K, f"{ps} 第 {i} 条不符"
+        assert got[i].tobytes() == K, f"{ps} case {i} mismatch"
 
 
 @pytest.mark.parametrize("B", [1, 2, 3])
@@ -88,7 +88,7 @@ def test_pipeline_batch_sizes(B):
 
 
 def test_pipeline_implicit_rejection():
-    """篡改密文必须走隐式拒绝，且与参考实现一致。"""
+    """Tampered ciphertexts must take the implicit-rejection path and match the reference."""
     from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     ps = "ML-KEM-768"
@@ -105,14 +105,16 @@ def test_pipeline_implicit_rejection():
     got = dec.decaps(np.stack(cts))
     for i, ct in enumerate(cts):
         ref = refimpl.ref_decaps(ps, dk, ct.tobytes())
-        assert got[i].tobytes() == ref, f"pos 变体 {i} 不一致"
+        assert got[i].tobytes() == ref, f"pos variant {i} mismatch"
         assert got[i].tobytes() != K
         assert got[i].tobytes() == refimpl.implicit_reject_key(ps, dk, ct.tobytes())
 
 
 @pytest.mark.parametrize("ps", PARAM_SETS)
 def test_pipeline_official_acvp_decaps(ps):
-    """官方 ACVP 解封装向量（含隐式拒绝）跑通整条流水线。"""
+    """Official ACVP decapsulation vectors (including implicit rejection) run through
+    the whole pipeline.
+    """
     from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     cases = [c for c in acvp.load() if c["function"] == "decapsulation" and c["parameterSet"] == ps]

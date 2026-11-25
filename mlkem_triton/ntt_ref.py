@@ -1,10 +1,11 @@
-"""FIPS 203 的 NTT / INTT / MultiplyNTTs 参考实现（numpy）。
+"""Reference NTT / INTT / MultiplyNTTs implementation for FIPS 203 (numpy).
 
-同时提供 `negacyclic_conv` 与 `toeplitz`，用来验证整个方案的核心等式：
+Also provides `negacyclic_conv` and `toeplitz`, used to verify the core identity of
+the whole scheme:
 
-    T(a) @ b  ==  a * b   (在 Z_q[X]/(X^256 + 1) 中)
+    T(a) @ b  ==  a * b   (in Z_q[X]/(X^256 + 1))
 
-其中 T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1)。
+where T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1).
 """
 
 from __future__ import annotations
@@ -13,25 +14,25 @@ import numpy as np
 
 from .params import N, Q
 
-ZETA = 17  # 3329 模下的 256 次本原单位根
+ZETA = 17  # primitive 256th root of unity modulo 3329
 
 
 def bitrev7(i: int) -> int:
-    """7 bit 位反转。"""
+    """7-bit bit reversal."""
     return int(format(i, "07b")[::-1], 2)
 
 
-# zetas[i] = ζ^BitRev7(i)，i = 0..127（FIPS 203 Algorithm 9 用）
+# zetas[i] = ζ^BitRev7(i), i = 0..127 (used by FIPS 203 Algorithm 9)
 ZETAS = np.array([pow(ZETA, bitrev7(i), Q) for i in range(128)], dtype=np.int64)
 
-# BaseCaseMultiply 的 γ_i = ζ^(2·BitRev7(i)+1)
+# γ_i for BaseCaseMultiply = ζ^(2·BitRev7(i)+1)
 GAMMAS = np.array([pow(ZETA, 2 * bitrev7(i) + 1, Q) for i in range(128)], dtype=np.int64)
 
 INV128 = pow(128, -1, Q)  # = 3303
 
 
 def ntt(f):
-    """FIPS 203 Algorithm 9。"""
+    """FIPS 203 Algorithm 9."""
     f = np.array(f, dtype=np.int64) % Q
     i = 1
     length = 128
@@ -48,7 +49,7 @@ def ntt(f):
 
 
 def intt(f):
-    """FIPS 203 Algorithm 10。"""
+    """FIPS 203 Algorithm 10."""
     f = np.array(f, dtype=np.int64) % Q
     i = 127
     length = 2
@@ -65,14 +66,14 @@ def intt(f):
 
 
 def base_case_multiply(a0, a1, b0, b1, gamma):
-    """FIPS 203 Algorithm 12。"""
+    """FIPS 203 Algorithm 12."""
     c0 = (a0 * b0 + a1 * b1 % Q * gamma) % Q
     c1 = (a0 * b1 + a1 * b0) % Q
     return c0, c1
 
 
 def multiply_ntts(f, g):
-    """FIPS 203 Algorithm 11：128 个二次域上逐点相乘。"""
+    """FIPS 203 Algorithm 11: pointwise multiply over 128 quadratic extensions."""
     f = np.asarray(f, dtype=np.int64)
     g = np.asarray(g, dtype=np.int64)
     h = np.zeros(N, dtype=np.int64)
@@ -84,7 +85,7 @@ def multiply_ntts(f, g):
 
 
 def negacyclic_conv(a, b):
-    """Z_q[X]/(X^256+1) 中的 O(N^2) 朴素乘法（仅用于测试）。"""
+    """O(N^2) schoolbook multiplication in Z_q[X]/(X^256+1) (test only)."""
     a = np.asarray(a, dtype=np.int64)
     b = np.asarray(b, dtype=np.int64)
     idx = np.arange(N)[:, None] + np.arange(N)[None, :]
@@ -95,45 +96,45 @@ def negacyclic_conv(a, b):
 
 
 def toeplitz(a):
-    """T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1)。"""
+    """T(a)[i][j] = a[(i-j) mod 256] * (+1 if i >= j else -1)."""
     a = np.asarray(a, dtype=np.int64)
     i = np.arange(N)[:, None]
     j = np.arange(N)[None, :]
     return a[(i - j) % N] * np.where(i >= j, 1, -1)
 
 
-# ---------------- 编解码 / 压缩（FIPS 203 §4.2） ----------------
+# ---------------- encode/decode / compress (FIPS 203 §4.2) ----------------
 
 
 def byte_encode(vals, d: int) -> bytes:
-    """ByteEncode_d：256 个 0..2^d-1 的整数 -> 32*d 字节（小端位打包）。"""
+    """ByteEncode_d: 256 integers in 0..2^d-1 -> 32*d bytes (little-endian bit packing)."""
     mask = (1 << d) - 1
     x = 0
     for i, v in enumerate(vals):
         v = int(v) & mask
         if v != int(vals[i]):
-            raise ValueError(f"系数 {i} 超出 {d} bit 范围")
+            raise ValueError(f"coefficient {i} out of range for {d} bits")
         x |= v << (i * d)
     return x.to_bytes(32 * d, "little")
 
 
 def byte_decode(data: bytes, d: int):
-    """ByteDecode_d：32*d 字节 -> 256 个整数。"""
+    """ByteDecode_d: 32*d bytes -> 256 integers."""
     if len(data) != 32 * d:
-        raise ValueError(f"需要 {32 * d} 字节，得到 {len(data)}")
+        raise ValueError(f"expected {32 * d} bytes, got {len(data)}")
     x = int.from_bytes(data, "little")
     mask = (1 << d) - 1
     return np.array([(x >> (i * d)) & mask for i in range(N)], dtype=np.int64)
 
 
 def compress(x, d: int):
-    """Compress_d(x) = round(2^d/q * x) mod 2^d（q 为奇数，无平局）。"""
+    """Compress_d(x) = round(2^d/q * x) mod 2^d (q is odd, so no ties)."""
     x = np.asarray(x, dtype=np.int64)
     return ((x << d) + Q // 2) // Q % (1 << d)
 
 
 def decompress(y, d: int):
-    """Decompress_d(y) = round(q/2^d * y)（q 为奇数，无平局）。"""
+    """Decompress_d(y) = round(q/2^d * y) (q is odd, so no ties)."""
     y = np.asarray(y, dtype=np.int64)
     return ((y * Q) + (1 << (d - 1))) >> d
 

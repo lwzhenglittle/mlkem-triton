@@ -1,9 +1,9 @@
-"""`kernels/fused_gemm.py` 的验收测试。
+"""Acceptance tests for `kernels/fused_gemm.py`.
 
-两个内核都必须与「未融合的多步实现」逐位相等：
+Both kernels must be bit-identical to the "unfused multi-step implementation":
 
-- `fused_enc_gemm` ↔ 通用 fp32 GEMM + `_cmp_kernel` 两发
-- `fused_dec_gemm` ↔ 通用 fp32 GEMM + `glue.compress_pack`
+- `fused_enc_gemm` ↔ generic fp32 GEMM + two `_cmp_kernel` launches
+- `fused_dec_gemm` ↔ generic fp32 GEMM + `glue.compress_pack`
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from _common import DEV, HAS_GPU
 
 pytest.importorskip("triton")
 
-pytestmark = pytest.mark.skipif(not HAS_GPU, reason="需要 GPU")
+pytestmark = pytest.mark.skipif(not HAS_GPU, reason="requires GPU")
 
 Q = 3329
 K = 768
@@ -56,7 +56,7 @@ def test_bitwise_equal(M, B):
     du, dv = 10, 4
     pivot = M - 256
     W, Y, E = _data(M, B, pivot)
-    # ref：一半命中、一半随机，同时覆盖「相等」和「不等」两条路径
+    # ref: half hits, half random, covering both the "equal" and "not equal" paths
     ref1 = (
         torch.randint(0, 1 << du, (pivot, B), device=DEV, dtype=torch.int16)
         if pivot
@@ -68,7 +68,7 @@ def test_bitwise_equal(M, B):
     assert fused_enc_gemm(W, Y, E, (ref1, ref2), cnt, B, du, dv) is True
     assert torch.equal(cnt, cnt_ref)
 
-    # 全命中：计数应恒等于 M
+    # all hits: the count should always equal M
     comp = torch.empty((M, B), device=DEV, dtype=torch.int32)
     acc = torch.mm(W, Y, out_dtype=torch.float32)
     x = acc.to(torch.int32) + E.to(torch.int32)
@@ -87,7 +87,9 @@ def test_bitwise_equal(M, B):
 
 
 def test_accumulates_like_ops_cmp():
-    """两次调用（du 段 / dv 段分开）累加到同一个 cnt，与 ops.cmp 的用法一致。"""
+    """Two calls (the du segment and the dv segment separately) accumulate into the
+    same cnt, as ops.cmp does.
+    """
     from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
     from mlkem_triton.pipeline import _cmp_kernel
 
@@ -103,7 +105,7 @@ def test_accumulates_like_ops_cmp():
     )
 
     c = torch.zeros(B, device=DEV, dtype=torch.int32)
-    # v 段（pivot=0 表示整段都用 dv）先加，再把 u 段加上去
+    # add the v segment first (pivot=0 means the whole segment uses dv), then add the u segment
     assert fused_enc_gemm(W[pivot:], Y, E[pivot:], ref2, c, B, du, dv, pivot=0) is True
     assert fused_enc_gemm(W[:pivot], Y, E[:pivot], ref1, c, B, du, dv, pivot=pivot) is True
     assert torch.equal(c, c_ref)
@@ -127,7 +129,7 @@ def test_single_ref_tensor():
 
 
 def test_fallback_returns_false():
-    """形状/dtype 不满足时必须返回 False，且不动 cnt。"""
+    """Must return False when shape/dtype do not fit, and leave cnt untouched."""
     from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
 
     du, dv, M, B, pivot = 10, 4, 1024, 512, 768
@@ -137,7 +139,7 @@ def test_fallback_returns_false():
     cnt = torch.zeros(B, device=DEV, dtype=torch.int32)
     zero = lambda: torch.zeros(B, device=DEV, dtype=torch.int32)  # noqa: E731
 
-    # K 不是 BK=32 的倍数
+    # K is not a multiple of BK=32
     assert (
         fused_enc_gemm(
             torch.zeros(M, 1000, device=DEV, dtype=torch.float16),
@@ -151,7 +153,7 @@ def test_fallback_returns_false():
         )
         is False
     )
-    # M 不是 BM 的倍数
+    # M is not a multiple of BM
     assert (
         fused_enc_gemm(
             torch.zeros(1000, K, device=DEV, dtype=torch.float16),
@@ -165,24 +167,24 @@ def test_fallback_returns_false():
         )
         is False
     )
-    # dtype 错
+    # wrong dtype
     assert fused_enc_gemm(W.float(), Y, E, (ref1, ref2), zero(), B, du, dv) is False
-    # cnt 不是 int32
+    # cnt is not int32
     assert (
         fused_enc_gemm(
             W, Y, E, (ref1, ref2), torch.zeros(B, device=DEV, dtype=torch.int64), B, du, dv
         )
         is False
     )
-    # ref 形状错
+    # wrong ref shape
     assert fused_enc_gemm(W, Y, E, (ref1, ref2[:, :16].contiguous()), zero(), B, du, dv) is False
-    # 位宽非法
+    # illegal bit width
     assert fused_enc_gemm(W, Y, E, (ref1, ref2), zero(), B, 0, dv) is False
-    # cnt 保持不动
+    # cnt stays untouched
     assert int(cnt.abs().sum()) == 0
 
 
-# ---------------------------------------------------------------- DEC 融合
+# ---------------------------------------------------------------- DEC fusion
 def _dec_data(M, B, seed=0):
     torch.manual_seed(seed)
     W = torch.randint(-1664, 1665, (M, K), device=DEV, dtype=torch.int16).to(torch.float16)
@@ -200,7 +202,7 @@ def _dec_ref(W, U, V, B):
 
 @pytest.mark.parametrize("B", [1, 37, 256, 4096, 1000])
 def test_dec_bitwise_equal(B):
-    """真实用例（M=256）：必须与「fp32 GEMM + glue.compress_pack」逐字节相等。"""
+    """Real case (M=256): must be byte-identical to "fp32 GEMM + glue.compress_pack"."""
     from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
 
     W, U, V = _dec_data(256, B)
@@ -215,7 +217,9 @@ def test_dec_bitwise_equal(B):
 @pytest.mark.parametrize("M", [256, 512, 1024, 2048])
 @pytest.mark.parametrize("B", [64, 1000])
 def test_dec_general_M(M, B):
-    """M 不是 256 时也要对（`glue.compress_pack` 只支持 256，这里用定义式核对）。"""
+    """Must also be correct when M is not 256 (`glue.compress_pack` only supports 256,
+    so this checks against the definition).
+    """
     from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
     from mlkem_triton.pipeline import _gemm_fp32
 
@@ -232,11 +236,11 @@ def test_dec_general_M(M, B):
 
 @pytest.mark.parametrize("B", [1, 1000])
 def test_dec_matches_operand_dtype(B):
-    """U 是 fp16、V 是 int16，混着用也要对（回归：别把 V 当 fp16 读）。"""
+    """U is fp16, V is int16; mixing them must work (regression: do not read V as fp16)."""
     from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
 
     W, U, V = _dec_data(256, B, seed=7)
-    V = (V * 800).to(torch.int16)  # 让 (V - acc) 落在负区间
+    V = (V * 800).to(torch.int16)  # make (V - acc) land in the negative range
     assert torch.equal(fused_dec_gemm(W, U, V, B), _dec_ref(W, U, V, B))
 
 
@@ -249,11 +253,13 @@ def test_dec_falls_back_on_bad_shapes():
     assert fused_dec_gemm(W, U, V.float(), 64) is None
     assert fused_dec_gemm(W, U.T.contiguous(), V, 64) is None
     assert fused_dec_gemm(W, U, V[:, :32].contiguous(), 64) is None
-    assert fused_dec_gemm(W[:100], U, V[:100], 64) is None  # M 不是 BM 的倍数
+    assert fused_dec_gemm(W[:100], U, V[:100], 64) is None  # M is not a multiple of BM
 
 
 def test_dec_gemm_mod_q_matches_definition():
-    """直接验语义：m_bytes 的第 b 行等于 compress_1((v - W@u) mod q) 的位打包。"""
+    """Direct semantic check: row b of m_bytes is the bit packing of
+    compress_1((v - W@u) mod q).
+    """
     from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
     from mlkem_triton.pipeline import _gemm_fp32
 
@@ -264,6 +270,6 @@ def test_dec_gemm_mod_q_matches_definition():
     acc = _gemm_fp32(W, U)
     w = (V.to(torch.int32) - acc.to(torch.int32)) % Q
     comp = (((w << 1) + Q // 2) // Q) & 1  # [M, B] ∈ {0,1}
-    bits = comp.T.reshape(B, 32, 8)  # 第 j 字节 = 8j..8j+7 行
+    bits = comp.T.reshape(B, 32, 8)  # byte j = rows 8j..8j+7
     want = (bits * (1 << torch.arange(8, device=DEV, dtype=torch.int32))).sum(-1)
     assert torch.equal(got.to(torch.int32), want)

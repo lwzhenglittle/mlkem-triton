@@ -1,4 +1,4 @@
-"""mlkem-triton —— 纯 Triton 的 ML-KEM 批量解封装。
+"""mlkem-triton — ML-KEM batch decapsulation in pure Triton.
 
     from mlkem_triton import Decapsulator, Encapsulator
     dec = Decapsulator("ML-KEM-768", dk)
@@ -6,9 +6,9 @@
     enc = Encapsulator("ML-KEM-768", ek)
     ct, keys = enc.encapsulate(list_of_32B_msgs)
 
-    eks, dks = generate_keypairs("ML-KEM-768", 4096)   # 三个操作齐了
+    eks, dks = generate_keypairs("ML-KEM-768", 4096)   # all three operations covered
 
-设计要点见 README；性能数据见 results/OPTIMIZATION_LOG.md（原项目仓库）。
+Design notes: see README.md; performance data: see docs/design.md (in the original repository).
 """
 
 from __future__ import annotations
@@ -49,12 +49,14 @@ _LAZY_MODULE = {
 
 
 def __getattr__(name):
-    # 惰性导入：`import mlkem_triton` 在纯 CPU 机器上也应该能用（只是想看
-    # 参数集 / 用 numpy 参考实现的话），不要因为 torch 缺 CUDA 就炸。
+    # Lazy import: `import mlkem_triton` should also work on a CPU-only machine
+    # (if all you want is to look at the parameter sets / use the numpy reference
+    # implementation), so don't blow up just because torch has no CUDA.
     import importlib
 
-    # 只认这三个入口 —— **不要**写成「遍历所有可能模块」，那样会在
-    # `pipeline.py` 自己的 `from . import keyprep, ops` 上触发递归导入。
+    # Only these three entry points — do **not** write it as "iterate over every
+    # possible module"; that would trigger a recursive import on `pipeline.py`'s
+    # own `from . import keyprep, ops`.
     mod = _LAZY_MODULE.get(name)
     if mod is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

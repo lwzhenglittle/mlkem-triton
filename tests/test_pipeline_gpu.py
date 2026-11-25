@@ -1,4 +1,4 @@
-"""GPU 常驻流水线（`pipeline.Decapsulator`）的验收测试。"""
+"""Acceptance tests for the GPU-resident pipeline (`pipeline.Decapsulator`)."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from _common import DEV
 from mlkem_triton import acvp, refimpl
 from mlkem_triton.pipeline import Decapsulator
 
-pytest.importorskip("kyber_py", reason="refimpl 需要可选的 kyber-py")
+pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
 pytest.importorskip("triton")
-XPU = True  # 见 _common.DEV：能 import 就说明有可用 GPU
-pytestmark = pytest.mark.skipif(not XPU, reason="需要 GPU")
+XPU = True  # device availability is skipped centrally by tests/conftest.py (HAS_GPU)
+pytestmark = pytest.mark.skipif(not XPU, reason="requires GPU")
 
 PARAM_SETS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
 
@@ -101,10 +101,12 @@ def test_cbd_matches_reference():
         assert np.array_equal(got, ref), eta
 
 
-# ---------------------------------------------------------------- 输入形态
+# ---------------------------------------------------------------- input forms
 @pytest.mark.parametrize("ps", ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"])
 def test_all_input_forms_agree(ps):
-    """四种输入形态必须给出同一批输出（bytes / ndarray / list / 设备张量）。"""
+    """The four input forms must give the same outputs (bytes / ndarray / list /
+    device tensor).
+    """
     from mlkem_triton import refimpl
 
     ek, dk = refimpl.ref_keygen(ps)
@@ -119,7 +121,7 @@ def test_all_input_forms_agree(ps):
     ref = dec.decaps(joined)  # bytes
     for name, arg in [
         ("np.ndarray", np.frombuffer(joined, np.uint8).reshape(len(cts), kl)),
-        ("np.ndarray 可写", np.frombuffer(joined, np.uint8).reshape(len(cts), kl).copy()),
+        ("np.ndarray writable", np.frombuffer(joined, np.uint8).reshape(len(cts), kl).copy()),
         ("bytearray", bytearray(joined)),
         ("memoryview", memoryview(joined)),
         ("list[bytes]", list(cts)),
@@ -140,16 +142,18 @@ def test_bad_input_forms_raise():
     kl = dec.p.ct_size
     _, c = refimpl.ref_encaps("ML-KEM-768", ek)
 
-    with pytest.raises(ValueError):  # 长度不是整数倍
+    with pytest.raises(ValueError):  # length is not a whole multiple
         dec.decaps(c + b"\x00")
-    with pytest.raises(ValueError):  # 最后维不是 ct_size
+    with pytest.raises(ValueError):  # last dim is not ct_size
         dec.decaps(np.zeros((4, kl - 1), np.uint8))
-    with pytest.raises(TypeError):  # dtype 不对
+    with pytest.raises(TypeError):  # wrong dtype
         dec.decaps(torch.zeros(4, kl, dtype=torch.int16, device=DEV))
 
 
 def test_pinned_staging_reuse_is_safe():
-    """暂存缓冲会被复用：连调两次、输入不同，第二次的结果必须是第二次的。"""
+    """The staging buffer is reused: call twice with different inputs; the second
+    result must be the second call's.
+    """
     from mlkem_triton import refimpl
 
     ek, dk = refimpl.ref_keygen("ML-KEM-768")
@@ -164,10 +168,11 @@ def test_pinned_staging_reuse_is_safe():
 
 
 def test_eta2_fast_path_only_for_ukem768_1024():
-    """记录一个已知限制：融合 CBD 只支持 η=2，所以 ML-KEM-512 走慢路径。
+    """Record a known limitation: the fused CBD supports only η=2, so ML-KEM-512 takes
+    the slow path.
 
-    功能是对的（ACVP 向量过），只是慢 ~3x。这个测试就是为了让这条限制在
-    「哪天有人把 η=3 也实现了」时立刻暴露出来。
+    It is functionally correct (the ACVP vectors pass), just ~3x slower. This test exists
+    to make the limitation surface immediately if someone ever implements η=3 too.
     """
     from mlkem_triton import refimpl
     from mlkem_triton.kernels import glue
@@ -179,7 +184,7 @@ def test_eta2_fast_path_only_for_ukem768_1024():
         has_fast = p.eta1 == 2 and p.eta2 == 2
         assert has_fast is expect_fast, ps
         if expect_fast:
-            # 快路径的判定条件确实会接受真实形状
+            # the fast-path predicate really does accept the real shapes
             B, k = 8, p.k
             y_buf = torch.zeros(B * k, 64 * p.eta1, dtype=torch.uint8, device=DEV)
             assert glue.can_cbd_y(y_buf, B, k, p.eta1)

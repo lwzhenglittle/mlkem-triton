@@ -1,1 +1,3 @@
-"""Triton 内核集合。全部是后端无关的纯 Triton，没有内联汇编 / 厂商专属指令。"""
+"""Triton kernel collection. All are backend-agnostic pure Triton, with no
+inline assembly / vendor-specific instructions.
+"""

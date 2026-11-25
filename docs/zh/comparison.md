@@ -1,3 +1,8 @@
+> **附加内容 / supplementary material.** 这是中文原始版本，**英文版是权威版本**：`/docs/compare.md`
+> 已知冲突与失效引用见 [index.md](index.md)。
+
+---
+
 # 与已有 GPU 上 Kyber/ML-KEM 实现的系统对比
 
 > 我方 = `mlkem-triton`（本仓库）。对比对象：NVIDIA cuPQC、HI-Kyber（南京邮电大学，2023）、

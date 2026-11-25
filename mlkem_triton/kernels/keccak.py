@@ -1,14 +1,16 @@
-"""Keccak-f[1600] 的 Triton 实现（向量单元 / SIMT 风格）。
+"""Keccak-f[1600] in Triton (vector engine / SIMT style).
 
-映射方式：**一个线程 = 一个 Keccak 实例**，25 个 lane 各用一个 `[BLOCK]` 张量。
-这样每个 lane 张量在实例维度上是连续的，访存合并良好；θ/π 的 lane 换位在
-unrolled 代码里表现为寄存器重命名，没有实际数据搬运。
+Mapping: **one thread = one Keccak instance**, each of the 25 lanes is a
+`[BLOCK]` tensor. Each lane tensor is therefore contiguous along the instance
+dimension and memory access coalesces well; in the unrolled code the θ/π lane
+permutation shows up as register renaming, with no actual data movement.
 
-实现细节：
-- 24 轮全部展开（Python 侧代码生成），因为 Triton 的 kernel 是 AST 解析的，
-  不方便在 kernel 里用 Python list 操作 25 个变量。
-- 注意 Python 3.14 + Triton 3.5.0 的坑：kernel 里不能用 1 参数 `range(N)`。
-  这里干脆完全展开，不写循环。
+Implementation notes:
+- All 24 rounds are unrolled (code generation on the Python side), because
+  Triton parses kernels as an AST and using Python lists to handle 25 variables
+  inside a kernel is awkward.
+- Watch out for Python 3.14 + Triton 3.5.0: `range(N)` with 1 argument does not
+  work inside a kernel. Here we simply fully unroll, with no loop at all.
 """
 
 from __future__ import annotations
@@ -20,9 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
-# ---------------- Keccak 常量 ----------------
+# ---------------- Keccak constants ----------------
 
-# r[x][y]：ρ 步骤的旋转量
+# r[x][y]: rotation amount for the ρ step
 ROT = [
     [0, 36, 3, 41, 18],
     [1, 44, 10, 45, 2],
@@ -66,7 +68,7 @@ def _rotl_expr(var: str, r: int) -> str:
 
 
 def gen_source(n_rounds: int = 24) -> str:
-    """生成完整的 Triton kernel 源码。"""
+    """Generate the full Triton kernel source."""
     L = [
         "import triton",
         "import triton.language as tl",
@@ -118,7 +120,7 @@ _KERNEL = None
 
 
 def get_kernel():
-    """生成源码 -> 写临时文件 -> import（Triton 需要能拿到源码）。"""
+    """Generate the source -> write a temp file -> import (Triton needs the source)."""
     global _KERNEL
     if _KERNEL is not None:
         return _KERNEL
@@ -134,7 +136,7 @@ def get_kernel():
     return _KERNEL
 
 
-# ---------------- 纯 Python 参考实现 ----------------
+# ---------------- pure-Python reference implementation ----------------
 
 M64 = (1 << 64) - 1
 
@@ -146,7 +148,7 @@ def _rotl(v: int, r: int) -> int:
 
 
 def keccak_f_ref(state: np.ndarray) -> np.ndarray:
-    """state: [25] uint64，原地做 24 轮（返回新数组）。"""
+    """state: [25] uint64. Runs 24 rounds on a copy and returns the new state."""
     a = [int(x) & M64 for x in state]
     for rnd in range(24):
         c = [a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20] for x in range(5)]
