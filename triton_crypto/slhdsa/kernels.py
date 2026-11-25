@@ -19,6 +19,11 @@ Contract:
 
 The ADRS fields are written big-endian in the address (FIPS 205 §11.2), while the sponge reads
 little-endian lanes, so each 32-bit field is byte-swapped into its lane.
+
+Compilation: one kernel per `(n, dn)` pair (six in total), plus Triton's own specialisation on the
+batch size — so the first verification of a *new batch-size class* costs ~0.4 s more. Measured on a
+cold Triton cache, the first 128f verification takes ~6 s (four kernels) and everything after it is
+warm.
 """
 
 from __future__ import annotations

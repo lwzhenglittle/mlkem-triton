@@ -365,4 +365,6 @@ Two honest notes on the comparison:
   in the same process.
 
 First use of each fused `thash` kernel compiles ~143 lines of Triton (~1.5 s per `(n, dn)` pair,
-six pairs total) and is then cached on disk; that cost is outside the table.
+six pairs total) and is then cached on disk; Triton additionally specialises on the batch size, so
+the first verification of a new batch-size class adds ~0.4 s. Measured on a cold cache, the first
+128f verification takes ~6 s; that cost is outside the table.
