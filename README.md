@@ -82,19 +82,32 @@ below B = 64, and you need B >= 1024 to saturate.
 
 ## Performance
 
-ML-KEM-768, min-of-25, **including numpy packing, H2D and D2H**.
+ML-KEM-768, min-of-25, **including numpy packing, H2D and D2H**. Both machines use the same
+columns, so a batch can be read across them.
 
-**NVIDIA GB10 (DGX Spark, sm_121) / torch 2.14 / triton 3.8**
+**NVIDIA GB10** (DGX Spark, `sm_121`, 48 SM) / torch 2.14 / triton 3.8
 
-| B | e2e min | device only | µs/op | M ops/s | vs liboqs-16T |
-|---:|---:|---:|---:|---:|---:|
-| 1024 | 0.383 ms | 0.275 ms | 0.374 | 2.67 | 3.9× |
-| 4096 | 0.869 ms | 0.533 ms | 0.212 | 4.71 | 6.8× |
-| 8192 | 1.665 ms | 1.018 ms | 0.203 | 4.92 | 7.1× |
+| B | e2e min | e2e med | device only | µs/op | M ops/s | vs liboqs-16T |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 0.383 ms | 0.390 ms | 0.275 ms | 0.374 | 2.67 | 3.9× |
+| 2048 | 0.493 ms | 0.501 ms | 0.315 ms | 0.241 | 4.15 | 6.0× |
+| 4096 | 0.869 ms | 0.876 ms | 0.533 ms | 0.212 | 4.71 | 6.8× |
+| 8192 | 1.665 ms | 1.678 ms | 1.018 ms | 0.203 | 4.92 | 7.1× |
 
-**Intel Arc B390** (Xe3-LPG, 96 EU, integrated; torch 2.15 / triton-xpu 3.9) is 2.2× slower
-per op: at B=8192, 3.674 ms end-to-end / 2.227 ms device-side / 0.449 µs/op, 3.23× liboqs-16T.
-Its optimum is B=4096 (0.474 µs/op) because that is where the working set fits its 16 MB LLC.
+**Intel Arc B390** (Xe3-LPG, 96 EU, integrated) / torch 2.15 / triton-xpu 3.9
+
+| B | e2e min | e2e med | device only | µs/op | M ops/s | vs liboqs-16T |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1024 | 0.919 ms | 1.090 ms | 0.665 ms | 0.898 | 1.11 | 1.61× |
+| 2048 | 1.242 ms | 1.431 ms | 0.769 ms | 0.607 | 1.65 | 2.39× |
+| 4096 | 1.943 ms | 2.196 ms | 1.237 ms | 0.474 | 2.11 | 3.06× |
+| 8192 | 3.674 ms | 4.277 ms | 2.227 ms | 0.449 | 2.23 | 3.23× |
+
+The two differ in more than speed. **GB10** is **2.2×** faster per op at B=8192, and its batch
+curve stays flat out to B=65536 (0.125–0.130 µs/op, device-side). **B390** oscillates between
+0.380 and 0.408 µs/op from B=8192 up. The min-vs-med spread separates them too: under 1% on GB10
+against **16%** on B390 — that is the ±20% clock drift, and the reason only same-process ratios
+are trusted.
 
 Baseline, same machine over the same ACVP ciphertexts (liboqs 0.16.0, ML-KEM-768): **10.26
 µs/op** single-threaded, **1.45 µs/op** across 16 concurrent processes.
