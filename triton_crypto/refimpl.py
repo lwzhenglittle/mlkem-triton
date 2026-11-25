@@ -1,7 +1,7 @@
 """Reference-implementation wrapper: uniform ref_keygen / ref_encaps / ref_decaps API.
 
 Backed by **kyber-py** (a third-party FIPS 203 implementation, optional dependency):
-    pip install mlkem-triton[ref]        # or: pip install kyber-py
+    pip install triton-crypto-kernels[ref]        # or: pip install kyber-py
 
 It exposes deterministic internal entry points that line up exactly with the ACVP vectors:
     _keygen_internal(d, z) -> (ek, dk)
@@ -9,7 +9,7 @@ It exposes deterministic internal entry points that line up exactly with the ACV
     _decaps_internal(dk, c) -> K
 
 **Not required**: the primary correctness gate uses the official NIST test vectors in
-`data/acvp/` (`mlkem_triton.acvp`) and needs no third-party implementation. kyber-py is
+`data/acvp/` (`triton_crypto.acvp`) and needs no third-party implementation. kyber-py is
 only needed when you want to randomly generate keypairs for round-trip tests.
 """
 
@@ -33,8 +33,8 @@ def _kems() -> dict:
         except ModuleNotFoundError as e:  # pragma: no cover
             raise ModuleNotFoundError(
                 "This feature requires kyber-py (an optional dependency). Install it:\n"
-                "    pip install mlkem-triton[ref]\n"
-                "If you only want correctness verification, use mlkem_triton.acvp + the\n"
+                "    pip install triton-crypto-kernels[ref]\n"
+                "If you only want correctness verification, use triton_crypto.acvp + the\n"
                 "official NIST test vectors under data/acvp/; kyber-py is not needed."
             ) from e
         _KEM = {

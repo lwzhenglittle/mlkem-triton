@@ -7,7 +7,7 @@ selected automatically.
 
 from __future__ import annotations
 
-from mlkem_triton.devices import describe, resolve_device
+from triton_crypto.devices import describe, resolve_device
 
 try:
     DEV = resolve_device()

@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from mlkem_triton import keyprep, refimpl
-from mlkem_triton.params import PARAMS, N, Q
+from triton_crypto import keyprep, refimpl
+from triton_crypto.params import PARAMS, N, Q
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
@@ -40,7 +40,7 @@ def test_magnitude_bounds(kp):
 
 def test_A_hat_roundtrip(kp):
     """Â should return to its original value after INTT then NTT."""
-    from mlkem_triton.ntt_ref import intt, ntt
+    from triton_crypto.ntt_ref import intt, ntt
 
     for i in range(kp.k):
         for j in range(kp.k):

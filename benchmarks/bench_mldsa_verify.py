@@ -37,9 +37,9 @@ import numpy as np
 import torch
 from _liboqs import LibOQS
 
-from mlkem_triton.devices import describe, resolve_device, sync
-from mlkem_triton.mldsa.ref import MLDSA
-from mlkem_triton.mldsa.verify import Verifier
+from triton_crypto.devices import describe, resolve_device, sync
+from triton_crypto.mldsa.ref import MLDSA
+from triton_crypto.mldsa.verify import Verifier
 
 
 def _best(fn, dev, n=25, warmup=3) -> float:

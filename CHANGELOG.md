@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 — renamed to `triton-crypto-kernels`, and every kernel got a contract
+
+The package outgrew its name. 0.2.0 already had two schemes sitting on one primitive layer, but
+it was still shipped as "mlkem-triton", and the kernels that both schemes actually reuse were
+undocumented internals. This release is about making the library part explicit — no algorithmic
+behaviour changed, which is why the whole test suite passes untouched.
+
+### Changed
+
+- **Package renamed `mlkem_triton` → `triton_crypto`**, distribution renamed
+  `mlkem-triton` → `triton-crypto-kernels`, version bumped to 0.3.0. The old import name still
+  works: `mlkem_triton/__init__.py` is a 20-line shim that maps every submodule onto the new
+  package (same module objects, so `isinstance` and caches behave identically). It will be
+  removed in 0.4.0.
+- `README.md` now opens with what the library *is* (primitives + schemes + kernel catalogue)
+  rather than with one scheme's story; the per-scheme sections are unchanged.
+- `pyproject.toml`: new distribution name, description, keywords; `mlkem_triton*` added to the
+  packaged modules so the shim ships.
+
+### Added
+
+- **`docs/kernels.md` — the kernel catalogue.** All 27 launched kernels with shape, dtype, grid,
+  tiling knobs and the constraint that makes each one legal (e.g. the fp16 exactness bound that
+  `gemm_modq` depends on, the three-byte `dv=5` packing case, why `pow_mac` needs no `tl.gather`).
+  Plus the 10 inline `@triton.jit` helpers and the reason one of them cannot be factored out.
+- **`benchmarks/bench.py`** — one entry point: `--scheme {mlkem,mldsa} [--op …]`, dispatching to
+  the per-scheme measurement scripts so that reproducing a table means running the same code that
+  produced it, not a re-implementation. `--list` shows what is available.
+
 ## 0.2.0 — ML-DSA verification, and Keccak/NTT as shared primitives
 
 Two things, and they are related: **ML-DSA verification was never the problem; the Toeplitz
@@ -17,10 +46,10 @@ scheme-independent primitives, and both schemes are thin layers on top.
 | end-to-end (numpy → GPU → bool) | 3.2 µs | 4.1 µs | 5.7 µs |
 | vs liboqs 0.16.0, 16 processes | 5.6× | 5.6× | 5.4× |
 
-- `mlkem_triton.mldsa.Verifier`: one long-lived public key, batch verification through the
+- `triton_crypto.mldsa.Verifier`: one long-lived public key, batch verification through the
   external interface (with `ctx`), the pre-hash interface (HashML-DSA), the internal interface,
   or an externally supplied `μ`.
-- `mlkem_triton.mldsa.ref`: a complete numpy FIPS 204 implementation (keygen, sign, verify),
+- `triton_crypto.mldsa.ref`: a complete numpy FIPS 204 implementation (keygen, sign, verify),
   byte-exact against ACVP keyGen (75 vectors) and sigGen (360, deterministic *and* hedged) and
   180/180 on sigVer. It is the oracle the GPU kernels are tested against, and the reason the
   tests need no third-party package.
@@ -52,7 +81,7 @@ scheme-independent primitives, and both schemes are thin layers on top.
   instead of a `±1` multiply, one reduction per output): **1.995 → 1.198 ms** on the same 24 576
   rows, bit-identical — measured against the pre-refactor kernel from git, not assumed. ML-KEM
   results are unchanged either way.
-- `mlkem_triton/kernels/ntt.py` keeps only what is ML-KEM's: the base-case multiply
+- `triton_crypto/kernels/ntt.py` keeps only what is ML-KEM's: the base-case multiply
   (`pow_mac`), `ByteEncode_12`, and a `forward_ntt` that delegates to the primitive.
 - No ML-KEM behaviour change: the 264 existing tests (including byte-exact keygen and the ACVP
   vectors) pass unmodified, and the kernel body/tables/launch config are the same.

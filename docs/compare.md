@@ -1,6 +1,6 @@
 # Systematic comparison with existing GPU Kyber / ML-KEM implementations
 
-> "Ours" = `mlkem-triton`. Objects: NVIDIA cuPQC, HI-Kyber (Nanjing University of Posts and
+> "Ours" = `triton-crypto-kernels`. Objects: NVIDIA cuPQC, HI-Kyber (Nanjing University of Posts and
 > Telecommunications, 2023), ConvKyber (TCHES 2024), and the OAK paper from
 > `dspace.hansung.ac.kr`. **Every number for our implementation is measured**; machines,
 > commands and full tables are in [docs/benchmarks.md](benchmarks.md). Every number for the

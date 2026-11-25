@@ -1,15 +1,27 @@
-# mlkem-triton
+# triton-crypto-kernels
 
-**ML-KEM (FIPS 203) and ML-DSA (FIPS 204) verification in pure Triton — with ML-KEM's NTT
-replaced by Toeplitz matrix multiplication, and the Keccak / NTT primitives shared between
-both schemes.**
+**Post-quantum cryptography kernels in pure Triton.** No inline assembly, no vendor-specific
+intrinsics: one code base that runs on Intel, NVIDIA and AMD GPUs.
 
-Batched decapsulation, encapsulation and key generation for ML-KEM, batched signature
-verification for ML-DSA. No inline assembly, no vendor-specific intrinsics: ML-KEM's
-polynomial multiplication is folded into a fixed matrix and handed straight to the fp16
-tensor cores — except in keygen, which genuinely needs an NTT. ML-DSA verification needs no
-such trick: its only multiplications are already in the NTT domain, so it uses the shared NTT
-primitive at q = 8380417 (see [ML-DSA](#ml-dsa-fips-204-signature-verification)).
+| layer | contents | contracts |
+|---|---|---|
+| `triton_crypto.primitives` | Keccak-f[1600]; the sponge (SHA3 / SHAKE, any rate and output length, batched); a parameterised negacyclic NTT over `Z_q[X]/(X^n+1)` for any `q` and 2N-th root of unity, forward and inverse | [docs/kernels.md](docs/kernels.md) |
+| schemes | ML-KEM (FIPS 203) — keygen, encapsulate, decapsulate · ML-DSA (FIPS 204) — signature verification | below |
+
+Every kernel the library launches is documented with its shape / dtype / grid contract in
+[docs/kernels.md](docs/kernels.md). That catalogue, not the list of schemes, is the part meant to
+be reused: the schemes are thin, the kernels are not.
+
+*Numbers at a glance*, device-side at batch ≥ 4096: ML-KEM-768 `decaps` **125 ns/op** (GB10),
+ML-DSA-44 `verify` **1.9 µs/op** (Arc B390). Every figure here is compared against an optimised
+baseline measured **on the same machine** — liboqs single-thread, liboqs over 16 processes, and
+NVIDIA cuPQC — never against the NIST reference implementation; that is where the 1000× numbers
+in the literature come from. Tables, baselines and the measurement conventions:
+[docs/benchmarks.md](docs/benchmarks.md).
+
+## Usage
+
+ML-KEM, all three operations:
 
 > ### Naming: this is ML-KEM, not Kyber round-3
 >
@@ -20,7 +32,7 @@ primitive at q = 8380417 (see [ML-DSA](#ml-dsa-fips-204-signature-verification))
 > there is **not a single Kyber KAT** in this repo.
 
 ```python
-from mlkem_triton import Decapsulator, Encapsulator, generate_keypairs
+from triton_crypto import Decapsulator, Encapsulator, generate_keypairs
 
 dec = Decapsulator("ML-KEM-768", dk)  # dk uploaded to the GPU once
 keys = dec.decaps(ciphertexts)  # list[bytes] / np.ndarray -> [B, 32] uint8
@@ -38,6 +50,17 @@ cts, keys = enc.encapsulate(msgs)  # 32 random bytes each -> [B, 1088] / [B, 32]
 **keygen is the weak operation** — 4–5× slower than the other two, and 2.7× slower than
 NVIDIA cuPQC. The other two are 1.61× and 2.27× *faster* than cuPQC on the same card. See
 [docs/compare.md](docs/compare.md).
+
+ML-DSA, verification only (one long-lived public key, batched signatures):
+
+```python
+from triton_crypto.mldsa import Verifier
+
+ok = Verifier("ML-DSA-65", pk).verify(messages, signatures)  # -> [B] bool
+```
+
+The pre-0.3 import name `mlkem_triton` still works — a shim maps it onto this package — and will
+be removed in 0.4.0.
 
 ---
 
@@ -58,11 +81,13 @@ kernels. Full argument, fusion catalogue and Triton pitfalls: [docs/design.md](d
 
 ## Install
 
-**Not on PyPI yet** — the name is unregistered, so `pip install mlkem-triton` fails with
-"No matching distribution found". Install from GitHub until it is published:
+**Not on PyPI yet** — the distribution name `triton-crypto-kernels` is unregistered, so
+`pip install triton-crypto-kernels` fails with "No matching distribution found" until the first
+release. Install from GitHub meanwhile (the GitHub repository itself is still called
+`mlkem-triton` and will be renamed together with the 0.3.0 tag):
 
 ```bash
-pip install "mlkem-triton @ git+https://github.com/lwzhenglittle/mlkem-triton.git"
+pip install "triton-crypto-kernels @ git+https://github.com/lwzhenglittle/mlkem-triton.git"
 ```
 
 Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. Nothing needs compiling, and the wheel is
@@ -77,10 +102,10 @@ git clone https://github.com/lwzhenglittle/mlkem-triton && cd mlkem-triton
 pip install -e ".[test,ref]" && pytest
 ```
 
-## Usage
+## Usage details
 
 ```python
-from mlkem_triton import Decapsulator
+from triton_crypto import Decapsulator
 
 dec = Decapsulator("ML-KEM-768", dk)  # device=None -> picks cuda / xpu automatically
 keys = dec.decaps(ciphertexts)  # -> np.ndarray [B, 32] uint8
@@ -144,7 +169,7 @@ is built; a signature then costs one BitUnpack, `l + k + 1` transforms, `k·l` p
 products and three SHAKE calls.
 
 ```python
-from mlkem_triton.mldsa import Verifier
+from triton_crypto.mldsa import Verifier
 
 v = Verifier("ML-DSA-65", pk)  # pk preprocessing, once
 ok = v.verify(messages, signatures)  # -> np.ndarray[bool], any batch size
@@ -190,7 +215,7 @@ next section exists.
 
 ## Shared primitives: Keccak and NTT are not scheme-specific
 
-`mlkem_triton/primitives/` is the layer both standards sit on. Neither module knows which
+`triton_crypto/primitives/` is the layer both standards sit on. Neither module knows which
 scheme is calling it.
 
 | module | what it is | consumers |
@@ -200,7 +225,7 @@ scheme is calling it.
 | `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`, forward **and** inverse | both |
 
 ```python
->>> from mlkem_triton.primitives import KYBER, DILITHIUM
+>>> from triton_crypto.primitives import KYBER, DILITHIUM
 >>> KYBER.q, KYBER.zeta, KYBER.layers, KYBER.wide      # ML-KEM: 7 layers, order-N ζ
 (3329, 17, 7, False)
 >>> DILITHIUM.q, DILITHIUM.zeta, DILITHIUM.layers, DILITHIUM.wide   # ML-DSA: 8 layers, order-2N ζ
@@ -214,7 +239,7 @@ Same butterfly, two instantiations. Two differences are *not* unified, on purpos
    Montgomery reduction (measured 1.9× faster on the transform, and bit-identical).
 2. **what a product means afterwards** — ML-KEM's ζ has order `N`, so the transform stops
    after 7 layers and its 128 CRT slots are the quadratic extensions `Z_q[X]/(X²−γ)`: the
-   pointwise step is FIPS 203 Alg. 12's base-case multiply (`mlkem_triton.ntt_ref`). ML-DSA's
+   pointwise step is FIPS 203 Alg. 12's base-case multiply (`triton_crypto.ntt_ref`). ML-DSA's
    ζ has order `2N`, the transform splits all 256 slots, and the pointwise step is a plain
    Hadamard product (`DILITHIUM.mul`). Unifying *that* would be wrong for one of the schemes,
    so it stays in the scheme layer.

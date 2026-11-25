@@ -1,6 +1,6 @@
 """ML-KEM (FIPS 203) reference helpers in numpy.
 
-The **transform itself is generic** and lives in `mlkem_triton.primitives.ntt`; what is
+The **transform itself is generic** and lives in `triton_crypto.primitives.ntt`; what is
 kept here is what is specific to ML-KEM:
 
 - `multiply_ntts`, the base-case multiplication in the quadratic extension

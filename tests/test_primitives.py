@@ -21,8 +21,8 @@ import hashlib
 import numpy as np
 import pytest
 
-from mlkem_triton import ntt_ref as kem_ref
-from mlkem_triton.primitives import (
+from triton_crypto import ntt_ref as kem_ref
+from triton_crypto.primitives import (
     DILITHIUM,
     HASHES,
     KYBER,
@@ -32,7 +32,7 @@ from mlkem_triton.primitives import (
     pad_batch,
     padded_len,
 )
-from mlkem_triton.primitives.ntt import bitrev
+from triton_crypto.primitives.ntt import bitrev
 
 
 def _rnd(n, q, seed=0):
@@ -64,7 +64,7 @@ def test_mlkem_zetas_still_match_fips203_table():
 
 
 def test_bad_domain_is_rejected():
-    from mlkem_triton.primitives.ntt import NTTDomain
+    from triton_crypto.primitives.ntt import NTTDomain
 
     with pytest.raises(ValueError):
         NTTDomain("bogus", q=3329, n=256, zeta=3, layers=7)

@@ -19,17 +19,17 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from mlkem_triton.mldsa import acvp
-from mlkem_triton.mldsa.kernels import (
+from triton_crypto.mldsa import acvp
+from triton_crypto.mldsa.kernels import (
     hint_kernel,
     mac_kernel,
     sample_in_ball_kernel,
     unpack_z_kernel,
     w1_pack_kernel,
 )
-from mlkem_triton.mldsa.params import D
-from mlkem_triton.mldsa.ref import MLDSA
-from mlkem_triton.mldsa.verify import Verifier
+from triton_crypto.mldsa.params import D
+from triton_crypto.mldsa.ref import MLDSA
+from triton_crypto.mldsa.verify import Verifier
 
 pytest.importorskip("triton")
 
@@ -155,7 +155,7 @@ def test_sample_in_ball_kernel(ps):
     padded[:, : p.ctilde_bytes] = ctilde
     padded[:, p.ctilde_bytes] = 0x1F
     padded[:, -1] |= 0x80
-    from mlkem_triton.primitives.sponge import sponge_padded
+    from triton_crypto.primitives.sponge import sponge_padded
 
     buf = sponge_padded(_dev(padded), RATE, RATE)  # the XOF stream, not the padded input
     out = torch.empty((4, 256), dtype=torch.int32, device=DEV)
@@ -204,7 +204,7 @@ def test_w1_pack_kernel(ps):
 @pytest.mark.parametrize("ps", PS)
 def test_mac_kernel(ps):
     """ŵ = Â·ẑ − ĉ·t̂1 against the reference, in the NTT domain."""
-    from mlkem_triton.primitives.ntt import DILITHIUM, ntt_np
+    from triton_crypto.primitives.ntt import DILITHIUM, ntt_np
 
     m = MLDSA(ps)
     p = m.p

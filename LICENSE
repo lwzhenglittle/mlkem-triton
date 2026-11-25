@@ -203,7 +203,7 @@
 
    ----------------------------------------------------------------------
 
-   Copyright 2026 mlkem-triton contributors
+   Copyright 2026 triton-crypto-kernels contributors
 
    This project implements ML-KEM (FIPS 203), a NIST standard. The algorithm
    itself is public domain / freely implementable.

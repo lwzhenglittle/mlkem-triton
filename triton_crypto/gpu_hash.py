@@ -5,7 +5,7 @@ device instead of crossing to the host and back once per message. The sponge ker
 its input padding account for 16.5% of device time on GB10 and 24.5% on Intel — see
 docs/benchmarks.md.
 
-The sponge itself is scheme-agnostic and lives in `mlkem_triton.primitives.sponge`; what
+The sponge itself is scheme-agnostic and lives in `triton_crypto.primitives.sponge`; what
 is left here is the ML-KEM call pattern (which rate/domain each FIPS 203 function uses)
 and CBD, which is ML-KEM-only sampling.
 """

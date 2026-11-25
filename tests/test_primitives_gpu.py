@@ -14,7 +14,7 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from mlkem_triton.primitives import (
+from triton_crypto.primitives import (
     DILITHIUM,
     HASHES,
     KYBER,
@@ -24,7 +24,7 @@ from mlkem_triton.primitives import (
     ntt_torch,
     sponge_padded,
 )
-from mlkem_triton.primitives.sponge import pad_batch, pad_torch
+from triton_crypto.primitives.sponge import pad_batch, pad_torch
 
 pytest.importorskip("triton")
 
@@ -108,7 +108,7 @@ def test_gpu_ntt_ring_identities():
 
 
 def test_mlkem_gpu_ntt_feeds_basecase_product():
-    from mlkem_triton import ntt_ref as kem_ref
+    from triton_crypto import ntt_ref as kem_ref
 
     rng = np.random.default_rng(4)
     a = rng.integers(0, KYBER.q, 256, dtype=np.int64)

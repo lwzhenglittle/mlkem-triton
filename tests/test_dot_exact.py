@@ -22,7 +22,7 @@ import pytest
 import torch
 from _common import DEV
 
-from mlkem_triton.devices import describe, sync
+from triton_crypto.devices import describe, sync
 
 xpu_ok = True  # device availability is skipped centrally by tests/conftest.py (HAS_GPU)
 

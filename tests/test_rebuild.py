@@ -12,11 +12,11 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from mlkem_triton import acvp, keyprep
-from mlkem_triton.kernels.rebuild import GpuKeyRebuilder, intt_matrix
-from mlkem_triton.ntt_ref import intt
-from mlkem_triton.params import N, Q
-from mlkem_triton.pipeline import Decapsulator
+from triton_crypto import acvp, keyprep
+from triton_crypto.kernels.rebuild import GpuKeyRebuilder, intt_matrix
+from triton_crypto.ntt_ref import intt
+from triton_crypto.params import N, Q
+from triton_crypto.pipeline import Decapsulator
 
 pytest.importorskip("triton")
 

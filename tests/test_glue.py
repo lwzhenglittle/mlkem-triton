@@ -14,7 +14,7 @@ import pytest
 import torch
 from _common import DEV
 
-from mlkem_triton.kernels import glue
+from triton_crypto.kernels import glue
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
@@ -34,7 +34,7 @@ def _acc_data(rows, B, seed=0):
 
 
 def _ref_pack(V, acc, B):
-    from mlkem_triton.pipeline import compress_gpu, pack_bits_gpu
+    from triton_crypto.pipeline import compress_gpu, pack_bits_gpu
 
     w = (V.to(torch.int32) - acc.to(torch.int32)) % Q
     m_bits = compress_gpu(w, 1)
@@ -111,7 +111,7 @@ def test_fallback_checks():
 
 def test_fused_enc_gemm_accepts_built_ye():
     """Regression: build_ye's Y must be contiguous, else fused_enc_gemm silently falls back."""
-    from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
+    from triton_crypto.kernels.fused_gemm import fused_enc_gemm
 
     k, B = 3, 512
     y, e, mb = _ye_data(k, B, seed=9)
@@ -127,8 +127,8 @@ def test_decaps_matches_legacy_formula():
     """Whole decaps is byte-identical to the "legacy formulation" on random input
     (B=37, two parameter sets).
     """
-    from mlkem_triton import refimpl
-    from mlkem_triton.pipeline import Decapsulator
+    from triton_crypto import refimpl
+    from triton_crypto.pipeline import Decapsulator
 
     for ps in ("ML-KEM-768", "ML-KEM-1024"):
         ek, dk = refimpl.ref_keygen(ps)
@@ -152,7 +152,7 @@ def _buf_data(k, B, seed=0):
 
 
 def _ref_cbd_ye(y_buf, e_buf, mb, B, k):
-    from mlkem_triton.pipeline import cbd_gpu
+    from triton_crypto.pipeline import cbd_gpu
 
     y = cbd_gpu(y_buf, 2).reshape(B, k, 256)
     e = cbd_gpu(e_buf, 2).reshape(B, k + 1, 256)
@@ -186,8 +186,8 @@ def test_cbd_ye_fallback_checks():
 
 def test_all_paramsets_decaps_bytewise():
     """All three parameter sets (incl. ML-KEM-512's eta1=3 fallback) end to end, bytewise."""
-    from mlkem_triton import refimpl
-    from mlkem_triton.pipeline import Decapsulator
+    from triton_crypto import refimpl
+    from triton_crypto.pipeline import Decapsulator
 
     for ps in ("ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"):
         ek, dk = refimpl.ref_keygen(ps)
@@ -203,9 +203,9 @@ def test_all_paramsets_decaps_bytewise():
 
 def test_decaps_fallback_paths(monkeypatch):
     """Force the fusion checks off; verify both fallback paths are still bytewise correct."""
-    from mlkem_triton import refimpl
-    from mlkem_triton.kernels import glue
-    from mlkem_triton.pipeline import Decapsulator
+    from triton_crypto import refimpl
+    from triton_crypto.kernels import glue
+    from triton_crypto.pipeline import Decapsulator
 
     ps = "ML-KEM-768"
     ek, dk = refimpl.ref_keygen(ps)

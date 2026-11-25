@@ -19,7 +19,7 @@ from torch.library import custom_op
 
 from .devices import warps
 
-LIB = "mlkem_triton"
+LIB = "triton_crypto"
 
 # constants kept in sync with primitives/sponge.py
 BLOCK = 128

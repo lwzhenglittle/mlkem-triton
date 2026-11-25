@@ -22,8 +22,8 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from mlkem_triton import acvp, describe, resolve_device
-from mlkem_triton.pipeline import Decapsulator
+from triton_crypto import acvp, describe, resolve_device
+from triton_crypto.pipeline import Decapsulator
 
 
 def main() -> int:
@@ -86,7 +86,7 @@ def main() -> int:
 
 
 def _sync(dev):
-    from mlkem_triton.devices import sync
+    from triton_crypto.devices import sync
 
     sync(dev)
 

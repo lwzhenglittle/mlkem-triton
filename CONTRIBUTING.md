@@ -32,7 +32,7 @@ Hardware:
   device-dependent cases centrally. **This project has no GPU CI** — the tests are run by hand
   on real machines, so please state in your PR which hardware you ran.
 - **Just reading the code or running the reference implementation**: CPU is enough;
-  `mlkem_triton.ntt_ref` and `keyprep` are pure numpy.
+  `triton_crypto.ntt_ref` and `keyprep` are pure numpy.
 
 ## Tests
 
@@ -63,7 +63,7 @@ Four layers:
 
 ## Adding a backend
 
-Only `mlkem_triton/devices.py` needs to change:
+Only `triton_crypto/devices.py` needs to change:
 
 1. add the device type to `available_devices()` / `_check_available()`;
 2. add a tile configuration to `_GEMM_CFG`. It must satisfy the divisibility constraints

@@ -3,25 +3,30 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "mlkem-triton"
-version = "0.2.0"
-description = "ML-KEM (FIPS 203) keygen/encaps/decaps and ML-DSA (FIPS 204) verification in pure Triton; Toeplitz GEMM for ML-KEM, shared Keccak/NTT primitives"
+name = "triton-crypto-kernels"
+version = "0.3.0"
+description = "Portable PQC kernels in pure Triton: ML-KEM (FIPS 203) and ML-DSA (FIPS 204), built on shared Keccak, sponge and parameterised NTT primitives"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
-authors = [{ name = "mlkem-triton contributors" }]
+authors = [{ name = "triton-crypto-kernels contributors" }]
 keywords = [
+    "post-quantum",
+    "pqc",
     "ml-kem",
     "ml-dsa",
+    "kyber",
     "dilithium",
-    "post-quantum",
     "fips-203",
     "fips-204",
+    "keccak",
+    "shake",
+    "ntt",
     "triton",
     "gpu",
+    "intel",
     "gemm",
     "toeplitz",
-    "ntt",
 ]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
@@ -44,7 +49,7 @@ ref = ["kyber-py>=1.0"]
 test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
-include = ["mlkem_triton*"]
+include = ["triton_crypto*", "mlkem_triton*"]
 
 
 [tool.pytest.ini_options]
@@ -74,15 +79,15 @@ ignore = [
 "tests/*" = ["B011"]        # generated parametrize cases are allowed a bare assert
 # ML-DSA's dimensions are literally called k and l in FIPS 204; renaming them would make the
 # code harder to check against the spec, so the "ambiguous name" rules are off for that package.
-"mlkem_triton/mldsa/*" = ["E741", "E743"]
+"triton_crypto/mldsa/*" = ["E741", "E743"]
 "benchmarks/*" = ["E402"]   # sys.path first, import after: normal for a script
 # Inside a Triton kernel `if CONST: ... else: ...` is a **compile-time** branch, far clearer
 # than a conditional expression -- and a conditional expression lowers to two branches plus a
 # select under jit. SIM108/SIM102 do not apply here.
-"mlkem_triton/kernels/*" = ["SIM108", "SIM102"]
+"triton_crypto/kernels/*" = ["SIM108", "SIM102"]
 # Same reason in the parameterised NTT kernel: `if MONT: ... else: ...` selects an arithmetic
 # path at compile time.
-"mlkem_triton/primitives/ntt.py" = ["SIM108"]
+"triton_crypto/primitives/ntt.py" = ["SIM108"]
 
 [tool.ruff.format]
 quote-style = "double"

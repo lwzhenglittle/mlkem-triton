@@ -1,6 +1,6 @@
 """ML-DSA (FIPS 204) signature verification on the GPU, plus a numpy reference.
 
-    from mlkem_triton.mldsa import Verifier
+    from triton_crypto.mldsa import Verifier
     v = Verifier("ML-DSA-65", pk)             # pk preprocessing, once
     ok = v.verify(messages, signatures)       # -> np.ndarray[bool], batch
 

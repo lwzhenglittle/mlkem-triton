@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 import torch
 
-from mlkem_triton import keyprep, refimpl
-from mlkem_triton.params import Q
+from triton_crypto import keyprep, refimpl
+from triton_crypto.params import Q
 
 pytest.importorskip("triton")
 
 from _common import DEV
 
-from mlkem_triton.kernels.gemm_modq import gemm_modq, gemm_modq_int8
+from triton_crypto.kernels.gemm_modq import gemm_modq, gemm_modq_int8
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 

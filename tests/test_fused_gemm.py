@@ -32,7 +32,7 @@ def _data(M, B, pivot, seed=0):
 
 
 def _ref(W, Y, E, B, pivot, du, dv, ref1, ref2):
-    from mlkem_triton.pipeline import _cmp_kernel, _gemm_fp32
+    from triton_crypto.pipeline import _cmp_kernel, _gemm_fp32
 
     M = W.shape[0]
     cnt = torch.zeros(B, device=DEV, dtype=torch.int32)
@@ -51,7 +51,7 @@ def _ref(W, Y, E, B, pivot, du, dv, ref1, ref2):
 @pytest.mark.parametrize("M", [1024, 768, 256, 1280])
 @pytest.mark.parametrize("B", [256, 512, 4096, 1000])
 def test_bitwise_equal(M, B):
-    from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
+    from triton_crypto.kernels.fused_gemm import fused_enc_gemm
 
     du, dv = 10, 4
     pivot = M - 256
@@ -90,8 +90,8 @@ def test_accumulates_like_ops_cmp():
     """Two calls (the du segment and the dv segment separately) accumulate into the
     same cnt, as ops.cmp does.
     """
-    from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
-    from mlkem_triton.pipeline import _cmp_kernel
+    from triton_crypto.kernels.fused_gemm import fused_enc_gemm
+    from triton_crypto.pipeline import _cmp_kernel
 
     du, dv, M, B, pivot = 10, 4, 1024, 512, 768
     W, Y, E = _data(M, B, pivot)
@@ -112,7 +112,7 @@ def test_accumulates_like_ops_cmp():
 
 
 def test_single_ref_tensor():
-    from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
+    from triton_crypto.kernels.fused_gemm import fused_enc_gemm
 
     du, dv, M, B, pivot = 10, 4, 1024, 512, 768
     W, Y, E = _data(M, B, pivot)
@@ -130,7 +130,7 @@ def test_single_ref_tensor():
 
 def test_fallback_returns_false():
     """Must return False when shape/dtype do not fit, and leave cnt untouched."""
-    from mlkem_triton.kernels.fused_gemm import fused_enc_gemm
+    from triton_crypto.kernels.fused_gemm import fused_enc_gemm
 
     du, dv, M, B, pivot = 10, 4, 1024, 512, 768
     W, Y, E = _data(M, B, pivot)
@@ -194,8 +194,8 @@ def _dec_data(M, B, seed=0):
 
 
 def _dec_ref(W, U, V, B):
-    from mlkem_triton.kernels.glue import compress_pack
-    from mlkem_triton.pipeline import _gemm_fp32
+    from triton_crypto.kernels.glue import compress_pack
+    from triton_crypto.pipeline import _gemm_fp32
 
     return compress_pack(V, _gemm_fp32(W, U), B)
 
@@ -203,7 +203,7 @@ def _dec_ref(W, U, V, B):
 @pytest.mark.parametrize("B", [1, 37, 256, 4096, 1000])
 def test_dec_bitwise_equal(B):
     """Real case (M=256): must be byte-identical to "fp32 GEMM + glue.compress_pack"."""
-    from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
+    from triton_crypto.kernels.fused_gemm import fused_dec_gemm
 
     W, U, V = _dec_data(256, B)
     ref = _dec_ref(W, U, V, B)
@@ -220,8 +220,8 @@ def test_dec_general_M(M, B):
     """Must also be correct when M is not 256 (`glue.compress_pack` only supports 256,
     so this checks against the definition).
     """
-    from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
-    from mlkem_triton.pipeline import _gemm_fp32
+    from triton_crypto.kernels.fused_gemm import fused_dec_gemm
+    from triton_crypto.pipeline import _gemm_fp32
 
     W, U, V = _dec_data(M, B, seed=M)
     got = fused_dec_gemm(W, U, V, B)
@@ -237,7 +237,7 @@ def test_dec_general_M(M, B):
 @pytest.mark.parametrize("B", [1, 1000])
 def test_dec_matches_operand_dtype(B):
     """U is fp16, V is int16; mixing them must work (regression: do not read V as fp16)."""
-    from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
+    from triton_crypto.kernels.fused_gemm import fused_dec_gemm
 
     W, U, V = _dec_data(256, B, seed=7)
     V = (V * 800).to(torch.int16)  # make (V - acc) land in the negative range
@@ -245,7 +245,7 @@ def test_dec_matches_operand_dtype(B):
 
 
 def test_dec_falls_back_on_bad_shapes():
-    from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
+    from triton_crypto.kernels.fused_gemm import fused_dec_gemm
 
     W, U, V = _dec_data(256, 64)
     assert fused_dec_gemm(W.double(), U, V, 64) is None
@@ -260,8 +260,8 @@ def test_dec_gemm_mod_q_matches_definition():
     """Direct semantic check: row b of m_bytes is the bit packing of
     compress_1((v - W@u) mod q).
     """
-    from mlkem_triton.kernels.fused_gemm import fused_dec_gemm
-    from mlkem_triton.pipeline import _gemm_fp32
+    from triton_crypto.kernels.fused_gemm import fused_dec_gemm
+    from triton_crypto.pipeline import _gemm_fp32
 
     M, B = 256, 128
     W, U, V = _dec_data(M, B, seed=3)

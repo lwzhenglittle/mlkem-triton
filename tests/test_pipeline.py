@@ -6,12 +6,12 @@ import numpy as np
 import pytest
 import torch
 
-from mlkem_triton import acvp, refimpl
-from mlkem_triton.params import Q
+from triton_crypto import acvp, refimpl
+from triton_crypto.params import Q
 
 pytest.importorskip("triton")
 
-from mlkem_triton.kernels import elementwise as ew
+from triton_crypto.kernels import elementwise as ew
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
@@ -57,7 +57,7 @@ PARAM_SETS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
 
 @pytest.mark.parametrize("ps", PARAM_SETS)
 def test_pipeline_roundtrip(ps):
-    from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
+    from triton_crypto.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     ek, dk = refimpl.ref_keygen(ps)
     dec = Decapsulator(ps, dk)
@@ -73,7 +73,7 @@ def test_pipeline_roundtrip(ps):
 
 @pytest.mark.parametrize("B", [1, 2, 3])
 def test_pipeline_batch_sizes(B):
-    from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
+    from triton_crypto.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     ps = "ML-KEM-768"
     ek, dk = refimpl.ref_keygen(ps)
@@ -89,7 +89,7 @@ def test_pipeline_batch_sizes(B):
 
 def test_pipeline_implicit_rejection():
     """Tampered ciphertexts must take the implicit-rejection path and match the reference."""
-    from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
+    from triton_crypto.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     ps = "ML-KEM-768"
     ek, dk = refimpl.ref_keygen(ps)
@@ -115,7 +115,7 @@ def test_pipeline_official_acvp_decaps(ps):
     """Official ACVP decapsulation vectors (including implicit rejection) run through
     the whole pipeline.
     """
-    from mlkem_triton.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
+    from triton_crypto.pipeline_host_hash import ReferenceDecapsulator as Decapsulator
 
     cases = [c for c in acvp.load() if c["function"] == "decapsulation" and c["parameterSet"] == ps]
     assert cases

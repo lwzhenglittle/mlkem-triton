@@ -21,9 +21,9 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from mlkem_triton import describe, resolve_device
-from mlkem_triton.devices import sync
-from mlkem_triton.keygen import KeyGenerator
+from triton_crypto import describe, resolve_device
+from triton_crypto.devices import sync
+from triton_crypto.keygen import KeyGenerator
 
 # cuPQC on GB10, same machine (pure kernel): keygen 173.9 ns (BD=32) / 194.9 ns (default)
 CUPQC_KEYGEN_NS = {"tuned": 173.9, "default": 194.9}

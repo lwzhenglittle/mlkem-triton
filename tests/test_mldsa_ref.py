@@ -6,7 +6,7 @@ Three independent gates, all from usnistgov/ACVP-Server:
     sigGen  360 cases   (sk, M) -> signature, byte-exact, deterministic *and* hedged
     sigVer  180 cases   (pk, M, σ) -> true/false, including all the invalid ones
 
-The vector files live in `data/acvp-mldsa/`; see `mlkem_triton.mldsa.acvp` for the
+The vector files live in `data/acvp-mldsa/`; see `triton_crypto.mldsa.acvp` for the
 download locations. `-k "acvp and keygen or acvp and sigver"` is the fast subset.
 """
 
@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import pytest
 
-from mlkem_triton.mldsa import acvp
-from mlkem_triton.mldsa.ref import MLDSA
+from triton_crypto.mldsa import acvp
+from triton_crypto.mldsa.ref import MLDSA
 
 pytest.importorskip("triton")  # the reference imports the primitives package
 
@@ -135,7 +135,7 @@ def test_roundtrip_keygen_sign_verify(ps):
 
 @pytest.mark.parametrize("ps", PS)
 def test_sizes_match_fips204(ps):
-    from mlkem_triton.mldsa.params import PARAMS
+    from triton_crypto.mldsa.params import PARAMS
 
     spec = {
         "ML-DSA-44": (1312, 2560, 2420),

@@ -33,10 +33,10 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from mlkem_triton import acvp, describe, resolve_device
-from mlkem_triton.devices import sync
-from mlkem_triton.kernels.rebuild import GpuKeyRebuilder
-from mlkem_triton.pipeline import Decapsulator
+from triton_crypto import acvp, describe, resolve_device
+from triton_crypto.devices import sync
+from triton_crypto.kernels.rebuild import GpuKeyRebuilder
+from triton_crypto.pipeline import Decapsulator
 
 # reference: NVIDIA cuPQC measured on GB10 (BD=32, batch 262144, pure kernel)
 CUPQC_NS = {"GB10": 201.7, "H100(official)": 117.6}
@@ -88,7 +88,7 @@ def main() -> int:
     # ---- cost of each rebuild stage ----
     r_min, _ = _bench(lambda: rb.rebuild(dk), dev, n=args.iters)
     out64_w = 5 * 168 // 8
-    from mlkem_triton.kernels.rebuild import _padded_msgs
+    from triton_crypto.kernels.rebuild import _padded_msgs
 
     msgs = _padded_msgs(rb.rho_of(dk), k)
     if msgs is not None:

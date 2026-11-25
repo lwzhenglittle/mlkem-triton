@@ -81,7 +81,7 @@ usable CPU target, so with no accelerator present `resolve_device` raises.
 ## 3. Project structure
 
 ```
-mlkem_triton/
+triton_crypto/
 ├── devices.py             backend detection, per-backend tile config, num_warps override
 ├── params.py              FIPS 203 parameter sets
 ├── keyprep.py             private key -> W_dec / W_enc (numpy, host side)

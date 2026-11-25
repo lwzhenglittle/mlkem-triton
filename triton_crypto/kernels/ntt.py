@@ -1,6 +1,6 @@
 """ML-KEM-specific NTT-domain kernels: pointwise multiply-accumulate and ByteEncode_12.
 
-The transform itself is **not** here any more: `mlkem_triton.primitives.ntt` owns the
+The transform itself is **not** here any more: `triton_crypto.primitives.ntt` owns the
 negacyclic NTT, parameterised by the domain (q, N, ζ), and ML-KEM is just the
 `q = 3329, ζ = 17, int32` instance of it. What stays in this module is what genuinely
 depends on ML-KEM's layout:
