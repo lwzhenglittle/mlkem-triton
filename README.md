@@ -213,6 +213,55 @@ next section exists.
 
 ---
 
+## SLH-DSA (FIPS 205) signature verification
+
+Hash-based, so it needs no arithmetic of its own: every operation is a single-block SHAKE256
+permutation, and the scheme sits directly on `primitives.sponge`. Verification recomputes the
+hypertree root from the signature and compares it with the public key — no secrets, no early exit,
+no data-dependent branches beyond the WOTS+ digits.
+
+Implemented: **the six SHAKE parameter sets**, verification only. The SHA-2 sets need SHA-256 /
+SHA-512 compression kernels that this repository does not have yet: the numpy reference
+implements them (and is ACVP-checked), the device path raises `NotImplementedError` rather than
+returning a wrong answer. Signing is out of scope, as with ML-DSA.
+
+| gate | result |
+|---|---|
+| ACVP `SLH-DSA-SHAKE-*` sigVer, all three interfaces, on device | **72/72** |
+| ACVP sigVer through the numpy reference (SHA-2 sets included) | **144/144** |
+| ACVP keyGen through the reference, pk *and* sk byte-exact | **120/120** |
+| device vs liboqs cross-implementation | agrees on all six SHAKE sets |
+
+Per signature, device-only at batch 4096 (Arc B390), against liboqs single-thread on the same
+machine and the same signatures:
+
+| set | device | liboqs 1T | speed-up |
+|---|---:|---:|---:|
+| SLH-DSA-SHAKE-128s | **26.1 µs** | 455 µs | 17.4× |
+| SLH-DSA-SHAKE-128f | **71.2 µs** | 1 329 µs | 18.7× |
+| SLH-DSA-SHAKE-192f | **109.8 µs** | 1 987 µs | 18.1× |
+| SLH-DSA-SHAKE-256f | **111.6 µs** | 1 963 µs | 17.6× |
+
+**The speed-up is real but it is not the 10³× the literature reports**, and the reason is worth
+stating: those figures compare against the NIST reference implementation, not against an
+optimised CPU. Measured against liboqs on the same machine, 18× is what a batch buys.
+
+Why the batch is needed: one verification is 2k–12k hashes in a dependency chain, and the batch
+turns it into `B × 35` independent chains per layer. The schedule is one launch per chain step —
+`d × 15` of them for 128f — and each hash is a fused kernel (`thash_kernel` in
+[docs/kernels.md](docs/kernels.md)) that builds `PK.seed ‖ ADRS ‖ data` in registers and permutes
+it, so no intermediate buffer is written. Small batches are pure launch overhead: at B = 1 a
+signature costs 37 ms, the crossover against the CPU is around **B ≈ 32**, and B ≥ 1024 is where
+the table above lives.
+
+```python
+from triton_crypto.slhdsa import Verifier
+
+v = Verifier("SLH-DSA-SHAKE-128f", pk)  # one long-lived public key, like ML-DSA
+ok = v.verify(messages, signatures)  # -> np.ndarray[B] bool; ctx=..., prehash=...
+ok = v.verify_mprime(mprimes, signatures)  # the "internal" interface: M' given directly
+```
+
 ## Shared primitives: Keccak and NTT are not scheme-specific
 
 `triton_crypto/primitives/` is the layer both standards sit on. Neither module knows which

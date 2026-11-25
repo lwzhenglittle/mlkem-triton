@@ -35,6 +35,9 @@ SCRIPTS = {
     "mldsa": {
         None: "bench_mldsa_verify.py",
     },
+    "slhdsa": {
+        None: "bench_slhdsa_verify.py",
+    },
 }
 
 SCHEME_INFO = {

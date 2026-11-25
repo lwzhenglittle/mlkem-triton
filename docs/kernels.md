@@ -50,6 +50,7 @@ variant.
 | `mac_kernel` | `mldsa/kernels.py` | ML-DSA | `(cdiv(b,MAC_BN), k)` | `Verifier._verify_device` |
 | `sample_in_ball_kernel` | `mldsa/kernels.py` | ML-DSA | `(b,)` | `Verifier._verify_device` |
 | `hint_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, k)` | `Verifier._verify_device` |
+| `thash_kernel` | `slhdsa/kernels.py` | SLH-DSA | `(cdiv(rows, BLOCK),)` | `slhdsa/verify.py` |
 | `w1_pack_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, k, cdiv(polyw1_bytes, BC))` | `Verifier._verify_device` |
 
 ---
@@ -273,6 +274,41 @@ zero). `OMEGA` (55/75/80) is not a power of two, hence the padded `OMEGA_P2` and
 `Decompose → UseHint → BitPack` (FIPS 204 Alg. 36/37/23) in one pass, `BC` output bytes per
 program. An `MB`-bit field (`MB ∈ {4, 6}`) spans at most two coefficients, so two loads suffice.
 `POLYB` masks the last, partially filled byte block.
+
+## SLH-DSA (FIPS 205)
+
+### `thash_kernel(SEED, OUT, DATA, RCP, KP, CHAIN, INDEX, TREE, rows, LAYER, TYPE, BLOCK)` — `slhdsa/kernels.py`
+
+`T_l` / `F` / `H` of FIPS 205 — that is, `SHAKE256(PK.seed ‖ ADRS ‖ data)` — with the absorption
+and the permutation in one launch. Generated per `(n, dn)`: for `n ∈ {16,24,32}` and
+`dn ∈ {n, 2n}` there are six kernels, each specialised on both sizes, so the padding offset is a
+compile-time constant.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `SEED` | `[n/8]` | `int64` | words of `PK.seed` (bit pattern, not numeric) |
+| `DATA` | `[rows, dn/8]` | `int64` | words of the message part, little-endian lane order |
+| `OUT` | `[rows, n/8]` | `int64` | the first `n` bytes of the digest |
+| `KP`, `CHAIN`, `INDEX`, `TREE` | `[rows]` | `int64` | the four variable ADRS fields |
+| `LAYER`, `TYPE` | scalar | `int64` | constant within a call |
+
+The ADRS is 32 bytes and every piece of the message starts on an 8-byte boundary (`n` is a
+multiple of 8, the ADRS is 32), so the 17 state words can be assembled arithmetically instead of
+building a byte buffer: `PK.seed ‖ ADRS ‖ data` is words `0..n/8-1`, `n/8..n/8+3`, `n/8+4..`. Each
+32-bit ADRS field is written big-endian by the scheme and read little-endian by the sponge, hence
+the byte swaps. `pad10*1` lands at a constant word/shift (`0x1F` after the message, `0x80` in byte
+135), so it is an OR against a constant.
+
+Why this exists: composing the buffer on the host and calling the sponge kernel costs several
+tensor writes per hash, and a 128f verification makes ~400 of them; the fused kernel took the
+128f cost from 172 µs to 71 µs per signature at B = 4096.
+
+`TREE` is passed as the int64 *bit pattern* (`torch` has no uint64): 256f's tree index is a full
+64 bits, and a signed shift would sign-extend it.
+
+Messages longer than one block (`T_l` over `len·n` bytes, at the top of each WOTS+ layer) go
+through `verify._thash_multi`, which composes the buffer and calls `sponge_padded` — a handful of
+launches per signature, not worth a second kernel.
 
 ---
 

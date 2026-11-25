@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.4.0 — SLH-DSA (FIPS 205) verification, and a fused `thash` kernel
+
+The first scheme in the box that needs no arithmetic at all: SLH-DSA is hash-based, so it runs
+entirely on the sponge this library already had. What it needed instead was a *scheduler* — the
+verification is a dependency chain of thousands of hashes — and a hash kernel cheap enough that
+400 launches per signature do not dominate.
+
+### Added — SLH-DSA (FIPS 205) verification
+
+- **The six SHAKE parameter sets**, verification only, batched, one long-lived public key. The
+  external interface (pure and pre-hash, with context strings) and the internal one (`M'` given)
+  are both supported, in `triton_crypto/slhdsa/`.
+- **A numpy reference** (`slhdsa/ref.py`) implementing Alg. 1–20 for *all twelve* sets, both
+  instantiations, plus `keygen_internal`. It is the oracle the device path is checked against, and
+  it is itself checked against the NIST vectors: 144/144 ACVP sigVer cases (SHA-2 included) and
+  120/120 keyGen cases with pk *and* sk byte-exact.
+- **`thash_kernel`** (`slhdsa/kernels.py`): `PK.seed ‖ ADRS ‖ data` assembled in registers and
+  permuted in one launch, specialised per `(n, dn)` so the padding is a constant. This is what
+  took 128f from 172 µs to **71 µs** per signature at B = 4096.
+- `benchmarks/bench_slhdsa_verify.py` and a `--scheme slhdsa` route in `benchmarks/bench.py`.
+
+Measured at batch 4096 against liboqs single-thread on the same machine: 26.1 µs (128s),
+71.2 µs (128f), 109.8 µs (192f), 111.6 µs (256f) — 17–19×. The crossover against the CPU is
+around B ≈ 32; below that the device is launch-bound.
+
+### Notes
+
+- **The SHA-2 sets are reference-only on device** (they need SHA-256/SHA-512 compression kernels);
+  the device path raises `NotImplementedError` rather than returning a wrong answer.
+- Two spec traps are documented where they bit: `WOTS_PK` / `FORS_ROOTS` addresses keep the key
+  pair field, and keygen builds the tree at layer `d-1` while verification walks layers up from 0.
+- `docs/kernels.md` §SLH-DSA has the kernel contract; `docs/benchmarks.md` §12 has the numbers and
+  the two caveats about CPU baselines.
+
 ## 0.3.0 — renamed to `triton-crypto-kernels`, and every kernel got a contract
 
 The package outgrew its name. 0.2.0 already had two schemes sitting on one primitive layer, but

@@ -320,3 +320,36 @@ at B = 4096.
 
 Per-stage device breakdown at B = 4096, ML-DSA-65 is in [design.md](design.md) §9: the transform
 is 77% of the time (`sib + NTT(z) + NTT(c)` 39%, `MAC + INTT` 38%).
+
+---
+
+## 12. SLH-DSA (FIPS 205) verification
+
+Device-only, `internal` interface (so context / pre-hash formatting is out of the picture),
+corpus = valid ACVP signatures tiled to the batch. Min of 3 reps; the CPU column is liboqs
+single-thread in the same process on the same signatures.
+
+| set | B | device / sig | liboqs 1T | speed-up |
+|---|---:|---:|---:|---:|
+| SHAKE-128s | 4096 | **26.1 µs** | 455 µs | 17.4× |
+| SHAKE-128f | 1024 | 83.0 µs | 1 329 µs | 16.0× |
+| SHAKE-128f | 4096 | **71.2 µs** | 1 329 µs | 18.7× |
+| SHAKE-192f | 4096 | **109.8 µs** | 1 987 µs | 18.1× |
+| SHAKE-256f | 4096 | **111.6 µs** | 1 963 µs | 17.6× |
+
+Batch curve for 128f, same corpus: B = 1 → 37.5 ms/sig (400 launches, nothing else), B = 8 →
+4.8 ms, B = 32 → 1.21 ms, B = 64 → 603 µs, B = 1024 → 83 µs, B = 4096 → 71 µs. The crossover
+against the CPU is around B ≈ 32, and everything below that is launch latency.
+
+Two honest notes on the comparison:
+
+- **The CPU baseline moves with the machine's clock state.** In the evaluation that preceded this
+  implementation, the same liboqs call measured 4.4 ms for 128f; on the same machine today it
+  measures 1.33 ms (six fresh signatures, 20 reps each, 1302–1354 µs). The 18× above is
+  same-session; a 78× figure obtained against a throttled CPU would not be.
+- **The literature's 10³× numbers are real but use a different baseline** — the NIST reference
+  implementation, not liboqs. `bench_slhdsa_verify.py --cpu` exists so that the comparison stays
+  in the same process.
+
+First use of each fused `thash` kernel compiles ~143 lines of Triton (~1.5 s per `(n, dn)` pair,
+six pairs total) and is then cached on disk; that cost is outside the table.
