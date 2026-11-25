@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlkem-triton"
+version = "0.1.0"
+description = "ML-KEM (FIPS 203) keygen/encaps/decaps in pure Triton, replacing NTT with Toeplitz matrix multiplication on tensor cores"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "mlkem-triton contributors" }]
+keywords = ["ml-kem", "post-quantum", "triton", "gpu", "gemm", "toeplitz", "ntt"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+    "Intended Audience :: Developers",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Environment :: GPU :: Intel",
+]
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.4",
+    "triton>=3.0",
+]
+
+[project.optional-dependencies]
+# kyber-py 只用于随机生成密钥对做往返测试；正确性主 gate 用 NIST ACVP 向量，不需要它。
+ref = ["kyber-py>=1.0"]
+test = ["pytest>=7"]
+
+[tool.setuptools.packages.find]
+include = ["mlkem_triton*"]
+
+
+[tool.pytest.ini_options]
+pythonpath = [".", "tests"]
+testpaths = ["tests"]
+markers = [
+    "slow: 跑得比较久的用例",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["results", "data", "build", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # 行宽由 formatter 管
+    "RUF001",  # 中文全角标点在注释里很正常
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]        # 生成的 parametrize 用例里 assert 写法自由
+"benchmarks/*" = ["E402"]   # 先 sys.path 再 import，是脚本惯例
+# Triton kernel 里 `if CONST: ... else: ...` 是**编译期**分支，比三元表达式清楚得多，
+# 而且三元在 jit 里会生成两条分支再 select。SIM108/SIM102 在这里不适用。
+"mlkem_triton/kernels/*" = ["SIM108", "SIM102"]
+
+[tool.ruff.format]
+quote-style = "double"
