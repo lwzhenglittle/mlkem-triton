@@ -149,7 +149,8 @@ def thash(
     t=0,
     w=1 << 40,
     row0=0,
-    block=128,
+    block=256,
+    warps=8,
 ):
     """Launch the fused thash over `rows = data.shape[0]` rows; `out_words` is [rows, n/8]."""
     import triton
@@ -173,6 +174,6 @@ def thash(
         w,
         row0,
         BLOCK=block,
-        num_warps=4,
+        num_warps=warps,
     )
     return out_words

@@ -142,3 +142,37 @@ def test_prehash_function_is_part_of_the_message():
     assert v.verify([case.message], [case.signature], case.context or b"", case.ph)[0]
     other = "SHAKE128" if case.ph != "SHAKE128" else "SHAKE256"
     assert not v.verify([case.message], [case.signature], case.context or b"", other)[0]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "ps",
+    [
+        "SLH-DSA-SHAKE-128f",
+        "SLH-DSA-SHAKE-128s",
+        "SLH-DSA-SHAKE-192f",
+        "SLH-DSA-SHAKE-192s",
+        "SLH-DSA-SHAKE-256f",
+        "SLH-DSA-SHAKE-256s",
+    ],
+)
+def test_matches_liboqs_on_a_fresh_key(ps):
+    """A key the ACVP vectors never used: sign with liboqs, verify on device (and reject a tamper).
+
+    The ACVP cases all come from the same handful of public keys, so this is the only check that a
+    key-dependent mistake (an address field, an index bound) would show up in.
+    """
+    from _liboqs_slh import oracle
+
+    lib = oracle(ps)
+    pk, sk = lib.keypair()
+    msg = b"fresh key, fresh message"
+    sig = lib.sign(msg, sk)
+    assert lib.verify(msg, sig, pk), "the oracle must accept its own signature"
+
+    v = Verifier(ps, pk)
+    assert bool(v.verify([msg], [sig])[0])
+    tampered = bytearray(sig)
+    tampered[len(tampered) // 3] ^= 0x01
+    assert not bool(v.verify([msg], [bytes(tampered)])[0])
+    assert not bool(v.verify([msg + b"!"], [sig])[0])

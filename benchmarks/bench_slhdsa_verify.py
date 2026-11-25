@@ -88,7 +88,9 @@ def _cpu_processes(pk, msgs, sigs, procs: int) -> float | None:
         return None
     n = len(msgs)
     cuts = [(i * n) // procs for i in range(procs + 1)]
-    jobs = [(_PS, pk, msgs[cuts[i] : cuts[i + 1]], sigs[cuts[i] : cuts[i + 1]]) for i in range(procs)]
+    jobs = [
+        (_PS, pk, msgs[cuts[i] : cuts[i + 1]], sigs[cuts[i] : cuts[i + 1]]) for i in range(procs)
+    ]
     t0 = time.perf_counter()
     with cf.ProcessPoolExecutor(max_workers=procs) as ex:
         list(ex.map(_worker, jobs))
