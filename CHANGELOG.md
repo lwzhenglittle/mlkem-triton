@@ -110,6 +110,16 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### Barrett reduction: measured, 1.02x, not adopted
+
+`q = 2^31 - 2^27 + 1`, so a 62-bit product can be reduced with shifts, adds and one narrow
+multiply instead of the multiply-high sequence LLVM emits for `% q`. Measured over an alternating
+A/B on a 2^20-multiply kernel: **1.02x** -- inside the noise -- and the fold needed a third round
+to be correct at all, which would have made it slower. `% q` stays.
+
+The reason is worth noting: `Q` is a `tl.constexpr`, so the modulo is already strength-reduced at
+compile time. Hand-optimising a division the compiler can see the divisor of buys nothing.
+
 ### `LargeNTT.mul_torch`: the product a prover calls, and the cache bug it exposed
 
 The multi-pass transform now exposes the operation it exists for: `mul_torch(a, b)` is the

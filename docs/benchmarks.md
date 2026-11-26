@@ -922,9 +922,16 @@ not what binds *at the low clock*. At the high clock the picture is different --
 decision made in one regime can be wrong in the other. That is the same trap as §22.2, one level
 deeper.
 
-What is left either way: replace `%` with a Barrett reduction on int32 intermediates (two modular
-multiplies per butterfly), and collapse the tail stages (`m <= 64`) into a single
-register-resident pass that does one whole block per program.
+What is left either way: collapse the tail stages (`m <= 64`) into a single register-resident
+pass that does one whole block per program -- that targets the *low* clock, where the transform is
+latency-bound.
+
+**Barrett is not worth it, and that is measured.** Since `Q` is a `tl.constexpr`, LLVM already
+turns `a * b % Q` into a multiply-high sequence; hand-rolling the BabyBear fold
+(`2^31 = 2^27 - 1`, so `x = lo + (x >> 31) * (2^27 - 1)`) came out **1.02x** the modulo path over
+an alternating A/B on a 2^20 multiplies kernel -- inside the noise -- and needed a third fold
+round to be correct at all, which would have made it slower. Recorded so the next attempt starts
+from the measurement.
 
 The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
 `gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one
