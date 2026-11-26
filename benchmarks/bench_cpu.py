@@ -543,7 +543,7 @@ def main() -> int:
     out_path = Path(args.out)
     if args.merge and out_path.exists():
         results = json.loads(out_path.read_text())
-        results["meta"] = metadata()  # the fresh window wins
+        results["meta"] = metadata()  # the fresh window wins ... but see the warning below
     else:
         results = {"meta": metadata(), "rivals": {}}
     print(f"# CPU baseline: {results['meta']['cpu']}  nproc={results['meta']['nproc']}")
@@ -561,10 +561,28 @@ def main() -> int:
             "one_thread": one,
             "procs16": many,
             "note": rival.note,
+            "measured_at": results["meta"]["timestamp"],
         }
         print(
             f"{name:28s} {rival.unit:6s} {one:12.4g} {many:12.4g} {many / one:6.2f}x  {rival.note}"
         )
+
+    # A `--merge` used to bump one timestamp for the whole file, so a partial re-measure looked
+    # like a complete one -- which is how a rival measured on the wrong code path (Poseidon2, see
+    # docs/benchmarks.md §15.2) hid behind a fresh timestamp. `meta.timestamp` is now the OLDEST
+    # rival's, i.e. "the baseline is at least this old", and each rival carries its own.
+    stamps = [r.get("measured_at", "unrecorded") for r in results["rivals"].values()]
+    if stamps:
+        known = [st for st in stamps if st != "unrecorded"]
+        results["meta"]["timestamp"] = min(known) if known else "unrecorded"
+        results["meta"]["newest_rival"] = max(known) if known else "unrecorded"
+        spread = sorted(set(known))
+        if len(spread) > 1 or len(known) != len(stamps):
+            print(
+                f"# WARNING: this baseline is not one window: {len(spread)} distinct stamps "
+                f"({spread[0] if spread else '-'}..{spread[-1] if spread else '-'}), "
+                f"{len(stamps) - len(known)} rivals unrecorded. Re-run without --only."
+            )
 
     out = Path(args.out)
     out.write_text(json.dumps(results, indent=2) + "\n")

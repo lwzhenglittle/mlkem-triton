@@ -110,6 +110,18 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### The CPU baseline carried one timestamp for seventeen rivals
+
+`bench_cpu.py --merge` bumped a single `meta.timestamp` for the whole file, so a partial
+re-measure looked like a complete one -- which is exactly how a rival measured on the wrong code
+path (Poseidon2, `docs/benchmarks.md` §15.2) hid behind a fresh timestamp and produced a table
+claiming a device win.
+
+Each rival now carries its own `measured_at`, `meta.timestamp` is the **oldest** of them ("the
+baseline is at least this old"), and a merge prints a warning naming the spread when the file ends
+up mixing windows. The committed baseline was then re-measured end to end: 17 rivals, one
+timestamp, and the 10.5-18.9x scaling factors that this hybrid 4P+8E+4LP part actually delivers.
+
 ### The Falcon summary line quoted a second measurement of the same thing
 
 `bench_falcon_verify.py` printed `device core 1.11 us/op` below a table whose last row said
