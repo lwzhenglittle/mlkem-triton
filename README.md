@@ -85,7 +85,7 @@ v = Verifier(hss_public_key)
 ok = v.verify(messages, signatures)            # any HSS depth up to 8
 ```
 
-SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is reference-only. LMS/HSS
+SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is not implemented. LMS/HSS
 verification covers both approved SHA-256 families; the SP 800-208 SHAKE-256 sets are not
 implemented because their type codes are still TBD.
 
@@ -162,7 +162,8 @@ Detail, tile configurations and tuning knobs: [docs/support.md](docs/support.md)
   SLH-DSA and LMS do not — they are NTT/sponge workloads.
 - **No formal constant-time validation** (no dudect/ctgrind, no cache analysis). Timing is
   ciphertext-independent; batch size is not.
-- **SLH-DSA signing is reference-only**, and LMS/HSS is verification-only. SP 800-208 SHAKE-256
+- **SLH-DSA signing is not implemented** (the numpy reference covers keygen and verify only), and
+  LMS/HSS is verification-only. SP 800-208 SHAKE-256
   LMS sets are not implemented.
 - **ML-DSA signing is batch-bound**: ~43–45 µs/signature at B=1024, versus ~97 µs for one liboqs
   core; many signatures in one batch is the shape it optimises for.
