@@ -94,6 +94,18 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### The wheel is verified end to end, not just built
+
+`pip wheel` succeeding proves nothing about whether the installed package works. A smoke run from
+a foreign working directory, against the *installed* 1.1.0 wheel, now checks: every subpackage
+imports (four schemes, nine primitives), Poseidon2 reproduces a Plonky3 vector, Poly1305 matches
+RFC 8439, AES matches FIPS-197, the int8 GEMM is exact, and Falcon verifies the embedded signature
+and rejects a one-bit-tampered copy — all from `site-packages`, not the checkout. The wheel was
+uninstalled afterwards; nothing about the venv's previous state changed.
+
+The check is not in CI (it needs a GPU for the device paths) but it is the reason the 1.1.0 wheel
+is claimed to work rather than merely to build.
+
 ### `HashToPoint` moves to the device: Falcon's end-to-end drops 31.3 -> 24.4 us
 
 `comp_decode` and `HashToPoint` were the two host stages; a probe measured both halves of the
