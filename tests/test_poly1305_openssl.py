@@ -128,6 +128,25 @@ def test_random_keys_and_lengths(evp):
         assert poly1305_np(key, msg) == evp(key, msg)
 
 
+@pytest.mark.parametrize(
+    ("key_byte", "msg_byte", "length"),
+    [
+        (0x00, 0x00, 16),   # the degenerate all-zero case: r = 0, so the tag is s alone
+        (0x00, 0x00, 1),
+        (0xFF, 0xFF, 16),   # the largest clamped r, and a message with every bit set
+        (0xFF, 0xFF, 17),   # ... crossing the block boundary, where 2^128 is added
+        (0xFF, 0xFF, 32),
+        (0x00, 0xFF, 33),
+    ],
+)
+def test_degenerate_inputs_against_openssl(evp, key_byte, msg_byte, length):
+    """The cases a random corpus reaches with probability ~0: `r = 0` makes the accumulator
+    constant, and an all-ones message exercises every carry in the 130-bit reduction."""
+    key = bytes([key_byte]) * 32
+    msg = bytes([msg_byte]) * length
+    assert poly1305_np(key, msg) == evp(key, msg), (key_byte, msg_byte, length)
+
+
 def test_clamp_is_the_rfc_mask():
     """A key whose `r` is all-ones must behave as the clamped `r`, not the raw one."""
     rng = random.Random(7)

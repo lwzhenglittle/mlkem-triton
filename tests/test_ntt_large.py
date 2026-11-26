@@ -109,6 +109,29 @@ def test_the_numpy_input_entry_points_agree_with_the_tensor_ones():
     assert np.array_equal(t.inverse_torch(have).cpu().numpy().astype(np.int64), t.intt(have))
 
 
+@pytest.mark.parametrize("logn", [10, 14])
+def test_degenerate_polynomials(logn):
+    """Zero and constant polynomials.
+
+    Zero maps to zero everywhere. A constant `c` does **not** map to `c` at every point, which is
+    the tempting assumption and the wrong one: the transform evaluates at the n odd powers of a
+    2n-th root, and the pre-twiddled sum runs over only n terms, so `F(c)_k = 2c / (1 - psi^(2k+1))`
+    -- finite and different at every point. The test therefore checks the two things that are true:
+    zero stays zero, and a constant agrees with the numpy path that the in-register domain also
+    agrees with.
+    """
+    t = LargeNTT(1 << logn, Q)
+    n = 1 << logn
+    zero = t.forward_torch(np.zeros(n, dtype=np.int64)).cpu().numpy()
+    assert not zero.any()
+    c = 12345
+    flat = t.forward_torch(np.full(n, c, dtype=np.int64)).cpu().numpy().astype(np.int64)
+    assert np.array_equal(flat, t.ntt(np.full(n, c, dtype=np.int64)))
+    assert not np.array_equal(flat, np.full(n, c))  # the assumption this test exists to kill
+    a = np.random.default_rng(logn).integers(0, Q, n)
+    assert not t.mul_torch(a, np.zeros(n, dtype=np.int64)).cpu().numpy().any()
+
+
 def test_rejects_non_power_of_two():
     with pytest.raises(ValueError, match="power of two"):
         LargeNTT(1000, Q)

@@ -110,6 +110,23 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### Degenerate inputs, and one assumption of mine that a test killed
+
+Two differential suites gained the cases a random corpus reaches with probability ~0:
+
+- **Poly1305 against OpenSSL**: `r = 0` (all-zero key, which makes the tag equal to `s` alone),
+  all-ones key and message at 16/17/32 bytes (every carry in the 130-bit reduction), and a
+  zero-key / all-ones-message mix. These are exactly the shapes that broke the accumulator twice
+  during the original work.
+- **The 2^20 NTT**: zero and constant polynomials, and the product with zero.
+
+The NTT one earned its place immediately by falsifying my own expectation: I asserted a constant
+polynomial evaluates to that constant at every point, and it does not. The transform evaluates at
+the n odd powers of a 2n-th root, so the pre-twiddled sum runs over n terms and
+`F(c)_k = 2c / (1 - psi^(2k+1))` -- different at every point. The test now checks what is true
+(zero stays zero, the constant agrees with the numpy path) and asserts the *false* assumption is
+false, so nobody re-derives it.
+
 ### Two dead helpers removed, one untested entry point covered
 
 A static sweep for functions that are never referenced found `LargeNTT._run` and `LargeNTT._mul`,
