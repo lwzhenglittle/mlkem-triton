@@ -131,10 +131,10 @@ def test_random_keys_and_lengths(evp):
 @pytest.mark.parametrize(
     ("key_byte", "msg_byte", "length"),
     [
-        (0x00, 0x00, 16),   # the degenerate all-zero case: r = 0, so the tag is s alone
+        (0x00, 0x00, 16),  # the degenerate all-zero case: r = 0, so the tag is s alone
         (0x00, 0x00, 1),
-        (0xFF, 0xFF, 16),   # the largest clamped r, and a message with every bit set
-        (0xFF, 0xFF, 17),   # ... crossing the block boundary, where 2^128 is added
+        (0xFF, 0xFF, 16),  # the largest clamped r, and a message with every bit set
+        (0xFF, 0xFF, 17),  # ... crossing the block boundary, where 2^128 is added
         (0xFF, 0xFF, 32),
         (0x00, 0xFF, 33),
     ],

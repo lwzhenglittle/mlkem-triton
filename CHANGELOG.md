@@ -110,6 +110,19 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### A documented command that did not run
+
+`docs/benchmarks.md` §18 documents `bench_primitive.py --only aes128-ctr --batch 4096,65536` to
+show how the gather rate moves with batch size -- and `--batch` only accepted a single int, so the
+documented command exited with `invalid int value: '4096,65536'`. The other benchmark scripts
+(`bench_e2e`, `bench_mldsa_verify`, `bench_falcon_verify`) have taken comma lists from the start.
+
+`--batch` accepts a list now and prints one table per size, each with its own copy-bandwidth
+reference measured in that table's window. Single-batch behaviour is byte-identical to before.
+
+This is the first documented command out of thirteen that did not run; all seven ML-KEM/ML-DSA
+commands and the other five primitive invocations were exercised as written.
+
 ### Degenerate inputs, and one assumption of mine that a test killed
 
 Two differential suites gained the cases a random corpus reaches with probability ~0:

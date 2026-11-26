@@ -444,7 +444,13 @@ def _rate(units: int, t: float) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--batch", type=int, default=4096, help="items per launch (default 4096)")
+    ap.add_argument(
+        "--batch",
+        default="4096",
+        help="items per launch, or a comma-separated list (default 4096). A list prints one table "
+        "per batch, which is how a ratio between two batch sizes gets measured in one window -- "
+        "the other benchmark scripts have taken lists from the start",
+    )
     ap.add_argument("--size", type=int, default=1024, help="bytes per message (default 1024)")
     ap.add_argument("--reps", type=int, default=REPS, help=f"min-of-N (default {REPS})")
     ap.add_argument("--only", default=None, help="comma-separated primitive names")
@@ -470,22 +476,36 @@ def main() -> int:
         print(f"error: unknown primitive(s) {unknown}; try --list", file=sys.stderr)
         return 2
 
+    batches = [int(b) for b in str(args.batch).split(",")]
     print(
         f"# device={dev} torch={__import__('torch').__version__} "
         f"triton={__import__('triton').__version__} "
         f"batch={args.batch} size={args.size} reps={args.reps}"
     )
 
+    return _table(names, batches, args, dev)
+
+
+def _table(names: list[str], batches: list[int], args, dev) -> int:
+    """One table per batch size in `batches`; the copy reference is measured per table."""
     # The bandwidth reference is measured even with --only, because every GB/s cell is a
     # fraction of it. It is not printed unless asked for.
-    copy_t, _ = measure(bench_copy(args.batch, args.size, dev), dev, args.reps)
-    copy_bw = 2 * (1 << 26) * 4 / copy_t / 1e9
-    print(f"# copy bandwidth: {copy_bw:.1f} GB/s (read+write, measured in this process)")
+    rc = 0
+    for batch in batches:
+        if len(batches) > 1:
+            print(f"\n## batch={batch}")
+        copy_t, _ = measure(bench_copy(batch, args.size, dev), dev, args.reps)
+        copy_bw = 2 * (1 << 26) * 4 / copy_t / 1e9
+        print(f"# copy bandwidth: {copy_bw:.1f} GB/s (read+write, measured in this process)")
+        rc |= _one_table(names, batch, args, dev, copy_t, copy_bw)
+    return rc
 
+
+def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
     rows = []
     for name in names:
         try:
-            bench = CASES[name](args.batch, args.size, dev)
+            bench = CASES[name](batch, args.size, dev)
             # Reuse the bandwidth reference measurement instead of timing the same copy twice.
             t, med = (copy_t, copy_t) if name == "copy" else measure(bench, dev, args.reps)
         except Exception as e:  # a bench table should survive one broken case
