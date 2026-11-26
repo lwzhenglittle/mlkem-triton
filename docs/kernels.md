@@ -31,6 +31,7 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
 | `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
+| `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
 | `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
@@ -165,6 +166,33 @@ pins.
 Rotation is `(x << r) | (x >> (32-r))` on **uint32**. On int32 the right shift is arithmetic and
 the result is silently wrong; LLVM folds the uint32 idiom into a funnel shift (one `shf` on
 NVIDIA, two to three instructions on Xe, where rotate is 2.2× the cost of an add).
+
+### `_poseidon2_kernel(X, OUT, P, RC_INIT, RC_FINAL, RC_INT, DIAG, Q, BLK)` — `primitives/poseidon2.py`
+
+Poseidon2 over BabyBear, width 16, 8 full + 13 partial rounds. One program is `BLK`
+permutations; the 16 state words are 16 separate int64 vectors per lane (a `[BLK, 16]` tile
+cannot be sliced by a constant index, and every layer needs `state[i]` as its own vector).
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `X` | `[P, 16]` | `int32` | canonical field elements |
+| `OUT` | `[P, 16]` | `int32` | permuted state |
+| `RC_INIT`, `RC_FINAL` | `[4, 16]` | `int64` | external round constants |
+| `RC_INT` | `[13]` | `int64` | partial-round constants |
+| `DIAG` | `[16]` | `int64` | internal matrix diagonal, loaded once per program |
+
+Three things this kernel exists to record:
+
+- **The external layer is applied before the first round.** Plonky3's
+  `external_initial_permute_state` starts with `mds_light_permutation`; leaving it out gives
+  wrong output for every input and looks like a constants bug. `data/vectors/poseidon2/bb16.json`
+  is Plonky3's own output and catches it.
+- **`% Q` is enough; no Montgomery form.** Operands are 31-bit, so `a*b < 2^62` fits int64
+  exactly. `mont_mul` would add a multiply-and-mask pair per field multiply; the kernel uses
+  plain `(a*b) % Q` with `Q` a constexpr, which LLVM strength-reduces to a multiply-high.
+- **`BLK = 128`.** Swept on an Arc B390 at B = 65536: 77.8 ns/permutation at 64, **41.5 at 128**,
+  48.5 at 256 (256 spills). Below B ≈ 2048 the grid stops filling the device (B = 1024 is
+  820 ns/permutation); the fix is a persistent grid, which is not written.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

@@ -9,3 +9,6 @@ dist/
 
 # vendored builds (liboqs, etc.)
 third_party/
+
+# cargo build output for benchmarks/poseidon2_ref
+benchmarks/poseidon2_ref/target/

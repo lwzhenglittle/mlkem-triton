@@ -15,6 +15,7 @@ originally written for ML-KEM alone inside the old `triton_crypto.kernels` packa
     primitives.fields   prime-field arithmetic: the 32-bit Montgomery product every
                         modular primitive shares (`PrimeField`, `mont_mul`)
     primitives.chacha20 the ARX stream cipher (RFC 8439), the first non-PQC primitive
+    primitives.poseidon2 Poseidon2-BabyBear/16, the algebraic hash ZK systems use (Plonky3)
 
 ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
 (`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
@@ -54,6 +55,12 @@ from .ntt import (
     ntt_np,
     ntt_torch,
 )
+from .poseidon2 import (
+    BABYBEAR_POSEIDON2_16,
+    Poseidon2,
+    poseidon2_permute_np,
+    poseidon2_permute_torch,
+)
 from .sha2 import (
     IV256,
     IV512,
@@ -86,6 +93,7 @@ from .sponge import (
 __all__ = [
     "BABYBEAR",
     "BABYBEAR_NTT",
+    "BABYBEAR_POSEIDON2_16",
     "DILITHIUM",
     "DOMAIN_SHA3",
     "DOMAIN_SHAKE",
@@ -104,6 +112,7 @@ __all__ = [
     "SHAKE256",
     "HashFn",
     "NTTDomain",
+    "Poseidon2",
     "PrimeField",
     "chacha20",
     "chacha20_keystream",
@@ -128,6 +137,8 @@ __all__ = [
     "pad_batch",
     "pad_torch",
     "padded_len",
+    "poseidon2_permute_np",
+    "poseidon2_permute_torch",
     "sha2",
     "sha_absorb",
     "sponge",

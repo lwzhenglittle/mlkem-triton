@@ -1,0 +1,17 @@
+[package]
+name = "poseidon2-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Plonky3's reference Poseidon2 for BabyBear. Used for two things the Triton kernel cannot
+# do for itself: emitting the known-answer vectors in `data/vectors/poseidon2/`, and
+# providing the *tuned* CPU rival (monty-31x8 AVX2/AVX-512) for the benchmark table.
+# Fetched from crates.io, so no Plonky3 checkout is needed.
+[dependencies]
+p3-baby-bear = "0.8"
+p3-field = "0.8"
+p3-symmetric = "0.8"
+
+[profile.release]
+opt-level = 3

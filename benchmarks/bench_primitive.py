@@ -17,6 +17,7 @@ nothing is compared across sessions.
 
 Unit conventions:
     perm    one Keccak-f[1600] permutation
+    p2      one Poseidon2-BabyBear/16 permutation (16 field elements in, 16 out)
     poly    one 256-coefficient polynomial transform (read + write of 1 KiB)
     msg     one message of `--size` bytes
     byte    a byte of keystream / ciphertext
@@ -36,7 +37,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from triton_crypto import devices
-from triton_crypto.primitives import chacha20, keccak, sha2, sponge
+from triton_crypto.primitives import chacha20, keccak, poseidon2, sha2, sponge
 from triton_crypto.primitives.ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -163,6 +164,21 @@ def _ntt_bench(domain, batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_poseidon2(batch: int, size: int, dev) -> Bench:
+    """One permutation = 16 field elements in and out; `size` is unused."""
+    import torch
+
+    rows = max(batch, 1)
+    x = torch.zeros((rows, 16), dtype=torch.int32, device=dev)
+    return Bench(
+        lambda: poseidon2.poseidon2_permute_torch(x, device=dev),
+        units=rows,
+        unit="p2",
+        nbytes=2 * rows * 16 * 4,
+        note="BabyBear width 16, 8 full + 13 partial",
+    )
+
+
 def bench_chacha20(batch: int, size: int, dev) -> Bench:
     rng = np.random.default_rng(0)
     rows = max(batch, 1)
@@ -190,6 +206,7 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "ntt-mldsa": lambda b, s, d: _ntt_bench(DILITHIUM, b, s, d),
     "ntt-babybear": lambda b, s, d: _ntt_bench(BABYBEAR_NTT, b, s, d),
     "chacha20": bench_chacha20,
+    "poseidon2": bench_poseidon2,
 }
 
 ORDER = list(CASES)
@@ -207,6 +224,7 @@ WHAT = {
     "ntt-mldsa": "negacyclic NTT, q = 8380417, 8 layers, Montgomery",
     "ntt-babybear": "negacyclic NTT, q = 2^31-2^27+1, 8 layers",
     "chacha20": "ChaCha20 keystream (RFC 8439) over --size-byte streams",
+    "poseidon2": "Poseidon2-BabyBear/16 permutation (Plonky3 parameters)",
 }
 
 

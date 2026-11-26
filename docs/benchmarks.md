@@ -518,6 +518,24 @@ min-of-7, device-only). `copy` is measured first and every GB/s cell is a fracti
 | `ntt-mldsa` | q = 8380417, Montgomery | 0.79 | 5.2 M poly/s | 11 | 5% |
 | `ntt-babybear` | q = 2^31−2^27+1, Montgomery | 0.78 | 5.2 M poly/s | 11 | 5% |
 | `chacha20` | RFC 8439, 20 rounds | 0.28 | 14.8 GB/s | 15 | 7% |
+| `poseidon2` | BabyBear/16, 8 full + 13 partial | 2.53 | 25.9 M perm/s | 3.3 | 2% |
+
+`poseidon2` was measured at `--batch 65536`, not 4096: with `BLOCK=128` a batch of 4096 is
+only 32 programs and runs at 103 ns/permutation instead of 39. Below B ≈ 2048 the grid stops
+filling the device entirely (B = 1024 is 820 ns).
+
+**Poseidon2 against the CPU, same machine.** Plonky3 0.8's packed implementation
+(`benchmarks/poseidon2_ref`, `-C target-cpu=native`, monty-31x8 AVX2, cargo mode `bench-packed`):
+
+| | 1 thread | 16 processes |
+|---|---:|---:|
+| Plonky3, packed | 106 ns (9.4 M/s) | **7.0 ns (144 M/s)** |
+| this device | — | **38.7 ns (25.9 M/s)** |
+
+So the device is **2.7× one core and 0.18× sixteen processes**. Print the second number, not
+the first: a primitive table without a `vs 16P` column invites the same mistake this one did
+(§15 used to report only `%copy`, which made ChaCha20 look like it had 14× of headroom when
+it is at 0.40× of a 16-process CPU).
 
 Three things worth reading off it:
 

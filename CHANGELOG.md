@@ -1,5 +1,33 @@
 # Changelog
 
+## [Unreleased]
+
+### Poseidon2-BabyBear/16, and the first `vs CPU` column in the primitive table
+
+The primitive layer gains the operator ZK systems actually use, and the benchmark table gains
+the column that was missing: what the same work costs on the CPU **in the same window**.
+
+- **`primitives/poseidon2.py`** — Poseidon2 over BabyBear, width 16, 8 full + 13 partial
+  rounds, Plonky3's `default_babybear_poseidon2_16` parameters verbatim (round constants from
+  the Grain LFSR, `MDSMat4`, internal diagonal `[-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8,
+  1/4, 1/8, 1/2^27, -1/2^8, -1/16, -1/2^27]`). numpy reference plus one Triton kernel;
+  `poseidon2_permute_np` / `poseidon2_permute_torch`.
+- **`benchmarks/poseidon2_ref/`** — a small cargo project on `p3-baby-bear` 0.8 that emits the
+  known-answer vectors (`kat`) and runs the *tuned* CPU rival (`bench-packed`, monty-31x8
+  AVX2). `data/vectors/poseidon2/bb16.json` is its output, so the Triton kernel is checked
+  against a different implementation rather than against itself.
+- **Measured** (Arc B390, copy 200–213 GB/s): **38.7 ns/permutation at B = 65536**
+  (`BLOCK=128`); 103 ns at B = 4096, where only 32 programs exist. Against Plonky3 on the
+  same machine: **2.7× one core (106 ns), 0.18× sixteen processes (7.0 ns)**. The second
+  number is the one that belongs in the table, and `docs/benchmarks.md` §15 now says so.
+- Two traps are recorded in `docs/kernels.md` because both were hit while writing it: Plonky3
+  applies an **external linear layer before the first round**, and the S-box is
+  `(x^2)^2 * x^2 * x`, not `(x^2)^2 * x * x`.
+- `% Q` on int64 is enough for 31-bit operands (`a*b < 2^62`), so the kernel carries no
+  Montgomery representation; `mont_mul` would cost two extra instructions per multiply.
+- 18 new tests (Plonky3 vectors, numpy↔device at batches around the block size, singles, an
+  `out=` buffer, the extremes) — **909 tests** total? (see below).
+
 ## [1.0.0] — the pre-0.8 layout is gone (breaking)
 
 0.9.0 gave the primitive layer a floor. This is the removal the deprecation shims had been
