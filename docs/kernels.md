@@ -40,6 +40,7 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
+| `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 32),)` | `hash_to_point_batch_torch` |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
@@ -319,6 +320,24 @@ Four constraints shaped this, and the fourth cost four sessions:
   results to zero** -- with every input reading back correct from inside the same launch. The
   counter is now an explicit `(low, high)` pair and the guard is a test: any message over 1 KiB
   has a non-zero chunk counter, which is exactly the case a 64-byte KAT cannot see.
+
+### `_hash_to_point_kernel(SAMPLES, OUT, OK, B, N, NSAMP, Q, BLK)` — `falcon/kernels.py`
+
+Falcon's `HashToPoint` tail: from `n + 205` candidate 16-bit samples, keep those below `5q`,
+reduce mod q, and take the first `n` **in order** — the reference's compaction is branch-free and
+order-preserving, so an exclusive prefix sum over the keep-mask gives every survivor its
+destination index.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `SAMPLES` | `[B, NSAMP]` | `int32` | big-endian 16-bit candidates, assembled from the sponge stream |
+| `OUT` | `[B, n]` | `int32` | the first `n` accepted coefficients, in order |
+| `OK` | `[B]` | `bool` | false when a row had fewer than `n` survivors |
+
+0.47 µs per signature at B = 4096, against ~7 µs for the same filter in numpy — the tile is a
+contiguous `[BLK, NSAMP]` block with a prefix sum and a scatter, and that is why this shape is
+fast while the per-coefficient decoder (`comp_decode`) lost by 35x on the same data
+(`docs/benchmarks.md` §16).
 
 ### `_stage_kernel(X, Y, M, TOTAL, LOG_HALF, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
 

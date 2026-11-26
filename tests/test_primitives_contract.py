@@ -131,6 +131,24 @@ def test_kernel_contract_is_documented(name: str):
     )
 
 
+def test_every_kernel_in_the_tree_is_in_the_doc():
+    """Not just one line per module: every `@triton.jit` kernel has to be named in
+    `docs/kernels.md`, so a kernel added later cannot drift out of the contract.
+
+    This is how `_hash_to_point_kernel` was found -- it had been in `falcon/kernels.py` for
+    several commits while the doc described the module it lived in and nothing more.
+    """
+    doc = KERNELS_DOC.read_text()
+    root = TESTS.parent / "triton_crypto"
+    defined = set()
+    for path in root.rglob("*.py"):
+        for m in re.finditer(r"^def (_[a-z0-9_]+_kernels?)\b", path.read_text(), re.M):
+            defined.add((m.group(1), path.parent.name))
+    assert defined, "no kernels found -- the scan is wrong, not the tree"
+    missing = sorted(f"{name} ({mod}/)" for name, mod in defined if name not in doc)
+    assert not missing, f"kernels with no entry in docs/kernels.md: {missing}"
+
+
 def test_every_primitive_has_a_bench_case_or_says_why_not():
     """`bench_primitive.py` is the only place the primitive layer is measured; a module that
     is not in it has no number, which is how the structure review described the old state."""
