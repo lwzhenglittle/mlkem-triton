@@ -41,10 +41,15 @@ jobs:
               "triton_crypto/lms/__init__.py",
               "triton_crypto/mldsa/__init__.py",
               "triton_crypto/slhdsa/__init__.py",
+              "triton_crypto/falcon/__init__.py",
               "triton_crypto/primitives/__init__.py",
               "triton_crypto/primitives/ntt/__init__.py",
               "triton_crypto/primitives/chacha20.py",
               "triton_crypto/primitives/fields.py",
+              "triton_crypto/primitives/poseidon2.py",
+              "triton_crypto/primitives/poly1305.py",
+              "triton_crypto/primitives/aes.py",
+              "triton_crypto/primitives/gemm.py",
           ):
               assert required in names, f"{required} missing from {wheel}"
           print("wheel layout OK")
