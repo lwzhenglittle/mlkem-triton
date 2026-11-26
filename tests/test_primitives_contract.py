@@ -423,3 +423,65 @@ def test_docs_do_not_cite_paths_that_only_exist_on_the_author_machine():
                 if not any(token in context for token in allow_context):
                     offenders.append(f"{doc.name}:{lineno + 1} {ref}")
     assert not offenders, f"cited paths that are neither in the repo nor explained: {offenders}"
+
+
+def test_the_patterns_table_matches_the_snapshot():
+    """`docs/patterns.md` opens with the table the whole repository exists to produce.
+
+    Its numbers come from `benchmarks/snapshot-*.md`, and nothing checked them against it -- the
+    README's table got a test (it had drifted three rows) while this one, the more important of the
+    two, had none.
+    """
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    doc = (root / "docs" / "patterns.md").read_text()
+    snapshots = sorted((root / "benchmarks").glob("snapshot-*.md"))
+    assert snapshots, "no snapshot to check against"
+    snap = snapshots[-1].read_text()
+
+    gbs, ratios = {}, {}
+    for line in snap.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        try:
+            gbs[cells[0].strip("`").strip()] = float(cells[4])
+        except (IndexError, ValueError):
+            continue
+        xs = re.findall(r"([\d.]+)x", line)
+        if len(xs) >= 2:
+            ratios[cells[0].strip("`").strip()] = float(xs[-1])
+
+    mapping = {
+        "SHA3-256": "sha3-256",
+        "SHA-256": "sha256",
+        "SHA-512": "sha512",
+        "ChaCha20": "chacha20",
+        "Poly1305": "poly1305",
+        "AES-128-CTR": "aes128-ctr",
+        "BLAKE3": "blake3",
+        "Poseidon2": "poseidon2",
+        "2^20 NTT": "ntt-2^20",
+    }
+    section = doc[doc.index("| primitive | device |") : doc.index("**The device's ALU-bound")]
+    checked = 0
+    for line in section.splitlines():
+        match = re.match(r"\| (" + "|".join(re.escape(k) for k in mapping) + r") \|", line)
+        if not match:
+            continue
+        cells = [c.strip().replace("*", "") for c in line.split("|")[1:-1]]
+        key = mapping[cells[0]]
+        stated_ratio = float(cells[4].rstrip("x"))
+        assert abs(stated_ratio - ratios[key]) < 0.06, (
+            f"{cells[0]}: {stated_ratio} vs {ratios[key]}"
+        )
+        if key in gbs and unit_is_gbs(cells[1]):  # rows quoting a time skip this comparison
+            stated_gbs = float(cells[1].split()[0])
+            assert abs(stated_gbs - gbs[key]) < 0.06, f"{cells[0]}: {stated_gbs} vs {gbs[key]} GB/s"
+        checked += 1
+    assert checked >= 9, f"only {checked} rows matched -- the parser is wrong, not the table"
+
+
+def unit_is_gbs(cell: str) -> bool:
+    return "GB/s" in cell

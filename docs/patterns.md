@@ -41,7 +41,7 @@ that is set by three factors together.**
 | AES-128-CTR | 10.7 GB/s | 14.1 GB/s | 165 GB/s | 0.06x | **AES-NI** | VAES 8-16 | short |
 | BLAKE3 | 10.0 GB/s | 2.91 GB/s | 56.0 GB/s | 0.18x | none | **16 lanes** | short |
 | Poseidon2 | 3.3 GB/s | 9.6M/s | 147M/s | 0.19x | none | Plonky3 asm | long |
-| 2^20 NTT | 190 GB/s | 21/s | 290/s | **5.92x** | none | memory-bound | n/a |
+| 2^20 NTT | 0.85 ms (radix-4) | 21/s | 290/s | **5.92x** | none | memory-bound | n/a |
 
 (Device and CPU columns are from one window: `benchmarks/snapshot-20261126T171639Z.md` and the
 `cpu_baseline.json` written in the same run. Poseidon2 and the NTT are counted in permutations and
