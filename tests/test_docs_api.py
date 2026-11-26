@@ -29,9 +29,10 @@ def _params(fn) -> list[str]:
 def test_mlkem_block():
     """README block 0: `Decapsulator(scheme, dk)`, `Encapsulator(scheme, ek)`,
     `generate_keypairs(scheme, n)`."""
-    assert _params(Decapsulator)[:2] == ["ps", "dk"] or _params(Decapsulator)[:2] == ["scheme", "dk"]
-    assert _params(Encapsulator)[:2] == ["ps", "ek"] or _params(Encapsulator)[:2] == ["scheme", "ek"]
-    assert _params(generate_keypairs)[0] in ("ps", "scheme")
+    # the README writes `Decapsulator("ML-KEM-768", dk)`, so the two positional names matter
+    assert _params(Decapsulator)[:2] == ["ps", "dk"]
+    assert _params(Encapsulator)[:2] == ["ps", "ek"]
+    assert _params(generate_keypairs)[:2] == ["ps", "count"]
     assert hasattr(Decapsulator, "decaps")
     assert hasattr(Encapsulator, "encapsulate")
 
@@ -86,7 +87,8 @@ def test_the_package_parses_as_python_3_10():
     """
     root = pathlib.Path(__file__).resolve().parent.parent
     bad = []
-    for p in list((root / "triton_crypto").rglob("*.py")) + list((root / "benchmarks").glob("*.py")):
+    paths = list((root / "triton_crypto").rglob("*.py")) + list((root / "benchmarks").glob("*.py"))
+    for p in paths:
         try:
             ast.parse(p.read_text(), filename=str(p), feature_version=(3, 10))
         except SyntaxError as exc:
