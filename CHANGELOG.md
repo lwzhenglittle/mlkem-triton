@@ -251,6 +251,21 @@ share no code with this one:
 
 Both skip when the tool is missing; neither adds a runtime dependency. **1084 tests.**
 
+### Verification pass: a fresh clone, isolated test files, a hundred repeated transforms
+
+Three checks that the tree is self-contained and stable, all run before freezing it overnight:
+
+- **a fresh `git clone` runs the new tests** (103 passed) and, checked explicitly, imports the
+  clone's own `triton_crypto`, `primitives/blake3.py` and `ntt.large` — nothing needed by the test
+  suite lives outside the repository;
+- **every device test file passes on its own** (blake3, ntt_large, falcon, poly1305, aes,
+  poseidon2, gemm), so none of them depends on another test having warmed a kernel first;
+- **a hundred repeated 2^16 transforms** stay bit-identical with device memory flat at 1.1 MB
+  allocated / 2.1 MB reserved from the first iteration to the last.
+
+None of this changed a line of code; it is the evidence that the 1125-test tree is what a
+reviewer would get, not just what happens to work in this session's state.
+
 ### `docs/patterns.md`: the table the project was actually for
 
 The roadmap asked for ten *computational patterns*, not ten algorithms, on the theory that the
