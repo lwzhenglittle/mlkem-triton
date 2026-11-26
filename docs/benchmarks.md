@@ -678,14 +678,18 @@ Two numbers, because they answer different questions:
 | stage | where | µs/signature | share of e2e |
 |---|---|---:|---:|
 | device core (2 NTTs, pointwise, norm) | device | **0.61** | 3% |
-| signature decode (`comp_decode`) | host, numpy | **15.6** | 82% |
+| signature decode (`comp_decode`) | host, numpy | **13.5** | 81% |
 | `HashToPoint` (SHAKE256 + rejection) | **device** since 1.1.0 | **0.6** | 3% |
-| e2e total | | **18.9** | 100% |
+| e2e total | | **16.6** | 100% |
 
 The decoder's own history is 134 µs (per-signature Python) -> 21.4 µs (batched, six gathers per
 coefficient) -> 16.8 µs (one 32-bit window per coefficient, which answers both the 8-bit header and
-the 16-bit unary run at once) -> **15.6 µs** once its state moved from int64 to int32 (half the
-bytes per numpy op, and every value fits by construction: `pos` <= 5300, `|c|` <= 2047). It is still 81% of the end-to-end cost, and still the right
+the 16-bit unary run at once) -> **15.6 µs** (int32 state) -> **13.5 µs** (every 32-bit window precomputed once, so the scan
+does one gather per coefficient instead of four gathers and seven arithmetic ops).
+
+That last step is the general lesson of this kernel: at a batch of 4096 a numpy call costs ~7 µs
+whether it touches 1 element or 4096, so what a scan like this pays for is the **number of calls**,
+not the work inside them. It is still 81% of the end-to-end cost, and still the right
 place for the next attempt -- on the host, where a vectorised scan beats the device's per-coefficient
 gather by 35x.
 

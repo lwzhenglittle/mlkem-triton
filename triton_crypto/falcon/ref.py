@@ -243,19 +243,13 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
     rows = np.arange(B)
 
     clip = width - 1
+    # Every 32-bit window, built once. The scan then needs one gather per coefficient instead of
+    # four gathers and seven arithmetic ops: at this batch size a numpy call costs ~7 us
+    # regardless of how many elements it touches, so the *number* of calls is what matters.
+    w32 = np.zeros((B, width), dtype=np.int32)
+    for i in range(4):
+        w32[:, : width - i] |= buf[:, i:].astype(np.int32) << (24 - 8 * i)
 
-    def window32(byte):
-        """32 bits starting at the byte boundary `byte`, zero-padded past the buffer.
-
-        One 32-bit window answers both questions a step asks -- the 8-bit header at `bitpos` and
-        the 16-bit unary run at `bitpos + 8` -- so the scan does four gathers per coefficient
-        instead of six, which is where two thirds of its time went.
-        """
-        b0 = buf[rows, np.minimum(byte, clip)].astype(np.int32)
-        b1 = buf[rows, np.minimum(byte + 1, clip)].astype(np.int32)
-        b2 = buf[rows, np.minimum(byte + 2, clip)].astype(np.int32)
-        b3 = buf[rows, np.minimum(byte + 3, clip)].astype(np.int32)
-        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
 
     # Leading-zero count of a 16-bit window, as a table: one gather instead of 16 `where`s.
     lead = np.zeros(1 << 16, dtype=np.int32)
@@ -267,7 +261,8 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
     bits = lens * 8
     max_mag = params.max_abs_coefficient
     for u in range(params.n):
-        w = window32(pos >> 3)
+        byte = np.minimum(pos >> 3, clip)
+        w = w32[rows, byte]
         shift = pos & 7
         head = (w >> (24 - shift)) & 0xFF  # 8 bits at `pos`: sign + low 7 magnitude bits
         sign = (head & 0x80) != 0

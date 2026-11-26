@@ -179,6 +179,17 @@ the n odd powers of a 2n-th root, so the pre-twiddled sum runs over n terms and
 (zero stays zero, the constant agrees with the numpy path) and asserts the *false* assumption is
 false, so nobody re-derives it.
 
+### ...and the calls, not the work, were the cost: 15.6 -> 13.5 µs
+
+Precomputing every 32-bit window once (`[B, width]` int32, built in four vectorised passes) turns
+each scan step's window fetch from four gathers plus seven arithmetic ops into a single gather.
+**15.6 -> 13.5 µs per signature**, identical output, end to end **16.6 µs**.
+
+Why it matters more than it sounds: at B = 4096 a numpy call costs ~7 µs whether it touches one
+element or 4096, so the scan's 512 steps x ~20 calls were paying for ~10,000 Python/pybind round
+trips. The decoder arc tonight -- 134 -> 21.4 -> 16.8 -> 15.6 -> **13.5 µs** -- is mostly a story
+about reducing the number of calls.
+
 ### ...and int32 state takes it to 15.6 µs
 
 The decoder's state moved from int64 to int32: `pos` never exceeds 5300 and every coefficient is
