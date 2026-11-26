@@ -145,8 +145,11 @@ def test_every_kernel_in_the_tree_is_in_the_doc():
         for m in re.finditer(r"^def (_[a-z0-9_]+_kernels?)\b", path.read_text(), re.M):
             defined.add((m.group(1), path.parent.name))
     assert defined, "no kernels found -- the scan is wrong, not the tree"
-    missing = sorted(f"{name} ({mod}/)" for name, mod in defined if name not in doc)
-    assert not missing, f"kernels with no entry in docs/kernels.md: {missing}"
+    # Same hardening as the export test: ask about the Summary table, which is what claims to list
+    # every kernel, not about the document as a whole.
+    summary = doc[doc.index("## Summary"):doc.index("## The exported surface")]
+    missing = sorted(f"{name} ({mod}/)" for name, mod in defined if name not in summary)
+    assert not missing, f"kernels with no row in the Summary table of docs/kernels.md: {missing}"
 
 
 def test_every_primitive_has_a_bench_case_or_says_why_not():
