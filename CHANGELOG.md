@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.7.0] — signing reaches parity with one CPU core, by speculating on the rejection loop
+
+ML-DSA-44 signing at B=1024 went from 193 µs to **56.3 µs** per signature (liboqs on one core:
+90 µs), i.e. from 1.96× slower to 1.7× faster. At B=4096 it is 37.0 µs (2.5×); 65 and 87 land at
+64.0 and 74.8 µs against 131 and 169. Parity is at B ≈ 200.
+
+Two changes did it, and the second is the interesting one:
+
+- `sign_check_kernel` fuses the whole acceptance test — both norm bounds, the hint, its count and
+  the `z` bound — into one program per signature. It replaced ~20 elementwise torch ops, which are
+  what a tail-sized attempt actually spends its time on. (While writing it, the `z` bound was
+  initially left out; ML-DSA-65/87 still verified by luck, ML-DSA-44 caught it immediately.)
+- **Speculation.** The k-th attempt of a row depends only on κ + k·ℓ, so several candidate attempts
+  can be evaluated in one pipeline pass and resolved afterwards — the row takes the first candidate
+  that accepts, and the signature is bit-identical. A batch no longer needs 84 sequential rounds
+  (the unluckiest signature's tail); it needs ~8, at the cost of running the pipeline on `spec × n`
+  rows, which is free while the batch is launch-bound. `spec=8`, `spec_target=512` was the best of
+  the swept settings.
+
+Signatures are now also assembled for the whole accepted batch in numpy instead of one
+`bytes.join` per signature.
+
+360/360 ACVP sigGen still byte-exact; 771 tests, ruff clean.
+
 ## [0.6.3] — where signing actually wins: the batch size, and a measured dead end
 
 Signing's cost is dominated by a batch's *tail*: at B=1024 the loop runs 84 attempts, 71 of them on

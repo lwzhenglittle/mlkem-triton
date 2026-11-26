@@ -27,6 +27,7 @@ __all__ = [
     "pack_z_kernel",
     "pointwise_kernel",
     "sample_in_ball_kernel",
+    "sign_check_kernel",
     "unpack_z_kernel",
     "w1_pack_kernel",
 ]
@@ -305,3 +306,67 @@ def pointwise_kernel(
     v = (a.to(tl.int64) * b.to(tl.int64)) % Q
     v = tl.where(v < 0, v + Q, v)
     tl.store(OUT + row[:, None] * N + col[None, :], v.to(tl.int32), mask=m[:, None])
+
+
+@triton.jit
+def sign_check_kernel(
+    WM,
+    CT0,
+    Z,
+    H,
+    ACCEPT,
+    K: tl.constexpr,
+    L: tl.constexpr,
+    N: tl.constexpr,
+    Q: tl.constexpr,
+    TWO_G2: tl.constexpr,
+    G2: tl.constexpr,
+    BETA: tl.constexpr,
+    OMEGA: tl.constexpr,
+    NORM_BOUND: tl.constexpr,
+):
+    """The acceptance test of a signing attempt, for one row, in one program.
+
+    On the host this is ~20 elementwise torch ops (two `decompose`s, two `amax`, one `sum`,
+    several `where`s) — and a signing attempt is launch-bound, so those ops dominate a
+    tail-sized attempt. Here each program owns one signature: it walks the k polynomials,
+    computes `r0 = LowBits(w − c·s2)`, the hint `h = HighBits(w + c·t0) ≠ HighBits(w)` and the
+    two norm bounds, and writes the accept bit plus the dense hint mask.
+    """
+    row = tl.program_id(0)
+    i = tl.arange(0, N)
+    max_r0 = tl.zeros((), dtype=tl.int32)
+    max_ct0 = tl.zeros((), dtype=tl.int32)
+    max_z = tl.zeros((), dtype=tl.int32)
+    hints = tl.zeros((), dtype=tl.int32)
+    for kz in tl.static_range(L):
+        zz = tl.load(Z + (row * L + kz) * N + i)
+        max_z = tl.maximum(max_z, tl.max(tl.abs(zz)))
+    for k in tl.static_range(K):
+        wm = tl.load(WM + (row * K + k) * N + i)
+        c0 = tl.load(CT0 + (row * K + k) * N + i)
+
+        r = wm % Q
+        r0 = r % TWO_G2
+        r0 = tl.where(r0 > G2, r0 - TWO_G2, r0)
+        special = (r - r0) == Q - 1
+        r0 = tl.where(special, r0 - 1, r0)
+        r1 = (r - r0) // TWO_G2
+        r1 = tl.where(special, tl.zeros((N,), dtype=tl.int32), r1)
+        max_r0 = tl.maximum(max_r0, tl.max(tl.abs(r0)))
+
+        s = (wm + c0 + Q) % Q
+        s0 = s % TWO_G2
+        s0 = tl.where(s0 > G2, s0 - TWO_G2, s0)
+        sspec = (s - s0) == Q - 1
+        s0 = tl.where(sspec, s0 - 1, s0)
+        s1 = (s - s0) // TWO_G2
+        s1 = tl.where(sspec, tl.zeros((N,), dtype=tl.int32), s1)
+
+        hh = (s1 != r1).to(tl.int32)
+        tl.store(H + (row * K + k) * N + i, hh)
+        hints += tl.sum(hh)
+        max_ct0 = tl.maximum(max_ct0, tl.max(tl.abs(c0)))
+
+    ok = (max_r0 < G2 - BETA) & (max_ct0 < G2) & (max_z < NORM_BOUND) & (hints <= OMEGA)
+    tl.store(ACCEPT + row, ok.to(tl.int32))

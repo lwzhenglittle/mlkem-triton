@@ -414,15 +414,24 @@ is 64-bit lane arithmetic).
 
 `benchmarks/bench_mldsa_sign.py`, Arc B390, one private key, batch of independent messages:
 
-| set | B=64 | B=256 | B=1024 | B=4096 | B=8192 | liboqs 1T | liboqs 16P |
+| set | B=64 | B=128 | B=256 | B=1024 | B=4096 | liboqs 1T | liboqs 16P |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| ML-DSA-44 | 1 075 µs | 466 µs | 193 µs | **94.6 µs** | **81.0 µs** | 97.7 µs | 28.2 µs |
-| ML-DSA-65 | 1 021 µs | 490 µs | 199 µs | — | — | 137.6 µs | 28.0 µs |
-| ML-DSA-87 | 1 273 µs | 487 µs | 209 µs | — | — | 181.3 µs | 27.7 µs |
+| ML-DSA-44 | 163 µs | 133 µs | 96.8 µs | **56.3 µs** | **37.0 µs** | 90.2 µs | 28.2 µs |
+| ML-DSA-65 | — | — | 109 µs | **64.0 µs** | — | 131.4 µs | 28.0 µs |
+| ML-DSA-87 | — | — | 130 µs | **74.8 µs** | — | 169.2 µs | 27.7 µs |
 
-**The batch size decides whether signing wins.** ML-DSA-44 crosses over at B ≈ 3 000-4 000: below
-that the device is 1.9-4.5× slower than one CPU core, above it the device is 1.1-1.3× faster. The
-same API, no flag — a bigger batch is the whole optimisation.
+**Signing now reaches parity with one CPU core at B ≈ 200 and wins above it** (1.7× / 2.0× / 2.3× at
+B=1024). What got it there:
+
+- a **fused acceptance-test kernel** (`sign_check_kernel`): the `r0` and `c·t0` bounds, the hint and
+  its count and the `z` norm in one program per signature, replacing ~20 elementwise torch ops that
+  dominated a tail-sized attempt;
+- **speculation**: a row's k-th attempt depends only on κ + k·ℓ, so an open set of n rows evaluates
+  up to `spec` candidates in one pipeline pass and keeps the first that accepts. The signature is
+  bit-identical (same attempt sequence); a batch of 1024 went from 84 sequential attempts to ~8
+  pipeline rounds. `spec_target` keeps each pass near 512-2048 rows, which is the sweet spot on this
+  device (swept).
+- signatures assembled for the whole accepted batch in numpy instead of per-row `bytes.join`.
 
 **Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
 97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and

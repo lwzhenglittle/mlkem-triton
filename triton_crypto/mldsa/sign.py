@@ -27,6 +27,7 @@ from .kernels import (
     pack_z_kernel,
     pointwise_kernel,
     sample_in_ball_kernel,
+    sign_check_kernel,
     unpack_z_kernel,
     w1_pack_kernel,
 )
@@ -60,6 +61,10 @@ def _center(x: torch.Tensor) -> torch.Tensor:
 
 class Signer:
     """Sign any number of messages under one ML-DSA private key."""
+
+    #: attempts evaluated per pipeline pass (speculation), and the row count the pass aims for
+    spec = 8
+    spec_target = 512
 
     def __init__(self, ps: str, sk: bytes, device=None):
         if ps not in PARAMS:
@@ -183,77 +188,114 @@ class Signer:
 
         remaining = torch.arange(b, device=dev)
         kappa = torch.zeros(b, dtype=torch.int64, device=dev)
-        sigs: list[bytes | None] = [None] * b
-        for _attempt in range(1000):
-            if remaining.numel() == 0:
+        parts: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
+        for _round in range(100000):
+            open_n = int(remaining.numel())
+            if open_n == 0:
                 break
-            mu_a = mu[remaining]
-            rp_a = rho_prime[remaining]
-            kap_a = kappa[remaining]
-            y = self._expand_mask(rp_a, kap_a)  # [n, l, 256]
-            n = y.shape[0]
-            y_hat = ntt_torch(y.reshape(n * p.l, 256), DILITHIUM).reshape(n, p.l, 256)
-            w_hat = torch.empty((n, p.k, 256), dtype=torch.int32, device=dev)
-            mac_kernel[(triton.cdiv(n, MAC_BN), p.k)](
-                y_hat,
-                self.A_hat,
-                self._zero_ch.expand(n, 256),
-                self._zero_t1,
-                w_hat,
-                n,
-                p.k,
-                p.l,
-                256,
-                Q_VALUE,
-                MAC_BN,
-                num_warps=MAC_WARPS,
-            )
-            w = intt_torch(w_hat.reshape(n * p.k, 256), DILITHIUM).reshape(n, p.k, 256)
-            c_tilde = self._ctilde(mu_a, w)
-            c = self._sample_in_ball(c_tilde)
-            c_hat = ntt_torch(c, DILITHIUM)
-            cs1 = intt_torch(
-                (_pointwise(c_hat, self.s1_hat)).reshape(n * p.l, 256), DILITHIUM
-            ).reshape(n, p.l, 256)
-            z = y + cs1
-            z = _center(z)
-            z_ok = z.abs().amax(dim=(1, 2)) < p.norm_bound
-            cs2 = intt_torch(
-                (_pointwise(c_hat, self.s2_hat)).reshape(n * p.k, 256), DILITHIUM
-            ).reshape(n, p.k, 256)
-            w_minus = (w - cs2) % Q_VALUE
-            _, r0 = _decompose(w_minus, p)
-            r0_ok = r0.abs().amax(dim=(1, 2)) < p.gamma2 - p.beta
-            ct0 = _center(
-                intt_torch(
-                    (_pointwise(c_hat, self.t0_hat)).reshape(n * p.k, 256), DILITHIUM
-                ).reshape(n, p.k, 256)
-            )
-            ct0_ok = ct0.abs().amax(dim=(1, 2)) < p.gamma2
-            h = (self._high_bits(w_minus + ct0, p)[0] != self._high_bits(w_minus, p)[0]).to(
-                torch.int32
-            )
-            h_ok = h.sum(dim=(1, 2)) <= p.omega
-            accept = z_ok & r0_ok & ct0_ok & h_ok
-            if accept.any():
-                idx = remaining[accept]
-                z_bytes = self._pack_z(z[accept].contiguous())  # on device, one launch
-                h_np = h[accept].cpu().numpy().astype(np.int64)
-                ct_np = c_tilde[accept].cpu().numpy()
-                z_np = z_bytes.cpu().numpy()
-                for r in range(idx.numel()):
-                    sigs[int(idx[r])] = b"".join(
-                        [ct_np[r].tobytes(), z_np[r].tobytes(), self.ref.pack_h(h_np[r])]
-                    )
-            keep = ~accept
-            remaining = remaining[keep]
-            kappa[remaining] = kappa[remaining] + p.l
-        if any(s is None for s in sigs):
+            # Speculation: the k-th attempt of a row only depends on κ + k·ℓ, so several attempts
+            # can go through one pipeline pass and be resolved afterwards. The signature is
+            # unchanged (a row takes the first accepting candidate); the tail of a batch — where
+            # the pipeline is launch-bound, not compute-bound — needs far fewer rounds.
+            spec = 1
+            if self.spec > 1:
+                spec = max(1, min(self.spec, self.spec_target // max(open_n, 1)))
+            if spec > 1:
+                mu_a = mu[remaining].repeat_interleave(spec, dim=0)
+                rp_a = rho_prime[remaining].repeat_interleave(spec, dim=0)
+                kap_a = kappa[remaining].repeat_interleave(spec) + (
+                    torch.arange(spec, device=dev).repeat(open_n) * p.l
+                )
+            else:
+                mu_a = mu[remaining]
+                rp_a = rho_prime[remaining]
+                kap_a = kappa[remaining]
+            accept, z, h, c_tilde = self._attempt(mu_a, rp_a, kap_a)
+            if spec > 1:
+                acc2 = accept.view(open_n, spec)
+                got = acc2.any(dim=1)
+                first = acc2.to(torch.int64).argmax(dim=1)
+                pick = first + torch.arange(open_n, device=dev) * spec
+                pick = pick[got]
+            else:
+                got = accept
+                pick = accept.nonzero(as_tuple=False).reshape(-1)
+            if bool(got.any()):
+                idx = remaining[got].cpu().numpy()
+                z_bytes = self._pack_z(z[pick].contiguous()).cpu().numpy()
+                h_packed = self._pack_h_batch(h[pick].cpu().numpy())
+                ct_np = c_tilde[pick].cpu().numpy()
+                parts.append((idx, ct_np, z_bytes, h_packed))
+            remaining = remaining[~got]
+            kappa[remaining] = kappa[remaining] + p.l * spec
+
+        if sum(len(p[0]) for p in parts) != b:
             raise RuntimeError("signing did not converge")
-        out = np.empty((b, len(sigs[0]) if sigs[0] is not None else 0), dtype=np.uint8)
-        for i, s in enumerate(sigs):
-            out[i] = np.frombuffer(s, dtype=np.uint8)
+        out = np.empty((b, self.p.sig_size), dtype=np.uint8)
+        for idx, ct, zz, hh in parts:
+            out[idx] = np.concatenate([ct, zz.reshape(len(idx), -1), hh], axis=1)
         return out
+
+    # ---------------------------------------------------------------- one attempt
+    def _attempt(self, mu_a, rp_a, kap_a):
+        """One signing attempt for `n` rows: (accept, z, h, c̃), with no host synchronisation."""
+        p = self.p
+        dev = self.device
+        y = self._expand_mask(rp_a, kap_a)  # [n, l, 256]
+        n = y.shape[0]
+        y_hat = ntt_torch(y.reshape(n * p.l, 256), DILITHIUM).reshape(n, p.l, 256)
+        w_hat = torch.empty((n, p.k, 256), dtype=torch.int32, device=dev)
+        mac_kernel[(triton.cdiv(n, MAC_BN), p.k)](
+            y_hat,
+            self.A_hat,
+            self._zero_ch.expand(n, 256),
+            self._zero_t1,
+            w_hat,
+            n,
+            p.k,
+            p.l,
+            256,
+            Q_VALUE,
+            MAC_BN,
+            num_warps=MAC_WARPS,
+        )
+        w = intt_torch(w_hat.reshape(n * p.k, 256), DILITHIUM).reshape(n, p.k, 256)
+        c_tilde = self._ctilde(mu_a, w)
+        c = self._sample_in_ball(c_tilde)
+        c_hat = ntt_torch(c, DILITHIUM)
+        # one pointwise product and one INTT for ĉ·ŝ1, ĉ·ŝ2 and ĉ·t̂0 together
+        cs = intt_torch(
+            _pointwise(c_hat, self.s1_hat, self.s2_hat, self.t0_hat).reshape(
+                n * (p.l + 2 * p.k), 256
+            ),
+            DILITHIUM,
+        ).reshape(n, p.l + 2 * p.k, 256)
+        cs1 = cs[:, : p.l]
+        cs2 = cs[:, p.l : p.l + p.k]
+        ct0 = _center(cs[:, p.l + p.k :])
+        z = _center(y + cs1)
+        w_minus = (w - cs2) % Q_VALUE
+        # the whole acceptance test — r0 bound, c·t0 bound, hints and their count — in one kernel
+        h = torch.empty((n, p.k, 256), dtype=torch.int32, device=dev)
+        accept = torch.empty(n, dtype=torch.int32, device=dev)
+        sign_check_kernel[(n,)](
+            w_minus.reshape(n * p.k, 256),
+            ct0.reshape(n * p.k, 256),
+            z.reshape(n * p.l, 256),
+            h.reshape(n * p.k, 256),
+            accept,
+            p.k,
+            p.l,
+            256,
+            Q_VALUE,
+            p.two_gamma2,
+            p.gamma2,
+            p.beta,
+            p.omega,
+            p.norm_bound,
+            num_warps=4,
+        )
+        return accept.to(torch.bool), z, h, c_tilde
 
     # ---------------------------------------------------------------- helpers
     def _mu(self, mprimes: np.ndarray, length: int) -> torch.Tensor:
@@ -311,6 +353,27 @@ class Signer:
     def _high_bits(self, r: torch.Tensor, p: DSAParams):
         return _decompose(r, p)
 
+    def _pack_h_batch(self, h: np.ndarray) -> np.ndarray:
+        """HintBitPack (FIPS 204 Alg. 21) for a batch: [n, k, 256] -> [n, omega + k] uint8.
+
+        Per signature this is a Python loop over k polynomials with `flatnonzero`; at a thousand
+        signatures that is ~30 ms of pure host time, so it is done for the whole accepted batch at
+        once instead.
+        """
+        p = self.p
+        n = h.shape[0]
+        out = np.zeros((n, p.omega + p.k), dtype=np.uint8)
+        counts = h.sum(axis=2)  # [n, k]
+        starts = np.zeros_like(counts)
+        starts[:, 1:] = np.cumsum(counts, axis=1)[:, :-1]
+        # rank of each hint inside its own polynomial, so it lands at `starts + rank`
+        rank = np.cumsum(h, axis=2) - 1
+        rows, polys, coeffs = np.nonzero(h)
+        pos = starts[rows, polys] + rank[rows, polys, coeffs]
+        out[rows, pos] = coeffs.astype(np.uint8)
+        out[:, p.omega :] = np.cumsum(counts, axis=1).astype(np.uint8)
+        return out
+
     def _pack_z(self, z: torch.Tensor) -> torch.Tensor:
         """BitPack of z for a batch of accepted rows: [n, l, polyz_bytes] uint8 on device."""
         p = self.p
@@ -329,15 +392,16 @@ class Signer:
         return out
 
 
-def _pointwise(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """ĉ ∘ ŝ mod q for [n, 256] × [m, 256] -> [n, m, 256], in one kernel.
+def _pointwise(a: torch.Tensor, *bs: torch.Tensor) -> torch.Tensor:
+    """ĉ ∘ ŝᵢ mod q for [n, 256] × several [mᵢ, 256] -> [n, Σmᵢ, 256], in one kernel.
 
     The host version broadcast an int64 product and then reduced, materialising a 64-bit array
     of the whole batch three times per attempt; this keeps the product in registers.
     """
-    n, m = a.shape[0], b.shape[0]
+    n, m = a.shape[0], sum(b.shape[0] for b in bs)
     a_rep = a.repeat_interleave(m, dim=0).contiguous()
-    b_rep = b.repeat(n, 1).contiguous()
+    # each row needs the m product-polyteers in block order, so the operand list repeats per row
+    b_rep = torch.cat(list(bs), dim=0).repeat(n, 1).contiguous()
     out = torch.empty((n * m, 256), dtype=torch.int32, device=a.device)
     pointwise_kernel[(triton.cdiv(n * m, 16),)](a_rep, b_rep, out, n * m, 256, Q_VALUE, 16)
     return out.view(n, m, 256)

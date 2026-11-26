@@ -225,11 +225,21 @@ sigs = s.sign_mu(mus)  # external-μ interface
 | fresh keys, all three sets, byte-exact against the reference | pass |
 | batches large enough to exercise the rejection compaction, then verified by `Verifier` | pass |
 
-Throughput (Arc B390, ML-DSA-44): 466 µs/signature at B=256, **193 µs at B=1024, 94.6 µs at
-B=4096, 81.0 µs at B=8192**, against 97.7 µs for liboqs on one CPU thread — so **the batch size
-decides whether signing wins**: below ~3 000 signatures the device loses, above it the device wins
-by 1.1-1.3×. At B=1024 that is 1.96× (44) / 1.45× (65) / 1.15× (87) *slower* than one core, and
-6.8× behind 16 processes. Signing is the one operation in this repository the GPU does not accelerate — the reason is
+Throughput (Arc B390), against liboqs on one CPU thread (≈ 90 / 131 / 169 µs for 44 / 65 / 87):
+
+| set | B=256 | B=1024 | B=4096 |
+|---|---:|---:|---:|
+| ML-DSA-44 | 96.8 µs | **56.3 µs** | **37.0 µs** |
+| ML-DSA-65 | 109.5 µs | **64.0 µs** | — |
+| ML-DSA-87 | 129.6 µs | **74.8 µs** | — |
+
+**Signing reaches parity with one CPU core around B ≈ 200 and pulls ahead above it** — 1.7× at
+B=1024 (44), 2.0× (65), 2.3× (87), and 2.5× at B=4096. Getting there took two things: a fused
+acceptance-test kernel, and *speculation* — a row's k-th attempt depends only on κ + k·ℓ, so a
+small open set evaluates 8 candidate attempts per pipeline pass and keeps the first that accepts
+(the signature is unchanged; the tail of a batch is launch-bound, so fewer rounds is most of the
+win). The 84 sequential attempts a batch used to need are now ~8. Against 16 CPU processes the
+device is still behind small batches and roughly level at B=1024. Signing is the one operation in this repository the GPU does not accelerate — the reason is
 in the shape of the work: a signature is ~4.5 sequential rejection attempts, each a small
 `k·l`-sized batch, so the device pays launch latency where the CPU pays arithmetic. Verification
 (10-13×) is the opposite case. Writing a signature is
