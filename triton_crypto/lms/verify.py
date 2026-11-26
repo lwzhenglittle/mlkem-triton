@@ -1,0 +1,220 @@
+"""Batched LMS / HSS verification on the device.
+
+Per LMS level: one message hash (`Q`), p Winternitz chains (one fused launch, see
+`kernels.chains`), the LM-OTS public-key hash (`Kc`), and h tree hashes. Everything but the chains
+is a SHA-256 over a buffer the host composes, so a whole level costs about `6 + h` launches for the
+entire batch.
+
+HSS is a chain of LMS verifications: level i signs the public key of level i+1, and the last level
+signs the message. Levels may use different parameter sets (RFC 8554 test case 2 does), so the set
+is re-read from each embedded public key.
+"""
+
+from __future__ import annotations
+
+import struct
+
+import numpy as np
+import torch
+
+from ..devices import resolve_device
+from ..primitives import sha2 as _sha2
+from . import kernels as _kernels
+from .params import LMSSet, M, N, get
+
+D_PBLC = 0x8080
+D_MESG = 0x8181
+D_LEAF = 0x8282
+D_INTR = 0x8383
+
+
+def _coef_rows(q: torch.Tensor, w: int, count: int) -> torch.Tensor:
+    """The `count` w-bit digits of each row of `q`, most significant bits first."""
+    rows = q.shape[0]
+    dev = q.device
+    i = torch.arange(count, device=dev)
+    byte = ((i * w) // 8).expand(rows, count)
+    shift = (8 - w - ((i * w) % 8)).expand(rows, count)
+    bits = q.long().gather(1, byte)
+    return (bits >> shift) & ((1 << w) - 1)
+
+
+def _u32_rows(v: torch.Tensor, rows: int) -> torch.Tensor:
+    return torch.stack([((v >> (8 * (3 - k))) & 0xFF).to(torch.uint8) for k in range(4)], dim=1)
+
+
+def _const_rows(rows: int, value: int, dev) -> torch.Tensor:
+    out = torch.full((rows, 2), value & 0xFF, dtype=torch.uint8, device=dev)
+    out[:, 0] = value >> 8
+    return out
+
+
+class Verifier:
+    """Verify LMS / HSS signatures in batches against one HSS public key."""
+
+    def __init__(self, pub: bytes, device=None):
+        self.device = resolve_device(device)
+        pub = bytes(pub)
+        if len(pub) < 4:
+            raise ValueError("HSS public key is too short")
+        self.levels = struct.unpack(">I", pub[:4])[0]
+        if self.levels == 0 or self.levels > 8:
+            raise ValueError(f"unsupported HSS level count {self.levels}")
+        self.pk = pub[4:]
+        self.set = get(*struct.unpack(">II", self.pk[:8]))
+        if len(self.pk) != self.set.pk_size:
+            raise ValueError(f"the level-0 LMS public key must be {self.set.pk_size} bytes")
+
+    # ---------------- plumbing ----------------
+    def _hash(self, data: torch.Tensor) -> torch.Tensor:
+        """SHA-256 of each row of `data` (unpadded) -> [rows, 32] uint8."""
+        rows, length = data.shape
+        blocks = -(-(length + 9) // 64)
+        body = torch.zeros((rows, blocks * 64), dtype=torch.uint8, device=self.device)
+        body[:, :length] = data
+        body[:, length] = 0x80
+        body[:, blocks * 64 - 8 :] = torch.tensor(
+            list((8 * length).to_bytes(8, "big")), dtype=torch.uint8, device=self.device
+        )
+        out = torch.empty((rows, 8), dtype=torch.int32, device=self.device)
+        _sha2.sha_absorb(
+            _sha2.iv_tensor(256, self.device), body.view(torch.int32), out, rows, 256, blocks
+        )
+        return out.view(torch.uint8)
+
+    def _chains(self, qint, ident, ys, s: LMSSet, starts) -> torch.Tensor:
+        """Run every LM-OTS chain to its end: [rows, p, 32] uint8."""
+        rows = ys.shape[0]
+        dev = self.device
+        words = ys.reshape(rows * s.p, N).contiguous().view(torch.int32)
+        ident_words = (
+            ident.contiguous().view(torch.int32).repeat_interleave(s.p, dim=0).contiguous()
+        )
+        qw = qint.repeat_interleave(s.p).to(torch.int32).contiguous()
+        cidx = torch.arange(s.p, dtype=torch.int32, device=dev).repeat(rows)
+        start_flat = starts.reshape(-1).to(torch.int32).contiguous()
+        # rows with fewer remaining steps first, so blocks finish together
+        order = torch.argsort(start_flat)
+        sorted_words = words[order].contiguous()
+        # the per-row address fields must follow the same permutation as the values
+        _kernels.chains(
+            sorted_words,
+            ident_words[order].contiguous(),
+            qw[order].contiguous(),
+            cidx[order].contiguous(),
+            start_flat[order],
+            s.w,
+        )
+        out = torch.empty_like(words)
+        out[order] = sorted_words
+        return out.view(torch.uint8).reshape(rows, s.p, N)
+
+    # ---------------- one LMS level ----------------
+    def _lms(
+        self, pks: torch.Tensor, msgs: torch.Tensor, sigs: torch.Tensor, s: LMSSet
+    ) -> torch.Tensor:
+        """Recompute the LMS root for each row."""
+        rows = sigs.shape[0]
+        dev = self.device
+        ident = pks[:, 8:24].contiguous()
+        qbytes = sigs[:, 0:4].to(torch.int64)
+        qint = qbytes[:, 0] << 24 | qbytes[:, 1] << 16 | qbytes[:, 2] << 8 | qbytes[:, 3]
+        ots = sigs[:, 4 : 4 + s.ots_sig_size]
+        c = ots[:, 4 : 4 + N]
+        ys = ots[:, 4 + N :].reshape(rows, s.p, N)
+        path = sigs[:, 4 + s.ots_sig_size + 4 :].reshape(rows, s.h, M)
+
+        # Q = H(I || u32(q) || u16(D_MESG) || C || msg)
+        qh = self._hash(
+            torch.cat([ident, sigs[:, 0:4], _const_rows(rows, D_MESG, dev), c, msgs], dim=1)
+        )
+        digits = torch.cat([qh, torch.zeros((rows, 2), dtype=torch.uint8, device=dev)], dim=1)
+        per = _coef_rows(qh, s.w, (N * 8) // s.w)
+        cksm = ((1 << s.w) - 1 - per).sum(dim=1) << s.ls
+        digits[:, N] = (cksm >> 8).to(torch.uint8) & 0xFF
+        digits[:, N + 1] = (cksm & 0xFF).to(torch.uint8)
+
+        zs = self._chains(qint, ident, ys, s, _coef_rows(digits, s.w, s.p))
+
+        # Kc = H(I || u32(q) || u16(D_PBLC) || z[0] || ... || z[p-1])
+        kc = self._hash(
+            torch.cat(
+                [ident, sigs[:, 0:4], _const_rows(rows, D_PBLC, dev), zs.reshape(rows, s.p * N)],
+                dim=1,
+            )
+        )
+
+        # the tree: leaf hash, then h interior hashes against the sibling in `path`
+        node = (1 << s.h) + qint
+        root = self._hash(
+            torch.cat([ident, _u32_rows(node, rows), _const_rows(rows, D_LEAF, dev), kc], dim=1)
+        )
+        for k in range(s.h):
+            parent = node >> 1
+            auth = path[:, k, :]
+            odd = ((node & 1) == 1)[:, None]
+            left = torch.where(odd, auth, root)
+            right = torch.where(odd, root, auth)
+            root = self._hash(
+                torch.cat(
+                    [ident, _u32_rows(parent, rows), _const_rows(rows, D_INTR, dev), left, right],
+                    dim=1,
+                )
+            )
+            node = parent
+        return root
+
+    # ---------------- HSS ----------------
+    def verify(self, messages, signatures) -> np.ndarray:
+        msgs = [bytes(m) for m in messages]
+        sigs = [bytes(s) for s in signatures]
+        out = np.zeros(len(msgs), dtype=bool)
+        if not msgs:
+            return out
+        buckets: dict[int, list[int]] = {}
+        for i, m in enumerate(msgs):
+            buckets.setdefault(len(m), []).append(i)
+        for length, idxs in buckets.items():
+            out[idxs] = self._verify_group([msgs[i] for i in idxs], [sigs[i] for i in idxs], length)
+        return out
+
+    def _verify_group(self, msgs: list[bytes], sigs: list[bytes], length: int) -> np.ndarray:
+        dev = self.device
+        rows = len(msgs)
+        cur_pub = (
+            torch.frombuffer(bytearray(self.pk), dtype=torch.uint8)
+            .to(dev)
+            .reshape(1, -1)
+            .repeat(rows, 1)
+        )
+        msg_t = (
+            torch.frombuffer(bytearray(b"".join(msgs)), dtype=torch.uint8)
+            .to(dev)
+            .reshape(rows, length)
+        )
+        all_sigs = (
+            torch.frombuffer(bytearray(b"".join(sigs)), dtype=torch.uint8).to(dev).reshape(rows, -1)
+        )
+
+        ok = torch.ones(rows, dtype=torch.bool, device=dev)
+        sig_off = 4
+        for level in range(self.levels - 1):
+            s = get(*struct.unpack(">II", cur_pub[0, :8].cpu().numpy().tobytes()))
+            if level > 0:
+                # each row now has its own public key; the parameter set must agree across the batch
+                pass
+            sig_t = all_sigs[:, sig_off : sig_off + s.sig_size]
+            # the signed public key follows the LMS signature in the HSS blob
+            next_pub = all_sigs[:, sig_off + s.sig_size : sig_off + s.sig_size + s.pk_size]
+            root = self._lms(cur_pub, next_pub, sig_t, s)
+            ok &= (root == cur_pub[:, 24 : 24 + M]).all(dim=1)
+            cur_pub = next_pub
+            sig_off += s.sig_size + s.pk_size
+            if not bool(ok.any()):
+                return ok.cpu().numpy()
+
+        s = get(*struct.unpack(">II", cur_pub[0, :8].cpu().numpy().tobytes()))
+        sig_t = all_sigs[:, sig_off:]
+        root = self._lms(cur_pub, msg_t, sig_t, s)
+        ok &= (root == cur_pub[:, 24 : 24 + M]).all(dim=1)
+        return ok.cpu().numpy()

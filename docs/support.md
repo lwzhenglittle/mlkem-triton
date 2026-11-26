@@ -4,13 +4,13 @@
 
 ## 1. Support matrix
 
-| backend | ML-KEM (FIPS 203) | ML-DSA verify (FIPS 204) | SLH-DSA verify (FIPS 205) | notes |
+| backend | ML-KEM (FIPS 203) | ML-DSA verify (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | notes |
 |---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **702 tests green** |
-| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
-| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
-| Apple MPS | ❌ | ❌ | ❌ | no Triton backend |
-| CPU | ❌ | ❌ | ❌ | no usable Triton CPU target |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (SHA-256 sets) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **726 tests green** |
+| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
+| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
+| Apple MPS | ❌ | ❌ | ❌ | ❌ | no Triton backend |
+| CPU | ❌ | ❌ | ❌ | ❌ | no usable Triton CPU target |
 
 The ML-KEM CUDA row was **actually run on that machine**: same code, same ACVP vectors, 264
 tests green, without changing a single kernel. Only the tile configuration differs. ML-DSA has

@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.5.0] — LMS/HSS verification, and a measured "no" to fusing the WOTS chains
+
+### Added — LMS / HSS (NIST SP 800-208, RFC 8554)
+
+A new stateful-hash-based scheme next to SLH-DSA, verification only:
+
+- `triton_crypto/lms/params.py` — the 20 SHA-256 parameter sets (H5–H25 × W1/W2/W4/W8) and their
+  wire type codes. The SP 800-208 SHAKE-256 variants are deliberately absent: their numeric
+  identifiers are still TBD in the standard.
+- `triton_crypto/lms/ref.py` — LM-OTS / LMS / HSS verification, key generation from a seed
+  (Appendix A) and a signer, checked against **both RFC 8554 test vectors** (one of which mixes
+  H5/W8 with H10/W4).
+- `triton_crypto/lms/kernels.py` — `lms_chain_kernel`: every LM-OTS chain of the whole batch in one
+  launch, one single-block SHA-256 compression per step, per-block exit once a block's rows are
+  done (the step count is data-dependent, 0–255).
+- `triton_crypto/lms/verify.py` — batched HSS verification: `6 + h` launches per level for the
+  whole batch, message-length bucketing, mixed parameter sets per level.
+
+Measured at batch 4096: **8.5 µs/signature** for RFC case 1 (2 levels, H5/W8) and **7.1 µs** for
+case 2, roughly 1 Ghash/s of SHA-256 compression.
+
+### Tried and rejected — fusing the WOTS+ chain into one kernel
+
+The obvious next optimisation was to fuse SLH-DSA's 15 chain steps into one kernel (one launch per
+layer instead of ~8). Measured on the same 128f workload at B=4096: **56.5 µs/signature versus
+48 µs** unfused — slower. Keeping the 25-word Keccak state plus the ADRS words and the value live
+across an inner loop spills registers, and the per-step schedule is already at 76–83 % of the
+permutation roofline, so there is no launch overhead left to win. Fusing the XMSS *authentication
+path* (h' steps) was neutral (50.8 µs) and broke one ACVP case under batching, so both were
+reverted; the numbers are recorded here so the experiment is not repeated.
+
 ## 0.4.0 — SLH-DSA (FIPS 205) verification, and a fused `thash` kernel
 
 The first scheme in the box that needs no arithmetic at all: SLH-DSA is hash-based, so it runs

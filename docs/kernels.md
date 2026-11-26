@@ -28,6 +28,7 @@ variant.
 | `sponge_kernel` | `primitives/sponge.py` | primitive | `(cdiv(n, BLOCK),)` | `sponge_padded`, `get_sponge`, `padcat` users |
 | `ntt_kernel` | `primitives/ntt.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
 | `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
+| `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
 | `_gemm_modq_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
 | `padcat2_kernel` | `kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
@@ -135,6 +136,26 @@ different hash function.
 compressed ADRS, built in registers, with the input value copied through for rows whose WOTS chain
 has finished. Both are used by the SHA-2 parameter sets (`slhdsa/verify.py`), and both are checked
 against numpy for every `(n, dn)` the scheme can produce (`tests/test_sha2.py`).
+
+### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
+
+Every LM-OTS chain of every signature in one launch. A row is one (signature, chain element); the
+kernel walks the chain in place, one *single-block* SHA-256 compression per step — the hashed string
+is `I(16) || u32(q) || u16(i) || u8(j) || value(32)`, 55 bytes, so the round function starts from
+the IV and no prefix state is needed.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `VALUE` | `[rows, 8]` | `int32` | the LM-OTS `y[i]`, the eight big-endian words of the 32-byte value (updated in place) |
+| `IW` | `[rows, 4]` | `int32` | the key identifier `I`, four big-endian words |
+| `QW` / `CIDX` / `START` | `[rows]` | `int32` | leaf number `q`, chain index `i`, first step index `a` |
+| `STEPS` | scalar | `int64` | `2^w - 1` (255 for `w = 8`) |
+
+Two details make it fast rather than merely correct. The step count is data-dependent (`a` comes
+from the message digits), so a fixed 255-step loop would be ~2× the average work for `w = 8`; the
+rows are sorted by `START` on the host and the kernel exits per block once its rows are done. And
+the value starts at byte 23, i.e. three bytes into a word, so the block words are assembled with
+`(v[k] << 8) | (v[k+1] >> 24)` shifts — cheaper than loading the value as bytes.
 
 ## Generic (scheme-agnostic)
 

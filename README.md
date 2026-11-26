@@ -213,6 +213,37 @@ next section exists.
 
 ---
 
+## LMS / HSS (NIST SP 800-208) verification
+
+Stateful hash-based signatures: LM-OTS Winternitz chains over a Merkle tree, and HSS as a chain of
+LMS trees where each level signs the next level's public key. Verification has no secrets and no
+rewind hazard — the statefulness that makes these schemes awkward to *sign* with does not touch the
+verifier.
+
+Implemented: **the RFC 8554 SHA-256 parameter sets** (heights H5–H25 × Winternitz factors W1/W2/W4/
+W8, 20 combinations) at any HSS depth up to 8, including hierarchies that mix parameter sets. The
+SHAKE-256 variants from SP 800-208 are **not** implemented: the standard still lists their numeric
+type codes as TBD, so there is nothing interoperable to encode.
+
+| gate | result |
+|---|---|
+| RFC 8554 test vectors (two HSS cases, one of them mixed H5/W8 + H10/W4) | **2/2**, device and reference |
+| reference sign → device verify round-trips, all four Winternitz factors | **pass** |
+| device vs reference on fresh keys, two-level HSS, tamper and wrong-message cases | **pass** |
+
+Per signature at batch 4096 (one launch per chain group, not per chain):
+
+| vector | device | Python reference |
+|---|---:|---:|
+| RFC 8554 case 1 (2 levels, H5/W8, 2 644-byte signature) | **8.5 µs** | 2 300 µs |
+| RFC 8554 case 2 (2 levels, H10/W4 + H5/W8, 3 860-byte signature) | **7.1 µs** | 2 530 µs |
+
+**There is no liboqs baseline**: liboqs does not implement LMS/HSS, so the honest comparison is
+against this repository's own Python reference (an oracle, not a tuned CPU implementation) and the
+numbers are otherwise absolute. The interesting workload is W8, where p = 34 chains of up to 255
+SHA-256 compressions run per level — 4 300 hashes per signature per level on average, which is
+where a batch of thousands of independent verifications pays off.
+
 ## SLH-DSA (FIPS 205) signature verification
 
 Hash-based, so it needs no arithmetic of its own: every operation is a single-block SHAKE256

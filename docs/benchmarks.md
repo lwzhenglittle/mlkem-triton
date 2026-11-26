@@ -385,3 +385,24 @@ First use of each fused `thash` kernel compiles ~143 lines of Triton (~1.5 s per
 six pairs total) and is then cached on disk; Triton additionally specialises on the batch size, so
 the first verification of a new batch-size class adds ~0.4 s. Measured on a cold cache, the first
 128f verification takes ~6 s; that cost is outside the table.
+
+---
+
+## 13. LMS / HSS verification (SP 800-208)
+
+`benchmarks/bench_lms_verify.py` tiles one RFC 8554 test vector across a batch. liboqs does not
+implement LMS, so the only comparison available in-repo is the Python reference (a correctness
+oracle; its numbers are in the same table only to show the batch effect).
+
+| vector | B | device | per signature | Python ref |
+|---|---:|---:|---:|---:|
+| RFC 8554 case 1 (H5/W8, 2 levels) | 256 | 7.6 ms | 29.7 µs | — |
+| | 1024 | 12.3 ms | 12.1 µs | — |
+| | 4096 | 34.8 ms | **8.5 µs** | 2 300 µs |
+| RFC 8554 case 2 (H10/W4 + H5/W8, 2 levels) | 4096 | 29.2 ms | **7.1 µs** | 2 530 µs |
+
+The shape of the work explains why the batch helps so much: one LM-OTS chain is up to 255
+*sequential* SHA-256 compressions, so a single verification is latency-bound, while a batch of
+thousands turns the same chain steps into a full-grid launch. The device figure is ~1 Ghash/s of
+32-bit SHA-256 compression, which is ~3× the Keccak permutation rate measured for SLH-DSA (that one
+is 64-bit lane arithmetic).

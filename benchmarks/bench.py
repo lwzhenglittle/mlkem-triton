@@ -38,6 +38,9 @@ SCRIPTS = {
     "slhdsa": {
         None: "bench_slhdsa_verify.py",
     },
+    "lms": {
+        None: "bench_lms_verify.py",
+    },
 }
 
 SCHEME_INFO = {
@@ -49,6 +52,11 @@ SCHEME_INFO = {
     "mldsa": (
         "ML-DSA (FIPS 204) — signature verification",
         "mldsa",
+        [],
+    ),
+    "lms": (
+        "LMS / HSS (SP 800-208) — signature verification",
+        "lms",
         [],
     ),
 }
