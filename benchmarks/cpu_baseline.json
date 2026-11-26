@@ -5,11 +5,11 @@
     "nproc": 16,
     "scaling": {
       "scaling_governor": "powersave",
-      "scaling_cur_freq": "2188476",
+      "scaling_cur_freq": "779978",
       "cpuinfo_max_freq": "4700000",
       "cpuinfo_min_freq": "400000"
     },
-    "timestamp": "2026-11-26T14:04:22+00:00",
+    "timestamp": "2026-11-26T14:09:47+00:00",
     "python": "3.14.10",
     "openssl": "OpenSSL 3.5.9 29 Sep 2026 (Library: OpenSSL 3.5.9 29 Sep 2026)",
     "liboqs_builds": [
@@ -23,92 +23,92 @@
   "rivals": {
     "chacha20": {
       "unit": "B/s",
-      "one_thread": 4731879420.0,
-      "procs16": 29071359570.0,
+      "one_thread": 4810031100.0,
+      "procs16": 29490688680.0,
       "note": "openssl speed -evp chacha20"
     },
     "chacha20-poly1305": {
       "unit": "B/s",
-      "one_thread": 3204481020.0,
-      "procs16": 20653963720.0,
+      "one_thread": 3263791100.0,
+      "procs16": 22425502390.0,
       "note": "openssl speed -evp chacha20-poly1305"
     },
     "aes-128-ctr": {
       "unit": "B/s",
-      "one_thread": 13792034820.0,
-      "procs16": 165912081870.0,
+      "one_thread": 14139129860.0,
+      "procs16": 163159282540.0,
       "note": "openssl speed -evp aes-128-ctr"
     },
     "sha256": {
       "unit": "B/s",
-      "one_thread": 4171546620.0,
-      "procs16": 49346428640.0,
+      "one_thread": 4288299010.0,
+      "procs16": 50414518020.0,
       "note": "openssl speed -evp sha256"
     },
     "sha512": {
       "unit": "B/s",
-      "one_thread": 1104066460.0,
-      "procs16": 13441393250.0,
+      "one_thread": 1129398270.0,
+      "procs16": 13263930770.0,
       "note": "openssl speed -evp sha512"
     },
     "sha3-256": {
       "unit": "B/s",
-      "one_thread": 719754080.0,
-      "procs16": 7903588120.0,
+      "one_thread": 738787330.0,
+      "procs16": 7900950900.0,
       "note": "openssl speed -evp sha3-256"
     },
     "sha3-512": {
       "unit": "B/s",
-      "one_thread": 382550020.0,
-      "procs16": 4272488610.0,
+      "one_thread": 390774780.0,
+      "procs16": 4239649590.0,
       "note": "openssl speed -evp sha3-512"
     },
     "poseidon2": {
       "unit": "op/s",
-      "one_thread": 9530000.0,
-      "procs16": 134160000.0,
+      "one_thread": 9600000.0,
+      "procs16": 144220000.0,
       "note": "Plonky3 0.8 packed monty-31x8 (cargo ref)"
     },
     "mldsa-44-verify": {
       "unit": "op/s",
-      "one_thread": 61542.45587259299,
-      "procs16": 944598.7295430001,
+      "one_thread": 64677.82346740225,
+      "procs16": 892774.4729268107,
       "note": "liboqs 0.16.0 ML-DSA-44 verify"
     },
     "falcon-512-verify": {
       "unit": "op/s",
-      "one_thread": 42154.01792987526,
-      "procs16": 458473.86768183415,
+      "one_thread": 24894.49011630421,
+      "procs16": 448133.01298764616,
       "note": "liboqs 0.16.0 Falcon-512 verify"
     },
     "falcon-padded-512-verify": {
       "unit": "op/s",
-      "one_thread": 24674.308801846637,
-      "procs16": 435751.1318496759,
+      "one_thread": 24402.43578290065,
+      "procs16": 473877.89982987865,
       "note": "liboqs 0.16.0 Falcon-padded-512 verify"
     },
     "slhdsa-128f-verify": {
       "unit": "op/s",
-      "one_thread": 1044.5887951965087,
-      "procs16": 14388.770171822358,
+      "one_thread": 1123.127012989544,
+      "procs16": 14733.494052919048,
       "note": "liboqs 0.16.0 SLH-DSA-SHA2-128f verify"
     },
     "poly1305": {
       "unit": "B/s",
-      "one_thread": 7542138004.583413,
-      "procs16": 75825335540.54857,
+      "one_thread": 7470086161.594984,
+      "procs16": 81410747503.94736,
       "note": "OpenSSL 3.5 EVP_MAC POLY1305"
     },
     "shake128": {
       "unit": "B/s",
-      "one_thread": 915816450.0,
-      "procs16": 9781869680.0,
+      "one_thread": 895647740.0,
+      "procs16": 10178210140.0,
       "note": "openssl speed -evp shake128"
     },
     "shake256": {
       "unit": "B/s",
-      "one_thread": 740130820.0,
-      "procs16": 7701352370.0,
+      "one_thread": 731267070.0,
+      "procs16": 8023519640.0,
       "note": "openssl speed -evp shake256"
     }
   }

@@ -94,6 +94,18 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### `benchmarks/snapshot.py`: the measurement discipline as the default
+
+Every number in these docs is supposed to come from one window (§1: "same process, same second,
+quote ratios not absolutes"), and the reports were still assembled by hand from separate runs.
+`snapshot.py` runs the CPU rivals, the primitive table and the four scheme benchmarks in one
+window and writes one timestamped markdown plus a JSON header (git revision, per-section
+command, return code, wall time, whether the CPU baseline was reused or measured).
+
+It shells out to the existing scripts on purpose: each one builds its own liboqs/ACVP corpus
+and prints its own copy-bandwidth header, and duplicating that would mean a second set of
+conventions to keep in sync. Snapshots are gitignored — artifacts of a window, not sources.
+
 ### The CPU rival table is complete: Poly1305 and SHAKE
 
 `benchmarks/bench_cpu.py` grew three rivals, so the primitive table now has a `vs 1T` / `vs 16P`

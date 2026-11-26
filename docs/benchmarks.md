@@ -726,3 +726,21 @@ end before assuming the matrix unit wins.
 The bit-plane *arithmetic* is checked in `tests/test_gemm_int8.py`: 64 tiny int8 GEMMs,
 XOR-ed through the AES polynomial's reduction masks, are compared against a schoolbook
 GF(2^8) matrix product.
+
+## 20. One window, one file: `benchmarks/snapshot.py`
+
+The discipline in §1 is "same process, same second, quote the ratios" — and the reports that
+go with it were assembled by hand from separate runs. `snapshot.py` makes the discipline the
+default:
+
+    python benchmarks/snapshot.py                # everything, ~10 minutes
+    python benchmarks/snapshot.py --skip-cpu     # reuse cpu_baseline.json
+    python benchmarks/snapshot.py --only primitive,falcon
+
+It shells out to the existing scripts (each sets up its own liboqs/ACVP corpus and prints its
+own copy-bandwidth header — re-implementing that would be a second set of conventions to keep
+in sync) and wraps them in an envelope: one timestamp, the git revision, and one markdown file
+whose sections are the eight measurements above. A sibling `.json` records each section's
+command, return code and wall time, so a snapshot can be diffed against the next one.
+
+Snapshots are gitignored: they are artifacts of a window, not sources.
