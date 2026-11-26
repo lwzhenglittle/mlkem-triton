@@ -1,10 +1,36 @@
 # Changelog
 
-## [1.1.0] — four primitives, one scheme, and the column that decides whether to port
+## [1.1.0] — six primitive modules, one scheme, and the column that decides whether to port
 
 What the primitive layer learned overnight: the CPU rival matters more than the device. Every
 row below is measured in the same window against `benchmarks/cpu_baseline.json`, and the
 `vs 16P` column is now part of the table.
+
+### At a glance
+
+The section below is a working log, newest first, 31 entries long. This is the version summary.
+
+**Added** — `primitives/poseidon2.py` (Plonky3 params, 38.7 ns/perm),
+`primitives/poly1305.py` (+ ChaCha20-Poly1305 AEAD), `primitives/aes.py` (T-table, a gather
+measurement rather than a fast path), `primitives/gemm.py` (exact int8, 3.96 TMAC/s at n = 2048),
+`primitives/blake3.py` (the tree hash, 10.2 GB/s), `primitives/ntt/large.py` (multi-pass to
+2^20), `falcon/` (FIPS 206 draft verification), `benchmarks/bench_cpu.py` (17 rivals, 1T and 16P),
+`benchmarks/snapshot.py` (one command, one window), `docs/patterns.md`, and two new test oracles
+(OpenSSL for Poly1305 and AES).
+
+**Changed** — Falcon's `HashToPoint` moved to the device (e2e 31.3 -> 24.4 us); the 2^20 NTT went
+from 10.8 ms to **1.0-1.8 ms** (70x one core, 2.9-5.0x sixteen processes); `bench_primitive.py`
+gained the `vs 1T` / `vs 16P` / `==copy` columns and a comma-list `--batch`; the CPU baseline
+carries a per-rival timestamp.
+
+**Fixed** — six places where the harness or the docs stated something untrue: a rival measured on
+a scalar path (7x too slow), one timestamp for seventeen rivals, one quantity measured twice, a
+documented `--batch` form that did not run, a README call shape that did not match the API, and a
+required-path list in CI that stopped before tonight's modules.
+
+**Not adopted, with the measurement** — radix-4 (half the traffic, 10-20% of the time), Barrett
+reduction (1.02x), a device-side `comp_decode` (35x slower than the host), AES bitslicing (a 0.06x
+opponent).
 
 
 ### Poseidon2-BabyBear/16, and the first `vs CPU` column in the primitive table
