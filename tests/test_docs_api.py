@@ -94,3 +94,33 @@ def test_the_package_parses_as_python_3_10():
         except SyntaxError as exc:
             bad.append(f"{p.relative_to(root)}:{exc.lineno} {exc.msg}")
     assert not bad, "syntax newer than the declared floor: " + "; ".join(bad)
+
+
+def test_the_documented_test_count_is_the_real_one():
+    """A hard-coded count in prose drifts every time a test is added -- measured four times in one
+    night. This runs `--collect-only` (which executes nothing) and compares.
+
+    `pytest` inside `pytest` is safe here precisely because collection only imports: no kernel is
+    compiled and no device is touched.
+    """
+    import re
+    import subprocess
+    import sys
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    out = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "--collect-only"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    match = re.search(r"(\d+) tests? collected", out.stdout)
+    assert match, f"could not parse the collected count from: {out.stdout[-300:]}"
+    actual = int(match.group(1))
+
+    quoted = {}
+    for name in ("README.md", "docs/support.md"):
+        text = (root / name).read_text()
+        quoted[name] = [int(n) for n in re.findall(r"\*\*(\d+) tests(?: green)?\*\*", text)]
+    stale = {name: nums for name, nums in quoted.items() if nums and set(nums) != {actual}}
+    assert not stale, f"the suite collects {actual} tests, but: {stale}"

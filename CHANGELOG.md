@@ -197,6 +197,17 @@ bounded by 2047, so the narrowing is exact by construction. Half the bytes per n
 another 9% -- 16.8 -> **15.6 µs per signature**, 69.9 -> 63.9 ms per 4096-signature batch,
 bit-identical output. End to end: 20.8 -> **18.9 µs**.
 
+### The documented test count is now a test
+
+Four times in one night a hard-coded "N tests" in prose went stale -- README twice, docs/support.md
+once, and the report's per-file counts once more. Summaries that a human maintains drift; the only
+reliable fix is to make the drift fail.
+
+`test_the_documented_test_count_is_the_real_one` runs `pytest --collect-only` (which executes
+nothing, so no kernel compiles) and compares the number against every `**N tests**` in README and
+`**N tests green**` in `docs/support.md`. It caught itself on the first run: adding it moved the
+suite from 1161 to 1162.
+
 ### The input-validation contract, as a file: 1158 tests
 
 After the wrong-shape bug (below), the other primitives were probed the same way, and three more
