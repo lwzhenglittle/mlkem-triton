@@ -21,7 +21,7 @@ from triton_crypto.primitives import BABYBEAR_NTT, DILITHIUM, KYBER
 
 
 def _params(fn) -> list[str]:
-    return [p for p in inspect.signature(fn).parameters]
+    return list(inspect.signature(fn).parameters)
 
 
 def test_mlkem_block():
