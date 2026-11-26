@@ -101,7 +101,7 @@ def _stage_kernel(
 class LargeNTT:
     """A negacyclic NTT of size `n`, multi-pass, for n beyond the in-register kernel's range."""
 
-    def __init__(self, n: int, q: int, radix: int = 2):
+    def __init__(self, n: int, q: int, radix: int = 4):
         if n & (n - 1):
             raise ValueError(f"n must be a power of two, got {n}")
         if radix not in (2, 4):
@@ -417,11 +417,11 @@ class LargeNTT:
     def forward_tensor_torch(self, x, dev):
         """Device tensor in, device tensor out, tables cached: the timing entry point.
 
-        `radix=4` (default 2) halves the number of passes but is **slower on this device** --
-        2.63 ms against 2.13 at 2^20, best case over a tile/warp sweep. A radix-4 butterfly
-        loads four coefficients up to `n/4` apart, so the pass stops being cache-resident, while
-        two radix-2 passes each touch one adjacent pair. It is kept because the arithmetic is
-        verified against the radix-2 result and another device may not have that problem.
+        `radix=4` (the default) fuses two stages per pass, halving the traffic: ten passes of 8 MB
+        instead of nineteen. Paired against radix-2 in one window over ten alternating runs at
+        2^20 -- both with the pre-twiddle fused -- it is **faster and steadier**: 1.34/1.36 ms
+        (min/median) against 1.50/1.67. An earlier comparison said the opposite; that one had
+        radix-4 paying for a separate pre-twiddle pass the radix-2 path no longer needed.
         """
         self._check_tensor(x, "input")
         if self.radix == 4:

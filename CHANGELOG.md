@@ -179,6 +179,21 @@ the n odd powers of a 2n-th root, so the pre-twiddled sum runs over n terms and
 (zero stays zero, the constant agrees with the numpy path) and asserts the *false* assumption is
 false, so nobody re-derives it.
 
+### radix-4 becomes the default, after the comparison that rejected it was corrected
+
+The radix-4 pass was rejected as "10-20% faster, smaller than the run-to-run spread". That
+comparison was unfair: radix-4 was still paying for a **separate pre-twiddle pass** while the
+radix-2 path had that pass fused into its first stage. With the fusion added to radix-4 as well,
+paired over ten alternating runs in one window at 2^20:
+
+| | min | median | traffic |
+|---|---:|---:|---:|
+| radix-2, 19 fused passes | 1.50 ms | 1.67 ms | 152 MB |
+| **radix-4, 10 fused passes** | **1.34 ms** | **1.36 ms** | **88 MB** |
+
+Faster by 11-19%, and its median is far steadier -- which is what halving the traffic should do.
+`radix=4` is the default; `radix=2` remains available and is still the oracle in the tests.
+
 ### ...and the calls, not the work, were the cost: 15.6 -> 13.5 µs
 
 Precomputing every 32-bit window once (`[B, width]` int32, built in four vectorised passes) turns

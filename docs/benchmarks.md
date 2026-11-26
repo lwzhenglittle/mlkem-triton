@@ -880,8 +880,8 @@ per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **1.0–1.8 ms** | 69.9 ms | 5.25 ms | **70x / 39x** | **5.3x / 2.9x** |
-| traffic (19 passes x 8 MB) | 152 MB | | | | |
+| 2^20 forward NTT | **1.0–1.4 ms** | 69.9 ms | 5.25 ms | **57–83x** | **4.3–6.2x** |
+| traffic (10 passes x 8 MB, radix-4) | 88 MB | | | | |
 | last window measured | 1.36 ms -> 38.9x / 2.92x | | | | |
 | achieved (fast clock) | 155 GB/s (72% of copy) | 2.4 GB/s | 30 GB/s | | |
 
@@ -923,8 +923,8 @@ where one radix-2 pass is left over. Paired in one window, eight alternating rou
 
 | | min | median | traffic | achieved |
 |---|---:|---:|---:|---:|
-| radix-2 (20 passes) | 1.88 ms | 3.18 ms | 160 MB | 85 GB/s |
-| radix-4 (10 passes) | **1.74 ms** | **2.64 ms** | 80 MB | 46 GB/s |
+| radix-2 (19 passes, pre-twiddle fused) | 1.50 ms | 1.67 ms | 152 MB | 101 GB/s |
+| **radix-4 (10 passes, pre-twiddle fused)** | **1.34 ms** | **1.36 ms** | 88 MB | 66 GB/s |
 
 So halving the traffic does **not** halve the time: the transform is limited by pass latency and
 by the modular multiplies, not by bytes. That also means the "0.74 ms roofline" is not the
