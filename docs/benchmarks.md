@@ -505,6 +505,13 @@ not expressible in Triton today. Note the ceiling: even a perfect 2× would put 
 
 ---
 
+## 14.5 The synthesis: `docs/patterns.md`
+
+The numbers in §15-§20 exist to support one table: [patterns.md](patterns.md) maps the ten
+computational patterns the project set out to cover onto what they actually cost here, states
+the rule that decides whether a port is worth doing, and lists the six Triton traps that produced
+plausible-but-wrong output before a known-answer vector caught them.
+
 ## 15. The primitive layer itself
 
 `python benchmarks/bench_primitive.py --batch 4096 --size 1024` (Arc B390, one process,

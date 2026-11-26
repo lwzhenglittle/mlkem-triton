@@ -133,7 +133,11 @@ digests = hash_np_batch(messages, SHA3_256)  # [B, 32] uint8
 
 The same negacyclic NTT, parameterised by `(q, N, ζ, layers)`, serves both schemes — and a third
 domain (BabyBear, for ZK work) needs no new kernel; the sponge provides SHA3/SHAKE at any rate and
-output length, batched. `benchmarks/snapshot.py` runs everything — CPU rivals, the primitive table and the scheme
+output length, batched. **[docs/patterns.md](docs/patterns.md)** is the synthesis: the ten computational patterns the
+project set out to cover, what each cost in Triton, and the one rule that decides whether a port
+is worth doing (whether the CPU has a hardware instruction for it).
+
+`benchmarks/snapshot.py` runs everything — CPU rivals, the primitive table and the scheme
 benchmarks — in one window and writes one timestamped markdown file.
 `benchmarks/bench_primitive.py` prints one throughput table for this whole
 layer against a measured copy bandwidth, and joins in `benchmarks/cpu_baseline.json` (from

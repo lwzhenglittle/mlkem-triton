@@ -94,6 +94,25 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### `docs/patterns.md`: the table the project was actually for
+
+The roadmap asked for ten *computational patterns*, not ten algorithms, on the theory that the
+by-product would be a table saying which patterns are easy and which are hard. That table now
+exists as a document: every pattern with its representative primitive, its status, its measured
+device throughput against the 16-process CPU baseline, what it cost in Triton, and what stopped
+the ones that did not land.
+
+Its first section is the rule that the whole batch of measurements converged on: **whether a
+pattern is worth porting is decided by whether the CPU has a hardware instruction for it.** The
+device's ALU-bound throughput barely moves between rows (10-31 GB/s); the 100x spread in the
+`vs 16P` column comes entirely from the CPU side -- SHA3 4.0x (no Keccak instruction), SHA-256
+1.58x, ChaCha20 0.49x, Poly1305 0.15x, AES 0.06x (AES-NI).
+
+Also collects the six Triton traps (signed `%` is truncated, `h + x & M` masks the sum,
+`expand` is not contiguous, a `tl.constexpr` cannot take a loop variable, a runtime loop cannot
+carry a tuple, and `tl.sort` is silently wrong on XPU 3.9) and the two shapes that did not land,
+with what stopped each.
+
 ### `benchmarks/snapshot.py`: the measurement discipline as the default
 
 Every number in these docs is supposed to come from one window (§1: "same process, same second,
