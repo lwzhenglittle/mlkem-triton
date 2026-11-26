@@ -118,3 +118,64 @@ def test_scheme_constructors_refuse_wrong_key_lengths():
         Decapsulator("ML-KEM-768", bytes(100))
     with pytest.raises(ValueError, match="ek length"):
         Encapsulator("ML-KEM-768", bytes(100))
+
+
+def test_device_entry_points_accept_device_tensors():
+    """`gemm_int8_torch` is documented as running *on the device*.
+
+    The dtype check added earlier routed both operands through `np.asarray`, so a device tensor
+    raised "can't convert xpu:0 device type tensor to numpy" -- a confusing way to say the dtype
+    is fine. Both a host array and a device tensor must work and agree.
+    """
+    import torch
+
+    a = np.arange(64, dtype=np.int8).reshape(8, 8)
+    b = np.ones((8, 8), np.int8)
+    want = gemm.gemm_int8_np(a, b)
+    assert np.array_equal(gemm.gemm_int8_torch(a, b).cpu().numpy(), want)
+    dev = torch.device("xpu")
+    got = (
+        gemm.gemm_int8_torch(torch.as_tensor(a, device=dev), torch.as_tensor(b, device=dev))
+        .cpu()
+        .numpy()
+    )
+    assert np.array_equal(got, want)
+
+
+@pytest.mark.parametrize("api", ["blake3", "chacha20", "poseidon2", "ntt"])
+def test_device_entry_points_do_not_modify_their_inputs(api):
+    """The NTT used to: its ping-pong buffer wrote pass 18 into the caller's tensor on a 19-pass
+    transform, so a second call transformed the wreckage of the first. The invariant is worth
+    pinning for every device entry point, not just that one.
+    """
+    import torch
+
+    dev = torch.device("xpu")
+    if api == "blake3":
+        msgs = np.zeros((4, 64), np.uint8)
+        before = msgs.copy()
+        blake3.blake3_hash_torch(msgs)
+        assert np.array_equal(before, msgs)
+    elif api == "chacha20":
+        from triton_crypto.primitives import chacha20
+
+        keys = np.zeros((4, 32), np.uint8)
+        nonces = np.zeros((4, 12), np.uint8)
+        before = keys.copy()
+        chacha20.chacha20_keystream(keys, nonces, 64)
+        assert np.array_equal(before, keys)
+    elif api == "poseidon2":
+        state = torch.zeros(16, dtype=torch.int32, device=dev)
+        snapshot = state.cpu().numpy().copy()
+        poseidon2.poseidon2_permute_torch(state)
+        assert np.array_equal(snapshot, state.cpu().numpy())
+    else:
+        from triton_crypto.primitives.ntt import LargeNTT
+
+        t = LargeNTT(1 << 12, 2013265921)
+        x = torch.ones(1 << 12, dtype=torch.int32, device=dev)
+        snapshot = x.cpu().numpy().copy()
+        t.forward_tensor_torch(x, dev)
+        assert np.array_equal(snapshot, x.cpu().numpy())
+        t.inverse_tensor_torch(x, dev)
+        assert np.array_equal(snapshot, x.cpu().numpy())

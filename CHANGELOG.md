@@ -223,6 +223,18 @@ nothing, so no kernel compiles) and compares the number against every `**N tests
 `**N tests green**` in `docs/support.md`. It caught itself on the first run: adding it moved the
 suite from 1161 to 1162.
 
+### A dtype check of mine broke device tensors, and the NTT's input invariant is now pinned
+
+The int8 GEMM's dtype guard (added the round before) routed both operands through `np.asarray`, so
+a **device** tensor -- the documented way to call an on-device kernel -- raised "can't convert
+xpu:0 device type tensor to numpy". The check now reads the dtype where the operand lives; host
+arrays and device tensors both work and agree.
+
+That was found while asking the follow-up question the NTT bug deserved: *does anything else
+mutate its input?* Nothing does -- BLAKE3, ChaCha20, Poseidon2 and both NTT directions all leave it
+untouched -- and `tests/test_input_validation.py` now pins that for each of them, together with the
+device-tensor path.
+
 ### The input-validation contract, as a file: 1158 tests
 
 After the wrong-shape bug (below), the other primitives were probed the same way, and three more

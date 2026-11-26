@@ -478,8 +478,18 @@ class LargeNTT:
 
 @triton.jit
 def _stage4_kernel(
-    X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, PRE, Q: tl.constexpr,
-    FUSE_PRE: tl.constexpr, BLK: tl.constexpr
+    X,
+    Y,
+    M,
+    TOTAL,
+    LOG_Q,
+    W1A,
+    W1B,
+    W2,
+    PRE,
+    Q: tl.constexpr,
+    FUSE_PRE: tl.constexpr,
+    BLK: tl.constexpr,
 ):
     """Two radix-2 DIF stages fused into one radix-4 pass: ten passes instead of twenty.
 
