@@ -13,7 +13,8 @@ third_party/
 # cargo build output for benchmarks/poseidon2_ref
 benchmarks/poseidon2_ref/target/
 
-# measurement snapshots (benchmarks/snapshot.py): timestamped artifacts, not sources
-benchmarks/snapshot-*.md
-benchmarks/snapshot-*.json
+# measurement snapshots: these started as "timestamped artifacts, not sources", but the README
+# quotes one by name and the report's reproducibility table cites all seven. A citation to a file
+# that only exists on the author's machine is not a citation, so they ship (52 KB in total).
+# Regenerating them is `python benchmarks/snapshot.py`; the newest is the one to quote.
 benchmarks/ntt_cpu

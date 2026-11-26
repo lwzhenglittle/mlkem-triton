@@ -1,0 +1,52 @@
+{
+  "timestamp_utc": "2026-11-26T16:13:40+00:00",
+  "host": "lwzheng-TB14-AOSC",
+  "python": "3.14.10",
+  "git_head": "3f2dc06",
+  "git_dirty": false,
+  "cpu_baseline": "measured",
+  "sections": [
+    {
+      "section": "cpu",
+      "command": "bench_cpu.py --merge",
+      "rc": 0,
+      "seconds": 95.1,
+      "stderr": ""
+    },
+    {
+      "section": "primitive",
+      "command": "bench_primitive.py --batch 65536 --md",
+      "rc": 0,
+      "seconds": 9.6,
+      "stderr": ""
+    },
+    {
+      "section": "falcon",
+      "command": "bench_falcon_verify.py --ps falcon-512 --batch 512,4096",
+      "rc": 0,
+      "seconds": 3.1,
+      "stderr": ""
+    },
+    {
+      "section": "mldsa",
+      "command": "bench_mldsa_verify.py --ps ML-DSA-44 --batch 4096",
+      "rc": 0,
+      "seconds": 3.2,
+      "stderr": ""
+    },
+    {
+      "section": "mlkem",
+      "command": "bench_encaps.py --ps ML-KEM-768 --batch 4096",
+      "rc": 0,
+      "seconds": 2.4,
+      "stderr": ""
+    },
+    {
+      "section": "slhdsa",
+      "command": "bench_slhdsa_verify.py --ps SLH-DSA-SHAKE-128f --batch 4096",
+      "rc": 0,
+      "seconds": 2.9,
+      "stderr": ""
+    }
+  ]
+}

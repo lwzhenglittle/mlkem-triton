@@ -1,0 +1,24 @@
+{
+  "timestamp_utc": "2026-11-26T15:19:07+00:00",
+  "host": "lwzheng-TB14-AOSC",
+  "python": "3.14.10",
+  "git_head": "47963e1",
+  "git_dirty": true,
+  "cpu_baseline": "reused",
+  "sections": [
+    {
+      "section": "primitive",
+      "command": "bench_primitive.py --batch 65536 --md",
+      "rc": 0,
+      "seconds": 9.6,
+      "stderr": ""
+    },
+    {
+      "section": "falcon",
+      "command": "bench_falcon_verify.py --ps falcon-512 --batch 512,4096",
+      "rc": 0,
+      "seconds": 3.4,
+      "stderr": ""
+    }
+  ]
+}
