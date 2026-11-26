@@ -204,6 +204,18 @@ def _block_py(key_words, nonce_words, counter: int) -> bytes:
 
 
 def _as_batch(x, size: int, name: str) -> np.ndarray:
+    import torch
+
+    if isinstance(x, torch.Tensor):
+        # A tensor is a plausible input on a GPU machine, and `np.asarray` on an XPU tensor raises
+        # "can't convert xpu:0 device type tensor to numpy" -- which is a confusing way to say the
+        # batch shape is fine. Poly1305, BLAKE3, the GEMM and the NTT all take tensors; so does this.
+        arr = x.detach().cpu().numpy().astype(np.uint8, copy=False)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        if arr.ndim != 2 or arr.shape[1] != size:
+            raise ValueError(f"{name} must be one {size}-byte value or a [B, {size}] array")
+        return arr
     if isinstance(x, (bytes, bytearray, memoryview)):
         arr = np.frombuffer(bytes(x), dtype=np.uint8).reshape(1, -1)
     else:
@@ -301,7 +313,14 @@ def chacha20_xor(keys, nonces, data, counters=0, device=None) -> np.ndarray:
     """`data` (bytes, or `[B, L]` uint8) XORed with the keystream, on the device."""
     import torch
 
-    if isinstance(data, (bytes, bytearray, memoryview)):
+    if isinstance(data, torch.Tensor):
+        # same reason as `_as_batch`: a device tensor is what a GPU caller has
+        arr = data.detach().cpu().numpy().astype(np.uint8, copy=False)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        if arr.ndim != 2:
+            raise ValueError("data must be bytes or a [B, L] uint8 array")
+    elif isinstance(data, (bytes, bytearray, memoryview)):
         arr = np.frombuffer(bytes(data), dtype=np.uint8)[None, :]
     else:
         arr = np.asarray(data, dtype=np.uint8)

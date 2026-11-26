@@ -211,3 +211,33 @@ def test_mul_torch_accepts_device_operands():
     assert np.array_equal(t.mul_torch(ta, ta).cpu().numpy().astype(np.int64), t.mul_np(a, a))
     # and the host path still works
     assert np.array_equal(t.mul_torch(a, a).cpu().numpy().astype(np.int64), t.mul_np(a, a))
+
+
+@pytest.mark.parametrize("api", ["chacha20_keystream", "chacha20_xor"])
+def test_chacha20_accepts_device_tensors(api):
+    """The same sweep that fixed the GEMM, `mul_torch` and BLAKE3, applied to the last module.
+
+    A GPU caller has device tensors; `np.asarray` on one raises "can't convert xpu:0 device type
+    tensor to numpy", which says nothing about what was actually wrong (nothing was).
+    """
+    import torch
+
+    from triton_crypto.primitives import chacha20
+
+    dev = torch.device("xpu")
+    keys = np.zeros((2, 32), np.uint8)
+    nonces = np.zeros((2, 12), np.uint8)
+    if api == "chacha20_keystream":
+        want = chacha20.chacha20_keystream(keys, nonces, 64)
+        got = chacha20.chacha20_keystream(
+            torch.as_tensor(keys, device=dev), torch.as_tensor(nonces, device=dev), 64
+        )
+    else:
+        data = np.zeros((2, 64), np.uint8)
+        want = chacha20.chacha20_xor(keys, nonces, data)
+        got = chacha20.chacha20_xor(
+            torch.as_tensor(keys, device=dev),
+            torch.as_tensor(nonces, device=dev),
+            torch.as_tensor(data, device=dev),
+        )
+    assert np.array_equal(got, want)
