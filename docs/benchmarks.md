@@ -932,9 +932,10 @@ per pass, data in global memory.
 > were overstated by 2x until the bench started reading `LargeNTT.n_passes`.
 
 Two numbers per cell because this transform is the one row whose result moves with the clock
-state rather than with its own code: 0.98 ms when the iGPU is at its top clock (155 GB/s of
-traffic, 72% of copy bandwidth, i.e. essentially at the memory roofline of 0.71 ms) and 1.8 ms at
-the low end. Both are measured in one process, min and median of twelve alternating runs.
+state rather than with its own code: **0.85 ms** when the iGPU is at its top clock (**98 GB/s** of
+traffic, **45%** of copy bandwidth, against a 0.39 ms pure-traffic floor) and **1.2 ms** at the
+low end. Both are measured in one process, min of alternating runs. (The older 0.98 / 1.8 ms pair
+in this paragraph was the radix-2 shape at its own two clock states.)
 
 **Seven rows have `vs 16P` above 1** -- SHA-2 and SHA-3/SHAKE (1.55-4.11x) and this one (5.9x, or
 4.1x after the CPU rival was measured as 1.5x too slow). What is unique here is the *reason*:
@@ -1049,12 +1050,15 @@ Three things worth reading off it:
   floor at 217 GB/s is 0.39 ms, and the transform runs at 0.85 ms = **45%** of copy bandwidth.
   §22.2 shows the gap is not bandwidth: halving the traffic from radix-2 to radix-4 buys only
   10-20%.
-- **The first correct implementation is 7x off that roofline** (10.8 ms against 0.74). The
-  traffic is done at 15.5 GB/s, not 112. The stages are one launch each, the later stages access
-  with a stride that defeats coalescing, and the passes are radix-2 (20 of them rather than 7
-  radix-4 passes or 5 radix-8). That gap is what the eval's "2-3 weeks" buys.
-- **6.5x one core, 0.49x sixteen processes** — the same shape as every other ALU-bound row, even
-  though this one is memory-bound, because the CPU's 16 cores bring 30 GB/s of their own.
+- **The first correct implementation was 15x off its own roofline** (10.8 ms against the radix-2
+  floor of 0.71 ms), moving traffic at 15.5 GB/s. The stages were one launch each, the later ones
+  accessed with a stride that defeats coalescing, and the passes were radix-2 -- twenty of them,
+  against ten for radix-4 (an earlier version of this line said "7 radix-4 passes", which was
+  wrong: radix-4 halves the count, it does not quarter it).
+- **The first version actually lost: 0.49x against sixteen processes** (and 6.5x against one
+  core). That is the same shape as every other ALU-bound row -- the CPU's sixteen cores brought
+  30 GB/s of their own -- and it is why the transform needed the three changes above before it
+  became the only row that wins for a *memory* reason rather than an instruction one.
 
 What it does buy: the algorithm is `2^20` in a repository whose in-register kernel stops at 1024,
 it agrees exactly with the numpy reference and the in-register `NTTDomain` at sizes both can do,
