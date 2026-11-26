@@ -131,8 +131,10 @@ The point of "start from a state" is that the first block of every SLH-DSA SHA-2
 (`sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
 different hash function.
 
-The numpy side (`compress_np`, `hash_np`) is checked against `hashlib`, and the kernel against the
-numpy side, for both digest sizes and several block counts (`tests/test_sha2.py`).
+`sha_thash` is the same idea specialised to SLH-DSA's shape: one block whose first 22 bytes are the
+compressed ADRS, built in registers, with the input value copied through for rows whose WOTS chain
+has finished. Both are used by the SHA-2 parameter sets (`slhdsa/verify.py`), and both are checked
+against numpy for every `(n, dn)` the scheme can produce (`tests/test_sha2.py`).
 
 ## Generic (scheme-agnostic)
 

@@ -220,15 +220,14 @@ permutation, and the scheme sits directly on `primitives.sponge`. Verification r
 hypertree root from the signature and compares it with the public key — no secrets, no early exit,
 no data-dependent branches beyond the WOTS+ digits.
 
-Implemented: **the six SHAKE parameter sets**, verification only. The SHA-2 sets are
-reference-only on device: the SHA-256/SHA-512 kernels exist and are validated
-(`primitives/sha2.py`), but the composite hash those sets need is not wired into the scheme yet, so
-`Verifier` raises `NotImplementedError` for them rather than returning a wrong answer. Signing is
-out of scope, as with ML-DSA.
+Implemented: **all twelve parameter sets** (six SHAKE, six SHA-2), verification only. The SHA-2
+sets use `primitives.sha2` (SHA-256/512 compression) instead of the Keccak sponge — and they are
+*faster*, because a SHA-2 block compression is cheaper on the device than 24 Keccak rounds.
+Signing is out of scope, as with ML-DSA.
 
 | gate | result |
 |---|---|
-| ACVP `SLH-DSA-SHAKE-*` sigVer, all three interfaces, on device | **72/72** |
+| ACVP sigVer on device, all three interfaces, all twelve sets | **144/144** |
 | ACVP sigVer through the numpy reference (SHA-2 sets included) | **144/144** |
 | ACVP keyGen through the reference, pk *and* sk byte-exact | **120/120** |
 | device vs liboqs cross-implementation | agrees on all six SHAKE sets |
@@ -244,6 +243,17 @@ machine and the same signatures:
 | SLH-DSA-SHAKE-192f | **67.4 µs** | 1 970 µs | 29.2× |
 | SLH-DSA-SHAKE-256s | **37.8 µs** | 1 032 µs | 27.3× |
 | SLH-DSA-SHAKE-256f | **71.2 µs** | 2 040 µs | 28.7× |
+
+The SHA-2 sets, same conditions — cheaper per hash, so ~1.6× faster again:
+
+| set | device | liboqs 1T | speed-up |
+|---|---:|---:|---:|
+| SLH-DSA-SHA2-128s | **13.1 µs** | 388 µs | 29.6× |
+| SLH-DSA-SHA2-128f | **27.8 µs** | 1 170 µs | 42.0× |
+| SLH-DSA-SHA2-192s | **17.5 µs** | 575 µs | 32.8× |
+| SLH-DSA-SHA2-192f | **37.9 µs** | 1 595 µs | 42.0× |
+| SLH-DSA-SHA2-256s | **26.0 µs** | 818 µs | 31.4× |
+| SLH-DSA-SHA2-256f | **44.1 µs** | 1 708 µs | 38.7× |
 
 **The speed-up is real but it is not the 10³× the literature reports**, and the reason is worth
 stating: those figures compare against the NIST reference implementation, not against an
@@ -370,10 +380,10 @@ ML-DSA specific:
 
 SLH-DSA specific:
 
-- **Six of the twelve parameter sets on device.** The SHA-2 sets need SHA-256/SHA-512 compression
-  kernels; `Verifier` raises `NotImplementedError` for them rather than guessing, and the numpy
-  reference covers all twelve.
 - **Verification only**, like ML-DSA.
+- **Two hash backends, two schedules.** SHAKE sets hash with Keccak; SHA-2 sets with SHA-256/512
+  (and FIPS 205's asymmetric instantiation: F is always SHA-256, H/T_l switch to SHA-512 above
+  128 bits). The chain loop is the same; only the `thash` differs.
 - **Batch-bound.** A signature is ~400 launches, so at B = 1 it costs 37 ms — 28× *slower* than
   the CPU. The crossover is around B ≈ 32; B ≥ 1024 is where the table in the section above lives.
 - **First call compiles six kernels.** Each `(n, dn)` pair of the fused `thash` is its own kernel

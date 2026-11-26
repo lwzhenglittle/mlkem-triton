@@ -1,8 +1,8 @@
 """Batched SLH-DSA (FIPS 205) signature verification on the device.
 
-Scope: the SHAKE parameter sets (6 of 12). The SHA-2 sets need a SHA-256/SHA-512 compression
-kernel that this repository does not have yet, so they raise `NotImplementedError` instead of
-silently returning wrong answers — the numpy reference covers them.
+Scope: **all twelve parameter sets**. The SHAKE sets use the fused Keccak `thash`; the SHA-2 sets
+use `primitives.sha2` (SHA-256/512), whose instantiation is deliberately asymmetric — PRF/F are
+always SHA-256-based, while H and T_l switch to SHA-512 above 128 bits (FIPS 205 §11.1).
 
 Shape of the work: one verification is 2k–12k single-block SHAKE256 permutations. Within a
 signature they form a dependency chain (layer j+1 needs layer j's root), but across a batch of B
@@ -18,12 +18,14 @@ the emulation hit ~210 Mperm/s (docs/benchmarks.md).
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 
 import numpy as np
 import torch
 
 from ..devices import resolve_device
+from ..primitives import sha2 as _sha2
 from ..primitives import sponge as _sponge
 from . import kernels as _kernels
 from .params import SLHParams, get
@@ -32,6 +34,7 @@ from .ref import FORS_ROOTS, FORS_TREE, OID, PH, TREE, WOTS_HASH, WOTS_PK
 __all__ = ["Verifier", "verify_batch"]
 
 RATE = 136  # SHAKE256 rate
+_DEBUG = bool(os.environ.get("SLH_DEBUG"))
 
 
 def _u32(buf: torch.Tensor, off: int, value) -> None:
@@ -59,6 +62,18 @@ def _be(value, width: int, rows: int, device) -> torch.Tensor:
     value = value.to(torch.int64)
     cols = [((value >> (8 * (width - 1 - k))) & 0xFF).to(torch.uint8) for k in range(width)]
     return torch.stack(cols, dim=1)
+
+
+def _adrsc_rows(device, rows, layer, tree, typ, kp, chain, index) -> torch.Tensor:
+    """The 22-byte compressed address (FIPS 205 §11.1), as the SHA-2 kernel builds it."""
+    buf = torch.zeros((rows, 22), dtype=torch.uint8, device=device)
+    buf[:, 0] = int(layer) & 0xFF
+    buf[:, 1:9] = _be(tree, 8, rows, device)
+    buf[:, 9] = int(typ) & 0xFF
+    buf[:, 10:14] = _be(kp, 4, rows, device)
+    buf[:, 14:18] = _be(chain, 4, rows, device)
+    buf[:, 18:22] = _be(index, 4, rows, device)
+    return buf
 
 
 def _bits(b: torch.Tensor, count: int) -> torch.Tensor:
@@ -89,11 +104,6 @@ class Verifier:
 
     def __init__(self, ps: str | SLHParams, pk: bytes, device=None):
         self.p = get(ps) if isinstance(ps, str) else ps
-        if not self.p.is_shake:
-            raise NotImplementedError(
-                f"{self.p.name}: the device path implements the SHAKE sets only; the SHA-2 sets "
-                "need a SHA-256/SHA-512 kernel (the numpy reference covers them)"
-            )
         p = self.p
         if len(pk) != p.pk_size:
             raise ValueError(f"public key must be {p.pk_size} bytes, got {len(pk)}")
@@ -104,6 +114,30 @@ class Verifier:
         self._seed_row = None
         self._root_row = None
         self._seed_w = None
+        # SHA-2 sets: the state after `blockpad(PK.seed)` is constant per parameter set, and F is
+        # always SHA-256 while H/T_l switch to SHA-512 above 128 bits (FIPS 205 §11.1).
+        self.sha = not p.is_shake
+        if self.sha:
+            self.bits_f = 256
+            self.bits_h = 256 if p.n == 16 else 512
+            bsize_f = 64
+            bsize_h = 64 if self.bits_h == 256 else 128
+            iv_f = _sha2.IV256
+            iv_h = _sha2.IV256 if self.bits_h == 256 else _sha2.IV512
+            self.state_f = _sha2.word_tensor(
+                _sha2.compress_np(list(iv_f), self.seed_b + bytes(bsize_f - p.n), 256),
+                256,
+                self.device,
+            )
+            self.state_h = (
+                self.state_f
+                if self.bits_h == 256
+                else _sha2.word_tensor(
+                    _sha2.compress_np(list(iv_h), self.seed_b + bytes(bsize_h - p.n), 512),
+                    512,
+                    self.device,
+                )
+            )
 
     # ---------------- device plumbing ----------------
     def _dev(self, b: bytes) -> torch.Tensor:
@@ -133,8 +167,115 @@ class Verifier:
     def _dev_t(self):
         return self.device
 
+    # ---------------- SHA-2 sets (FIPS 205 §11.1) ----------------
+    def _sha_hash(self, data: torch.Tensor, bits: int, out_len: int | None = None) -> torch.Tensor:
+        """SHA-256/512 of each row of `data` (unpadded), from the standard IV."""
+        p = self.p
+        bsize = 64 if bits == 256 else 128
+        lb = 8 if bits == 256 else 16
+        rows, length = data.shape
+        body_len = -(-(length + 1 + lb) // bsize) * bsize
+        body = torch.zeros((rows, body_len), dtype=torch.uint8, device=self._dev_t())
+        body[:, :length] = data
+        body[:, length] = 0x80
+        body[:, body_len - lb :] = torch.tensor(
+            list((8 * length).to_bytes(lb, "big")), dtype=torch.uint8, device=self._dev_t()
+        )
+        dtype = torch.int32 if bits == 256 else torch.int64
+        out = torch.empty((rows, 8), dtype=dtype, device=self._dev_t())
+        _sha2.sha_absorb(
+            _sha2.iv_tensor(bits, self._dev_t()),
+            body.view(dtype),
+            out,
+            rows,
+            bits,
+            body_len // bsize,
+        )
+        return out.view(torch.uint8)[:, : (p.n if out_len is None else out_len)]
+
+    def _thash_sha(self, data, kp, chain, index, tree, layer, typ, wide, t=0, w=1 << 40, out=None):
+        """One-block SHA-2 thash: `SHA(state_seed || ADRSc || data || pad)`."""
+        p = self.p
+        bits = self.bits_h if wide else self.bits_f
+        hin = self.state_h if wide else self.state_f
+        dtype = torch.int32 if bits == 256 else torch.int64
+        rows, dn = data.shape
+        ws = 4 if bits == 256 else 8
+        # the F case (dn == n) writes the packed value back, so the buffer is n/ws words wide and
+        # can serve as the next chain step's input; H and T_l need the full 8-word state
+        passthrough = dn == p.n
+        nout = p.n // ws if passthrough else 8
+        out_words = (
+            out.view(dtype)
+            if out is not None
+            else torch.empty((rows, nout), dtype=dtype, device=self._dev_t())
+        )
+        _sha2.sha_thash(
+            hin,
+            data.contiguous(),
+            out_words,
+            kp,
+            chain,
+            index,
+            tree,
+            layer,
+            typ,
+            bits,
+            nout,
+            passthrough,
+            t=t,
+            w=w,
+        )
+        return out_words.view(torch.uint8)[:, : p.n]
+
+    def _thash_sha_multi(self, data, kp, tree, layer, typ, wide):
+        """SHA-2 hash over a long message (the ltree): compose the bytes, then absorb."""
+        p = self.p
+        bits = self.bits_h if wide else self.bits_f
+        bsize = 64 if bits == 256 else 128
+        lb = 8 if bits == 256 else 16
+        hin = self.state_h if wide else self.state_f
+        rows, dn = data.shape
+        length = bsize + 22 + dn  # the seed block is already folded into `hin`
+        body_len = -(-(22 + dn + 1 + lb) // bsize) * bsize
+        body = torch.zeros((rows, body_len), dtype=torch.uint8, device=self._dev_t())
+        adrs = _adrsc_rows(
+            self._dev_t(),
+            rows,
+            layer,
+            tree,
+            typ,
+            kp,
+            torch.zeros(rows, dtype=torch.int64, device=self._dev_t()),
+            torch.zeros(rows, dtype=torch.int64, device=self._dev_t()),
+        )
+        body[:, :22] = adrs
+        body[:, 22 : 22 + dn] = data
+        body[:, 22 + dn] = 0x80
+        body[:, body_len - lb :] = torch.tensor(
+            list((8 * length).to_bytes(lb, "big")), dtype=torch.uint8, device=self._dev_t()
+        )
+        dtype = torch.int32 if bits == 256 else torch.int64
+        out = torch.empty((rows, 8), dtype=dtype, device=self._dev_t())
+        _sha2.sha_absorb(hin, body.view(dtype), out, rows, bits, body_len // bsize)
+        return out.view(torch.uint8)[:, : p.n]
+
     def _thash(
-        self, data, kp, chain, index, tree, *, layer=0, typ=0, t=0, w=1 << 40, inplace=False, row0=0
+        self,
+        data,
+        kp,
+        chain,
+        index,
+        tree,
+        *,
+        layer=0,
+        typ=0,
+        t=0,
+        w=1 << 40,
+        inplace=False,
+        row0=0,
+        wide=False,
+        out=None,
     ):
         """
 
@@ -148,6 +289,15 @@ class Verifier:
         """
         rows = data.shape[0]
         n = self.p.n
+        if self.sha:
+            bits = self.bits_h if wide else self.bits_f
+            bsize = 64 if bits == 256 else 128
+            lb = 8 if bits == 256 else 16
+            if 22 + data.shape[1] + 1 + lb > bsize:
+                return self._thash_sha_multi(data, kp, tree, layer, typ, wide)
+            return self._thash_sha(
+                data, kp, chain, index, tree, layer, typ, wide, t=t, w=w, out=out
+            )
         if n + 32 + data.shape[1] >= RATE:
             return self._thash_multi(data, layer, typ, kp, tree)
         words = data.contiguous().view(torch.int64)
@@ -224,10 +374,18 @@ class Verifier:
                 tree_row,
                 layer=0,
                 typ=FORS_TREE,
+                wide=True,
             )
         zero_b = torch.zeros(B, dtype=torch.int64, device=dev)
         return self._thash(
-            node.reshape(B, p.k * n), idx_leaf, zero_b, zero_b, idx_tree, layer=0, typ=FORS_ROOTS
+            node.reshape(B, p.k * n),
+            idx_leaf,
+            zero_b,
+            zero_b,
+            idx_tree,
+            layer=0,
+            typ=FORS_ROOTS,
+            wide=True,
         )
 
     # ---------------- WOTS+ / XMSS (Alg. 8, 13) ----------------
@@ -259,36 +417,64 @@ class Verifier:
         tree_row = idx_tree.repeat_interleave(len_)
         chain_row = torch.arange(len_, dtype=torch.int64, device=dev).repeat(B)
         digit_row = digits.reshape(-1)
-        # Chains finish at different times: one with digit d needs w-1-d hashes. Sorting by
-        # descending digit makes the still-running rows a contiguous suffix, so each step can
-        # launch over just that suffix (~half the permutations, on average).
-        order = torch.argsort(digit_row, descending=True, stable=True)
-        value = wots.reshape(rows, n)[order]
-        kp_s, ch_s, tr_s = kp_row[order], chain_row[order], tree_row[order]
-        dig_s = digit_row[order]
-        dhost = dig_s.cpu().numpy()  # one sync per layer, to size the launches
-        for t in range(p.w - 1):
-            active = int((dhost + t < p.w - 1).sum())
-            if active == 0:
-                break
-            self._thash(
-                value,
-                kp_s,
-                ch_s,
-                dig_s,
-                tr_s,
-                layer=layer,
-                typ=WOTS_HASH,
-                t=t,
-                w=p.w - 1,
-                inplace=True,
-                row0=rows - active,
-            )
-        value = torch.empty_like(value).index_copy_(0, order, value)
+        if self.sha:
+            # The SHA-2 kernel cannot write in place (Triton assumes the buffers do not alias, and
+            # the value is built from the same bytes), so the chain steps ping-pong between two
+            # packed buffers; finished rows are copied through by the kernel itself.
+            other = torch.empty_like(wots.reshape(rows, n))
+            value = wots.reshape(rows, n)
+            for t in range(p.w - 1):
+                self._thash(
+                    value,
+                    kp_row,
+                    chain_row,
+                    digit_row,
+                    tree_row,
+                    layer=layer,
+                    typ=WOTS_HASH,
+                    t=t,
+                    w=p.w - 1,
+                    out=other,
+                )
+                value, other = other, value
+        else:
+            # Chains finish at different times: one with digit d needs w-1-d hashes. Sorting by
+            # descending digit makes the still-running rows a contiguous suffix, so each step can
+            # launch over just that suffix (~half the permutations, on average).
+            order = torch.argsort(digit_row, descending=True, stable=True)
+            value = wots.reshape(rows, n)[order]
+            kp_s, ch_s, tr_s = kp_row[order], chain_row[order], tree_row[order]
+            dig_s = digit_row[order]
+            dhost = dig_s.cpu().numpy()  # one sync per layer, to size the launches
+            for t in range(p.w - 1):
+                active = int((dhost + t < p.w - 1).sum())
+                if active == 0:
+                    break
+                self._thash(
+                    value,
+                    kp_s,
+                    ch_s,
+                    dig_s,
+                    tr_s,
+                    layer=layer,
+                    typ=WOTS_HASH,
+                    t=t,
+                    w=p.w - 1,
+                    inplace=True,
+                    row0=rows - active,
+                )
+            value = torch.empty_like(value).index_copy_(0, order, value)
 
         zero_b = torch.zeros(B, dtype=torch.int64, device=dev)
         root = self._thash(
-            value.reshape(B, len_ * n), idx_leaf, zero_b, zero_b, idx_tree, layer=layer, typ=WOTS_PK
+            value.reshape(B, len_ * n),
+            idx_leaf,
+            zero_b,
+            zero_b,
+            idx_tree,
+            layer=layer,
+            typ=WOTS_PK,
+            wide=True,
         )
         for k in range(p.hp):
             bit = ((idx_leaf >> k) & 1).to(torch.bool)
@@ -302,6 +488,7 @@ class Verifier:
                 idx_tree,
                 layer=layer,
                 typ=TREE,
+                wide=True,
             )
         return root
 
@@ -397,10 +584,32 @@ class Verifier:
             ],
             dim=1,
         )
+        if self.sha:
+            return self._h_msg_sha(sub_sig, mp_t)
         padded = _sponge.pad_torch(head, RATE, _sponge.DOMAIN_SHAKE)
         # the sponge squeezes in 8-byte words; m is not a multiple of 8, so take a word-aligned
         # prefix and slice (SHAKE's output is a stream, so this is exactly the same bytes)
         return _sponge.sponge_padded(padded, RATE, -(-p.m // 8) * 8)[:, : p.m]
+
+    def _h_msg_sha(self, sub_sig, mp_t):
+        """`MGF1-SHA(R || PK.seed || SHA(R || PK.seed || PK.root || M'), m)` (FIPS 205 §11.1)."""
+        p = self.p
+        n = p.n
+        bits = 256 if n == 16 else 512
+        hlen = 32 if bits == 256 else 64
+        g = sub_sig.shape[0]
+        r = sub_sig[:, :n]
+        seed = self._seed_row.expand(g, n)
+        root = self._root_row.expand(g, n)
+        inner = self._sha_hash(torch.cat([r, seed, root, mp_t], dim=1), bits, out_len=hlen)
+        base = torch.cat([r, seed, inner], dim=1)
+        parts = []
+        for i in range(-(-p.m // hlen)):
+            ctr = torch.tensor(
+                list(i.to_bytes(4, "big")), dtype=torch.uint8, device=self._dev_t()
+            ).expand(g, 4)
+            parts.append(self._sha_hash(torch.cat([base, ctr], dim=1), bits, out_len=hlen))
+        return torch.cat(parts, dim=1)[:, : p.m]
 
     def verify(self, messages, signatures, ctx: bytes = b"", prehash=None):
         """External interface: pure (`prehash=None`) or pre-hash (`prehash=<name>`)."""

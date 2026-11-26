@@ -1,11 +1,9 @@
 """SHA-256 / SHA-512 compression: a device kernel that absorbs pre-padded blocks, plus the numpy
 primitives used to check it and to precompute constant states.
 
-**Status: primitives only — nothing in `slhdsa/` uses them yet.** They are what the SHA-2
-parameter sets of FIPS 205 need (`SLH-DSA-SHA2-*`, still reference-only on device), and the
-scheme-level wiring was not finished: the kernels are validated against numpy/hashlib
-(`tests/test_sha2.py`), but the composite hash the scheme needs does not agree with the reference
-yet, so the device path keeps raising `NotImplementedError` for those sets rather than guessing.
+These are what the **SHA-2 parameter sets of FIPS 205** use on device (`slhdsa/verify.py`
+dispatches to `sha_thash` / `sha_absorb` when the set is not SHAKE). Validated against numpy and
+`hashlib` in `tests/test_sha2.py`, and end-to-end against the ACVP vectors for all six SHA-2 sets.
 
 SLH-DSA's SHA-2 parameter sets need these. Their hashes are `SHA(PK.seed || 0…0 || ADRSc || M)`
 and `MGF1-SHA`; both are *fixed* prefixes, so the state after the seed block is computed once on
@@ -407,7 +405,7 @@ def iv_tensor(bits: int, device):
     return word_tensor(IV256 if bits == 256 else IV512, bits, device)
 
 
-def gen_thash_source(bits: int, dn: int) -> str:
+def gen_thash_source(bits: int, dn: int, nout_words: int, passthrough: bool) -> str:
     """A one-block SHA-2 kernel whose block is `ADRSc(22) || data(dn) || pad`, built in registers.
 
     SLH-DSA's SHA-2 instantiation hashes `blockpad(PK.seed) || ADRSc || M` with a 22-byte
@@ -436,8 +434,9 @@ def gen_thash_source(bits: int, dn: int) -> str:
         bs = "_bs64"
         it = "tl.int64"
     length = total_msg * 8
-    # the F case is the only one with dn == n: 16 for SHA-256, 24/32 for SHA-512
-    n_bytes = dn if (bits == 256 and dn == 16) or (bits == 512 and dn in (24, 32)) else None
+    # Whether the caller wants the n-byte value written back in place of the full state, and how
+    # many words that is: the F case (dn == n) wants it, H and T_l want the whole 8-word state.
+    n_bytes = nout_words * (W // 8) if passthrough else None
 
     def addr_byte(j: int) -> str:
         if j == 0:
@@ -533,12 +532,15 @@ def gen_thash_source(bits: int, dn: int) -> str:
     for i in range(8):
         L.append(f"    h{i} = h{i} + a{i}")
     passthrough = n_bytes is not None
-    for i in range(8):
-        if passthrough and i < n_bytes // (W // 8):
-            # rows whose chain has finished keep their input value; OUT must not alias DATA
+    # The F case writes only the n-byte value (n/ws words): that is all the chain needs, it keeps
+    # OUT the same packed shape as DATA (so two buffers can ping-pong), and finished rows keep
+    # their input — OUT must not alias DATA, since Triton would reorder loads after stores.
+    nout = nout_words
+    for i in range(nout):
+        if passthrough:
             L.append(f"    keep = tl.load(DWORDS + row * {dn // (W // 8)} + {i}, mask=m, other=0)")
             L.append(
-                f"    tl.store(OUT + row * 8 + {i},"
+                f"    tl.store(OUT + row * {nout} + {i},"
                 f" tl.where(active, {bs}(h{i}).to({it}, bitcast=True), keep), mask=m)"
             )
         else:
@@ -552,12 +554,12 @@ def gen_thash_source(bits: int, dn: int) -> str:
 _THASH_CACHE: dict[tuple[int, int], object] = {}
 
 
-def _compile_thash(bits: int, dn: int):
-    key = (bits, dn)
+def _compile_thash(bits: int, dn: int, nout_words: int, passthrough: bool):
+    key = (bits, dn, nout_words, passthrough)
     kern = _THASH_CACHE.get(key)
     if kern is not None:
         return kern
-    src = gen_thash_source(bits, dn)
+    src = gen_thash_source(bits, dn, nout_words, passthrough)
     tag = hashlib.sha256(src.encode()).hexdigest()[:16]
     path = Path(tempfile.gettempdir()) / f"_sha2_thash_{tag}.py"
     if not path.exists():
@@ -581,6 +583,8 @@ def sha_thash(
     layer: int,
     typ: int,
     bits: int,
+    nout_words: int,
+    passthrough: bool,
     t: int = 0,
     w: int = 1 << 40,
     block: int = 128,
@@ -590,7 +594,7 @@ def sha_thash(
     import triton
 
     rows, dn = data.shape
-    kern = _compile_thash(bits, dn)
+    kern = _compile_thash(bits, dn, nout_words, passthrough)
     dtype = torch.int32 if bits == 256 else torch.int64
     kern[(triton.cdiv(rows, block),)](
         hin,
@@ -607,7 +611,7 @@ def sha_thash(
         typ,
         t,
         w,
-        N=dn,
+        N=nout_words,
         BLOCK=block,
         num_warps=4,
     )

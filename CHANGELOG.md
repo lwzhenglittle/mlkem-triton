@@ -30,10 +30,27 @@ Measured at batch 4096 against liboqs single-thread on the same machine: 18.7 µ
 47.8 µs (128f), 67.4 µs (192f), 71.2 µs (256f) — 24–29×. The crossover against the CPU is
 around B ≈ 32; below that the device is launch-bound.
 
+### Added — the six SHA-2 parameter sets (12 of 12)
+
+The SHA-2 instantiation hashes with SHA-256/512 instead of Keccak, and FIPS 205 makes it
+asymmetric: PRF/F are always SHA-256-based, while H and T_l switch to SHA-512 above 128 bits.
+Both compression kernels live in `primitives/sha2.py`, and `slhdsa/verify.py` dispatches its
+`thash` to them (`_thash_sha` for one block, `_thash_sha_multi` for the ltree); the chain /
+hypertree / FORS schedule is untouched.
+
+The SHA-2 sets are also *faster* — 13.1/27.8/17.5/37.9/26.0/44.1 µs at B = 4096 for
+128s/128f/192s/192f/256s/256f, i.e. 30–42× over liboqs — because one SHA-2 block compression is
+cheaper on the device than 24 Keccak rounds.
+
+Two traps cost real time here, both documented in the code: the chain kernel cannot write in place
+(the value is built from the same bytes, and Triton assumes the buffers do not alias), so the
+SHA-2 chain ping-pongs between two packed buffers; and the F case must write back only the n-byte
+value (`n/ws` words) rather than the full 8-word state, or the packed output stride stops matching
+the caller's buffer from the second row on.
+
 ### Notes
 
-- **The SHA-2 sets are reference-only on device** (they need SHA-256/SHA-512 compression kernels);
-  the device path raises `NotImplementedError` rather than returning a wrong answer.
+(Nothing here: all twelve sets run on device as of this release.)
 - Two spec traps are documented where they bit: `WOTS_PK` / `FORS_ROOTS` addresses keep the key
   pair field, and keygen builds the tree at layer `d-1` while verification walks layers up from 0.
 - `docs/kernels.md` §SLH-DSA has the kernel contract; `docs/benchmarks.md` §12 has the numbers and

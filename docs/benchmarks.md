@@ -339,6 +339,23 @@ single-thread in the same process on the same signatures.
 | SHAKE-256s | 4096 | **37.8 µs** | 1 032 µs | 27.3× |
 | SHAKE-256f | 4096 | **71.2 µs** | 2 040 µs | 28.7× |
 
+The SHA-2 sets, same machine and same method — cheaper per hash, so ~1.6× faster again:
+
+| set | device / sig | liboqs 1T | speed-up |
+|---|---:|---:|---:|
+| SHA2-128s | **13.1 µs** | 388 µs | 29.6× |
+| SHA2-128f | **27.8 µs** | 1 170 µs | 42.0× |
+| SHA2-192s | **17.5 µs** | 575 µs | 32.8× |
+| SHA2-192f | **37.9 µs** | 1 595 µs | 42.0× |
+| SHA2-256s | **26.0 µs** | 818 µs | 31.4× |
+| SHA2-256f | **44.1 µs** | 1 708 µs | 38.7× |
+
+A SHA-2 block compression is 64–80 rounds of add/rotate/xor on 32/64-bit words; Keccak-f[1600] is
+24 rounds but each round touches 25 lanes with ~40 operations, and the ratio shows up directly in
+these numbers. The price is that FIPS 205's SHA-2 instantiation is *asymmetric*: F (the WOTS chain)
+always uses SHA-256, while H and T_l switch to SHA-512 for the 192/256-bit sets, so both
+compression kernels and two constant seed states are live per verifier.
+
 Batch curve for 128f, same corpus: B = 1 → 37 ms/sig (400 launches, nothing else), B = 8 →
 4.8 ms, B = 32 → 1.2 ms, B = 64 → 600 µs, B = 1024 → 67 µs, B = 4096 → 48 µs. The crossover
 against the CPU is around B ≈ 32, and everything below that is launch latency.

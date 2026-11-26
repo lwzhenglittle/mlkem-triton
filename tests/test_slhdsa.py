@@ -119,10 +119,37 @@ def test_empty_batch():
     assert v.verify_mprime([], np.zeros((0, len(case.signature)), dtype=np.uint8)).shape == (0,)
 
 
-def test_sha2_sets_are_not_implemented_on_device():
-    case = next(c for c in acvp.cases() if "SHA2" in c.ps)
-    with pytest.raises(NotImplementedError):
-        Verifier(case.ps, case.pk)
+@pytest.mark.parametrize(
+    "ps",
+    [
+        "SLH-DSA-SHA2-128f",
+        "SLH-DSA-SHA2-128s",
+        "SLH-DSA-SHA2-192f",
+        "SLH-DSA-SHA2-192s",
+        "SLH-DSA-SHA2-256f",
+        "SLH-DSA-SHA2-256s",
+    ],
+)
+def test_sha2_sets_verify_on_device(ps):
+    """The SHA-2 instantiation: F stays SHA-256 while H/T_l switch to SHA-512 above 128 bits."""
+    cases = [c for c in acvp.cases(ps=ps) if c.expected]
+    case = cases[0]
+    if case.interface == "internal":
+        got = Verifier(ps, case.pk).verify_mprime([case.message], [case.signature])[0]
+    else:
+        got = Verifier(ps, case.pk).verify(
+            [case.message], [case.signature], case.context or b"", case.ph
+        )[0]
+    assert bool(got) is True
+    # and a tampered signature must still be rejected
+    sig = bytearray(case.signature)
+    sig[len(sig) // 2] ^= 0x01
+    if case.interface == "internal":
+        assert not Verifier(ps, case.pk).verify_mprime([case.message], [bytes(sig)])[0]
+    else:
+        assert not Verifier(ps, case.pk).verify(
+            [case.message], [bytes(sig)], case.context or b"", case.ph
+        )[0]
 
 
 def test_context_is_part_of_the_message():
