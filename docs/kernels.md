@@ -32,6 +32,8 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
+| `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
+| `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
 | `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
@@ -193,6 +195,33 @@ Three things this kernel exists to record:
 - **`BLK = 128`.** Swept on an Arc B390 at B = 65536: 77.8 ns/permutation at 64, **41.5 at 128**,
   48.5 at 256 (256 spills). Below B ≈ 2048 the grid stops filling the device (B = 1024 is
   820 ns/permutation); the fix is a persistent grid, which is not written.
+
+### `_mul_ntt_kernel(A, B, OUT, P, Q, N, BLK)` and `_check_kernel(PROD, C, S2, SQN, OK, P, L2BOUND, Q, N)` — `falcon/kernels.py`
+
+Falcon-512 verification, the two launches that are not the transform. `ntt_torch`/`intt_torch`
+handle `q = 12289, N = 512` through the existing parameterisation; these do the rest.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `A` | `[B, N]` | `int32` | `NTT(s2)` |
+| `B` | `[N]` | `int32` | `NTT(h)`, the public key's transform, one row reused by all |
+| `PROD` | `[B, N]` | `int32` | `INTT(NTT(s2) * NTT(h))` |
+| `C` | `[B, N]` | `int32` | `HashToPoint(nonce ‖ m)` |
+| `S2` | `[B, N]` | `int32` | decoded signature coefficients, signed |
+| `SQN`, `OK` | `[B]` | `int64`, `int8` | squared norm and the verdict |
+
+Two properties are load-bearing and both were found the hard way:
+
+- **`%` on signed integers in Triton is C's truncated remainder**, not numpy's floored modulo.
+  `(prod - c) % Q` leaves negative differences negative, which changes every norm -- the kernel
+  normalises with an explicit `where(t < 0, t + Q, t)` before folding into `[-Q/2, Q/2]`.
+- **An `expand`ed tensor is not contiguous.** `h.expand(B, N)` has stride 0 on the first axis,
+  so a kernel that indexes `offs` linearly reads past the end of the first row; `B` is indexed
+  as `offs % N` instead, which also avoids materialising `[B, N]`.
+
+The norm is computed in int64 and compared against `floor(beta^2) = 34034726`. With
+`|s1| <= q/2 = 6144` and `n = 512` the sum is below `2^33`, so the comparison is exact; the
+reference's saturation arithmetic exists only because it works in 32 bits.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

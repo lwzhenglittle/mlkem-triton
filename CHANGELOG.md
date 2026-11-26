@@ -28,6 +28,31 @@ the column that was missing: what the same work costs on the CPU **in the same w
 - 18 new tests (Plonky3 vectors, numpy↔device at batches around the block size, singles, an
   `out=` buffer, the extremes).
 
+### Falcon-512 verification, the first primitive that beats 16 processes by more than 2x
+
+`triton_crypto/falcon/` is a scheme subpackage in the shape the 0.8.0 refactor established
+(`params`, `ref`, `kernels`, `verify`). Verification only: signing needs the floating-point FFT
+and Gaussian sampler that §5.3 of the eval explicitly rules out for a cross-backend code base.
+
+- **The transform needed no new kernel.** `q = 12289, N = 512` runs through the existing
+  `NTTDomain` parameterisation; the only new arithmetic is the pointwise product and the
+  norm check, two launches in `falcon/kernels.py`.
+- **Measured: 0.65 µs/op at B = 4096** (device core), against liboqs 0.16.0 on the same
+  machine at 23.7 µs on one thread and 2.18 µs over sixteen processes -- **35x and 3.2x**.
+  The transforms are 39% of the core; the rest is one fused kernel.
+- **End to end is host-bound at 31 µs/op**: the variable-length signature decoder (24 µs) and
+  SHAKE256 + rejection sampling (9 µs) still run on the host. `bench_falcon_verify.py` prints
+  both numbers rather than hiding one inside the other, and the two remaining kernels are the
+  obvious next step.
+- **Two traps, both recorded in `docs/kernels.md`**: Triton's `%` on signed integers is C's
+  truncated remainder (not numpy's floored modulo), so `(prod - c) % q` leaves negatives
+  negative; and an `expand`ed tensor is not contiguous, so a kernel that assumes contiguity
+  reads past the first row.
+- **Tests without liboqs** use one embedded signature from liboqs plus the numpy reference;
+  with liboqs built (`build-falcon`), 64 signatures and 64 tampered variants are cross-checked
+  against `pqclean`'s own decoder, including a mixed batch where one bad row must not disturb
+  its neighbours.
+
 ### The CPU rival, as a script and as two columns
 
 `benchmarks/bench_cpu.py` measures the work the primitive table is compared against, on the

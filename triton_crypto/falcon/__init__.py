@@ -1,0 +1,33 @@
+"""Falcon-512 signature verification (FIPS 206 draft / the NIST additional-signatures spec).
+
+Verification only: signing needs Falcon's floating-point FFT and Gaussian sampler, which the
+project deliberately does not port (`eval-triton-crypto-primitives.md` §5.3 -- Triton does not
+expose FMA fusion, so a cross-backend bit-exact signature is not a property this code base can
+claim). Verification is pure integer arithmetic, so it is bit-exact by construction.
+
+    from triton_crypto.falcon import Verifier
+    v = Verifier(pk)                       # 897 bytes, header 0x09
+    ok = v.verify(messages, signatures)    # -> numpy bool array
+
+The transform reuses `primitives.ntt` with q = 12289, N = 512 -- the parameterisation needed
+no new kernel. The signature decoder and `HashToPoint` currently run on the host; see
+`verify.py` for why and for the device-only entry point.
+"""
+
+from __future__ import annotations
+
+from .params import FALCON_512, FALCON_PADDED_512, FalconParams
+from .ref import comp_decode, hash_to_point, modq_decode
+from .ref import verify as verify_np
+from .verify import Verifier
+
+__all__ = [
+    "FALCON_512",
+    "FALCON_PADDED_512",
+    "FalconParams",
+    "Verifier",
+    "comp_decode",
+    "hash_to_point",
+    "modq_decode",
+    "verify_np",
+]

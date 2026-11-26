@@ -11,6 +11,7 @@ Post-quantum schemes:
 | ML-DSA | sign, verify | FIPS 204 |
 | SLH-DSA | verify (all 12 parameter sets) | FIPS 205 |
 | LMS / HSS | verify (SHA-256/256 and /192) | SP 800-208 |
+| Falcon | verify (Falcon-512 and Falcon-padded-512) | FIPS 206 draft |
 
 And the scheme-agnostic primitives underneath them, usable on their own:
 
@@ -23,7 +24,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |
 
-**946 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
+**973 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.
@@ -104,6 +105,11 @@ v = Verifier(hss_public_key)
 ok = v.verify(messages, signatures)  # any HSS depth up to 8
 ```
 
+Falcon verification is integer-only, so it is bit-exact by construction; signing needs the
+floating-point FFT and Gaussian sampler, which this code base deliberately does not port.
+`Verifier.verify` decodes signatures and hashes on the host today, so its end-to-end number is
+host-bound (31 µs/op); `verify_core_torch` is the device-only entry point (0.65 µs/op).
+
 SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is not implemented. LMS/HSS
 verification covers both approved SHA-256 families; the SP 800-208 SHAKE-256 sets are not
 implemented because their type codes are still TBD.
@@ -142,6 +148,7 @@ Representative device-side numbers; the baseline is measured on the same machine
 | ML-DSA-44 verify | 4096 | **1.8 µs/op** (B390) | 10.9× vs liboqs 1T |
 | ML-DSA-44 sign | 1024 | **43 µs/sig** (B390) | 2.3× vs liboqs 1T |
 | SLH-DSA-SHAKE-128f verify | 4096 | **47.8 µs/op** (B390) | 27.9× vs liboqs 1T |
+| Falcon-512 verify | 4096 | **0.65 µs/op** (B390) | 3.2× vs liboqs 16P, 35× vs 1T |
 | LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.

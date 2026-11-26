@@ -594,3 +594,43 @@ identical verification work (clock state, min-of-3), so quote the 16P number or 
 not four significant figures; and the 16P column is the sum of per-process rates measured
 while all sixteen run, which is why `scale` is 6x for ChaCha20 (memory-bound) and 15x for the
 signatures (register-bound).
+
+## 16. Falcon-512 verification (FIPS 206 draft)
+
+`python benchmarks/bench_falcon_verify.py --ps falcon-512 --batch 64,512,4096 --profile`.
+The corpus is liboqs 0.16.0's `pqclean_falcon-512` under one public key, so the CPU baseline
+and the device consume exactly the same signatures. Arc B390, min-of-10, device synced.
+
+| B | dev ms | **dev µs/op** | dev Mops/s | e2e ms | e2e µs/op | valid |
+|---:|---:|---:|---:|---:|---:|---:|
+| 64 | 0.287 | 4.48 | 0.22 | 15.81 | 247.0 | 64/64 |
+| 512 | 0.531 | **1.04** | 0.96 | 32.07 | 62.6 | 512/512 |
+| 4096 | 2.677 | **0.65** | 1.53 | 126.97 | 31.0 | 4096/4096 |
+
+Against the CPU (liboqs 0.16.0, same machine, from `cpu_baseline.json`): one thread is
+**23.7 µs/op**, sixteen processes are **2.18 µs/op**. The device core is therefore
+**35× one thread and 3.2× sixteen processes** — the first primitive in this repo that beats
+the 16-process baseline by more than 2× and is not a scheme's fused pipeline.
+
+Two numbers, because they answer different questions:
+
+- **dev/op** is `Verifier.verify_core_torch`: `NTT(s2)`, the pointwise product, the inverse
+  NTT and the norm check. The transforms are **39%** of it (0.14 + 0.11 µs at B = 4096), which
+  is why the rest of the row is one fused kernel rather than three.
+- **e2e/op** is `Verifier.verify`, which also pays for the variable-length signature decoder
+  (24 µs/signature) and SHAKE256 + rejection sampling (9 µs) on the host. That is the honest
+  end-to-end cost today and it is **host-bound**, not device-bound: the decoder and
+  `HashToPoint` are the next two kernels to write, and they are the reason this row is not
+  0.65 µs.
+
+Two things worth knowing before reading Falcon numbers anywhere:
+
+- **The verdict is a norm bound, not an equality.** The corpus's squared norms sit around
+  30.1M against the bound 34.03M, so ~12% of slack remains and a one-unit perturbation of the
+  hash point can still verify (`tests/test_falcon_gpu.py` pins this). Flipping a byte inside
+  the coefficient stream moves s2 by 2^7-ish, which is 10^4 times the slack, so the rejection
+  tests are not luck -- but "valid" and "produced by the signer" are not the same statement.
+- **Signatures are variable length** (651-662 bytes observed, 666 for Falcon-padded). The
+  decoder is a prefix code, so it cannot be vectorised as a bit gather; the batch decoder is
+  vectorised *across signatures* instead (one numpy op per coefficient index), which is what
+  took it from 134 µs to 24 µs per signature.
