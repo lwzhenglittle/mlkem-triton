@@ -346,8 +346,11 @@ Four constraints shaped this, and the fourth cost four sessions:
 
 - a **runtime loop cannot carry a tuple** in Triton, so the chaining value has to live in memory
   between block indices rather than in registers;
-- a `tl.constexpr` parameter **cannot receive a loop variable**, so the block index is a runtime
-  argument (passing a loop variable to a constexpr silently loads the wrong block);
+- the block index is a **runtime** argument rather than a `constexpr`. A constexpr must be known at
+  compile time, and binding one to a loop variable was recorded as unreliable during this kernel's
+  development -- *re-tested on this build, `j: tl.constexpr = i` inside a runtime loop produced the
+  correct result*, so the original observation is not reproducible as stated. The runtime argument
+  stays because it is unambiguously correct, not because the alternative is known to be wrong;
 - the CV store is masked by `block < nblocks`: the last chunk of a message is usually partial and
   the extra iterations would overwrite it with a compression of zero padding;
 - **never shift a 32-bit value by 32.** `counter >> 32` is undefined behaviour. The Xe backend
