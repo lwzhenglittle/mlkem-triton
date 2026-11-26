@@ -283,3 +283,34 @@ def test_every_exported_primitive_is_in_the_doc():
     assert not missing_from_all, (
         f"exported in the table but absent from __all__: {missing_from_all}"
     )
+
+
+def test_the_package_description_names_what_shipped():
+    """`pyproject.toml`'s description is what `pip show` and PyPI display.
+
+    It listed the four schemes and five primitives from the previous milestone; Falcon, BLAKE3,
+    Poseidon2, AES and the int8 GEMM all shipped since and none were named. Nobody reads a
+    description the way they read a README, so it drifts silently -- this pins the names that must
+    appear, and fails when a new scheme or primitive is added without updating it.
+    """
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "pyproject.toml").read_text()
+    description = re.search(r'^description = "([^"]+)"', text, re.M).group(1).lower()
+    for name in (
+        "ml-kem",
+        "ml-dsa",
+        "slh-dsa",
+        "lms",
+        "falcon",
+        "keccak",
+        "sha-2",
+        "ntt",
+        "chacha20",
+        "aes",
+        "blake3",
+        "poseidon2",
+        "gemm",
+    ):
+        assert name in description, f"pyproject description does not mention {name}"
