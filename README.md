@@ -493,8 +493,6 @@ SLH-DSA specific:
 - [docs/compare.md](docs/compare.md) — cuPQC, HI-Kyber, ConvKyber, TensorCrypto
 - [CONTRIBUTING.md](CONTRIBUTING.md) — environment, tests, a new backend, measurement discipline
 
-The Chinese originals of the long-form documents are supplementary material in
-[docs/zh/](docs/zh/); the English versions above are authoritative.
 
 ## License
 

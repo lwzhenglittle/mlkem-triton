@@ -50,6 +50,14 @@ No algorithm changed; the device math is the same code, now with the contracts i
 812 tests, ruff clean. The full suite and `ruff check .` were run on the Arc B390; the wheel now
 contains `triton_crypto/lms/` (checked by the `package` CI job).
 
+**Docs**
+
+- Removed the stale Chinese translations in `docs/zh/`: they duplicated README, CHANGELOG,
+  CONTRIBUTING and docs/compare, quoted 231-264 tests against today's 812, and linked to files
+  that no longer exist. Git history retains them.
+- Corrected the README's 375-test count and its "ML-DSA verification only" limitation, refreshed
+  the support matrix and the project tree, and applied `ruff format`.
+
 ## [0.7.1] — signing to 43 µs (2.3× one core), and mixed-length batches
 
 Building on the speculation work: ML-DSA-44 signing at B=1024 went 56.3 µs → **43.0 µs** (liboqs one
@@ -447,6 +455,6 @@ instead of `copy_`).
 
 The long-form documents were rewritten in English and split into
 [design](docs/design.md), [benchmarks](docs/benchmarks.md), [support](docs/support.md) and
-[comparison](docs/compare.md). The original Chinese versions are kept as supplementary material
-in [docs/zh/](docs/zh/); the English versions are authoritative. The unused
+[comparison](docs/compare.md). The original Chinese versions were later removed from the tree
+(Git history retains them); the English versions are authoritative. The unused
 `data/acvp/internalProjection.json` (1.4 MB, never read by any code path) was dropped.
