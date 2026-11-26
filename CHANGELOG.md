@@ -419,7 +419,7 @@ compile time. Hand-optimising a division the compiler can see the divisor of buy
 
 The multi-pass transform now exposes the operation it exists for: `mul_torch(a, b)` is the
 negacyclic product in `Z_q[X]/(X^n+1)` -- forward both operands, multiply pointwise, inverse once.
-At 2^20 that is **9.3-11.9 ms**, roughly 22x one CPU core and 1.7x sixteen processes.
+At 2^20 that was **9.3-11.9 ms** with radix-2, roughly 22x one CPU core and 1.7x sixteen processes.
 
 Verification is two-layered because a 2^20 schoolbook product does not exist: random operands at
 2^10 against the numpy path, plus **monomials at 2^20**, where `X^i * X^j` has an exact closed form
