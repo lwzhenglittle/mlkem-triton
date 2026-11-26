@@ -145,9 +145,12 @@ that is the only evidence for it is emitted at compile time and never again.)
    (`r=1, s=0`) passed either way.
 3. **`expand`ed tensors are not contiguous.** A kernel that indexes them linearly reads past the
    first row (Falcon's pointwise product).
-4. **A `tl.constexpr` parameter cannot receive a loop variable**, and Triton rejects starred
-   unpacking (`(*t, v)` is "unsupported AST node type: Starred"), so tuple accumulation in a jit
-   body must be `t = t + (v,)` and only works under `tl.static_range`.
+4. **Triton rejects starred unpacking** (`(*t, v)` is "unsupported AST node type: Starred"), so
+   tuple accumulation in a jit body must be `t = t + (v,)` and only works under `tl.static_range`.
+   The companion claim -- that a `tl.constexpr` cannot receive a loop variable -- was recorded here
+   and **does not reproduce**: `j: tl.constexpr = i` inside a runtime loop produced the correct
+   result, identical to passing a runtime argument. The kernel keeps the runtime argument because
+   it is unambiguously correct, not because the alternative is known to fail.
 5. **A runtime loop cannot carry a tuple assignment.** Any state that has to survive a loop
    needs named scalars — and unrolling to keep the tuple is not free (trap 6).
 6. **"It compiles" is not evidence.** An earlier session recorded `tl.sort` as *silently wrong* on
