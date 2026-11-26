@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1199 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1198 passed + 1 skipped** of 1199 collected |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -24,7 +24,7 @@ same idioms but **not run** there. Nothing in this column is claimed beyond that
 | `primitives.sponge` / `keccak` | SHA3-224/256/384/512, SHAKE128/256, any rate | ✅ | ⚠️ | NIST CAVP, numpy reference |
 | `primitives.sha2` | SHA-256 / SHA-512 compression | ✅ | ⚠️ | ACVP via the SLH-DSA/LMS suites |
 | `primitives.ntt` | negacyclic NTT, `(q, N, ζ, layers)`, N<=1024 | ✅ | ⚠️ | per-domain numpy, schoolbook convolution |
-| `primitives.ntt.large` | multi-pass NTT up to 2^20 (bandwidth-bound) | ✅ | ⚠️ | `NTTDomain` at sizes both can do, round trip, negacyclic product |
+| `primitives.ntt.large` | multi-pass NTT up to 2^20 (the only memory-bound primitive here: 45% of copy bandwidth, not saturated) | ✅ | ⚠️ | `NTTDomain` at sizes both can do, round trip, negacyclic product |
 | `primitives.fields` | 32-bit Montgomery product, prime-field | ✅ | ⚠️ | numpy twin, cross-module call test |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) | ✅ | ⚠️ | RFC 8439 §2.3.2 / §2.4.2, OpenSSL |
 | `primitives.poly1305` | Poly1305 + ChaCha20-Poly1305 AEAD | ✅ | ⚠️ | RFC 8439 §2.5.2 / §2.8.2, OpenSSL EVP_MAC |
@@ -39,9 +39,10 @@ CUDA cells are reasoning, not measurement, and are marked as such. ROCm remains 
 from the code and is not claimed as working.
 
 Every measurement in this project is paired with a CPU baseline taken **in the same window**
-(`benchmarks/bench_cpu.py`, `vs 1T` / `vs 16P` columns); on this machine the honest summary is
-that the sponge family wins 1.6-4x over sixteen x86 cores, the ALU-bound primitives lose
-0.06-0.5x, and Falcon verification wins 3.2x. `docs/benchmarks.md` §15.1 and §15-§19 have the
+(`benchmarks/bench_cpu.py`, `vs 1T` / `vs 16P` columns). On this machine the honest summary is:
+**seven rows beat sixteen x86 cores** -- the sponge/SHA-2 family at 1.55-4.11x and the 2^20 NTT at
+4.1x -- while the ALU-bound primitives lose at 0.06-0.5x and Falcon's *core* wins 3.7x (its
+end-to-end is 7.5x slower because 81% of it is host-side decode). `docs/benchmarks.md` §15.1 and §15-§19 have the
 tables.
 
 With no GPU at all, `pytest tests` skips the device-dependent cases centrally, so a CPU-only
