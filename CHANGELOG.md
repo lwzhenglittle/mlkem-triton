@@ -110,6 +110,18 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### Two dead helpers removed, one untested entry point covered
+
+A static sweep for functions that are never referenced found `LargeNTT._run` and `LargeNTT._mul`,
+both superseded by the cached paths when the twiddle fusion landed -- dead code in a module that
+is supposed to be the reference for a 2^20 transform. Removed.
+
+The sweep also showed that `inverse_torch` (the numpy-input inverse) had no test, unlike its
+forward twin, so a regression there would have gone unnoticed. It now has one that checks both
+numpy-input entry points against the tensor ones. Removing the dead code also removed the
+`@triton.jit` decorator from `_stage4_kernel` along with it, which the radix-4 test caught
+immediately -- an argument for exactly that kind of coverage.
+
 ### A read-only input no longer warns in every caller's log
 
 `blake3_hash_torch` handed a `np.frombuffer` view straight to `torch.as_tensor`, which warns about

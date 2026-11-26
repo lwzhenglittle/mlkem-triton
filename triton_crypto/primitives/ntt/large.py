@@ -230,34 +230,6 @@ class LargeNTT:
 
     # ------------------------------------------------------------------ device
 
-    def _run(self, x, direction: str, dev):
-        import torch
-
-        q = self.q
-        buf = torch.empty_like(x)
-        tables = self.fwd_tables() if direction == "fwd" else self.inv_tables()
-        pre = self._device_pre(dev)
-        for i, tw in enumerate(tables):
-            half = tw.size
-            log_half = half.bit_length() - 1
-            w = torch.as_tensor(tw, dtype=torch.int32, device=dev)
-            _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
-                x,
-                buf,
-                2 * half,
-                self.n // 2,
-                log_half,
-                w,
-                pre,
-                Q=q,
-                FORWARD=(direction == "fwd"),
-                FUSE_PRE=(i == 0 and direction == "fwd"),
-                BLK=STAGE_BLK,
-                num_warps=STAGE_WARPS,
-            )
-            x, buf = buf, x
-        return x
-
     def _device_tables(self, direction: str, dev):
         key = (direction, str(dev))
         cache = self.__dict__.setdefault("_tbl_cache", {})
@@ -475,17 +447,6 @@ class LargeNTT:
         fa = self.ntt(a)
         fb = self.ntt(b)
         return self.intt(fa * fb % self.q)
-
-    @staticmethod
-    def _mul(x, p, dev, q):
-        import torch
-
-        from ... import devices as _devices
-
-        out = torch.empty_like(x)
-        _mul_kernel[(triton.cdiv(x.numel(), 65536),)](x, p, out, x.numel(), Q=q, BLK=65536)
-        _devices.sync(dev)
-        return out
 
 
 @triton.jit

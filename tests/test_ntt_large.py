@@ -90,6 +90,25 @@ def test_radix4_agrees_with_radix2(logn):
     assert np.array_equal(got4, t2.ntt(a))
 
 
+def test_the_numpy_input_entry_points_agree_with_the_tensor_ones():
+    """`forward_torch`/`inverse_torch` are the documented entry points for host values; both have
+    to give the same answer as the device-tensor paths, since a caller will reach for whichever
+    matches what it holds."""
+    import torch
+
+    logn = 12
+    t = LargeNTT(1 << logn, Q)
+    rng = np.random.default_rng(logn + 500)
+    a = rng.integers(0, Q, 1 << logn)
+    x = torch.as_tensor(a, dtype=torch.int32, device="xpu")
+    assert np.array_equal(
+        t.forward_torch(a).cpu().numpy().astype(np.int64),
+        t.forward_tensor_torch(x, x.device).cpu().numpy().astype(np.int64),
+    )
+    have = rng.integers(0, Q, 1 << logn)
+    assert np.array_equal(t.inverse_torch(have).cpu().numpy().astype(np.int64), t.intt(have))
+
+
 def test_rejects_non_power_of_two():
     with pytest.raises(ValueError, match="power of two"):
         LargeNTT(1000, Q)
