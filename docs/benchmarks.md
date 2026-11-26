@@ -710,6 +710,9 @@ Two things worth knowing before reading Falcon numbers anywhere:
   hash point can still verify (`tests/test_falcon_gpu.py` pins this). Flipping a byte inside
   the coefficient stream moves s2 by 2^7-ish, which is 10^4 times the slack, so the rejection
   tests are not luck -- but "valid" and "produced by the signer" are not the same statement.
+- **One harness number, one measurement.** The summary line under the table used to re-time the
+  device core after the table had already measured it, which under clock drift printed 1.11 µs
+  where the table said 0.60 -- two numbers for one quantity. It reuses the table's last row now.
 - **Signatures are variable length** (651-662 bytes observed, 666 for Falcon-padded). The
   decoder is a prefix code, so it cannot be vectorised as a bit gather; the batch decoder is
   vectorised *across signatures* instead (one numpy op per coefficient index), which is what
