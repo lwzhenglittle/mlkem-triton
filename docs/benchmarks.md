@@ -642,10 +642,18 @@ Two numbers, because they answer different questions:
 | `HashToPoint` (SHAKE256 + rejection) | host, hashlib | 9.3 | 30% |
 | e2e total | | 31.3 | 100% |
 
-  The two host stages are the next two kernels to write, and they are the reason this row is
-  not 0.60 µs. `comp_decode` is a prefix code with per-lane bit positions, so it is a
-  sequential scan per signature -- on the device that is 512 iterations per lane but all lanes
-  in parallel, which is why it should be worth writing rather than parallelising on the host.
+  The obvious next step -- move `comp_decode` to the device -- **was tried and lost**. The
+  kernel is one lane per signature with 512 sequential steps (the code is a prefix code, so
+  there is no way to bit-gather a batch), which makes every step a 3-byte gather at a
+  data-dependent address plus two table lookups for the unary run length. Measured: **2.6
+  ms/signature on the device against 75 µs on the host**, 35x slower, and the first version was
+  also wrong (the per-lane bit-position bookkeeping needs more care than the 40-line kernel got).
+
+  The reason is the same one the AES section ran into from the other side: the host numpy
+  version processes *all signatures in lockstep* against contiguous memory, so it is a
+  vectorised scan, while the device version is a divergent gather per coefficient. The lesson is
+  recorded here so the next attempt starts from it: for Falcon, decode on the host (or write a
+  warp-cooperative decoder that keeps the gathers coalesced); hash on the device.
 
 Two things worth knowing before reading Falcon numbers anywhere:
 
