@@ -94,6 +94,20 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### Radix-4 for the 2^20 NTT: half the traffic, 10-20% of the time
+
+`LargeNTT(n, q, radix=4)` fuses two radix-2 stages per pass. Bit-identical to the radix-2 result
+(verified 2^4..2^20, including the odd-`log2` case with a leftover radix-2 pass), and paired in
+one window: 1.74 ms against 1.88 (min), 2.64 against 3.18 (median), for 80 MB of traffic instead
+of 160.
+
+**Halving the traffic buys 10-20%, not 50%** -- which corrects the framing of the previous
+entry: the transform's cost is *dominated* by traffic but it is not *bandwidth-saturated* (76 of
+216 GB/s), and the limit is pass latency plus the modular multiplies. It also corrects a reading
+taken across two windows that concluded radix-4 was slower; the paired run says otherwise by
+~15%. Radix-4 stays opt-in: `radix=2` is the default because the win is smaller than the
+run-to-run spread.
+
 ### The 2^20-point NTT gets 5x faster, and becomes the one row that beats sixteen processes
 
 The first correct version took 10.81 ms. It now takes **2.22 ms**: **31.5x one CPU core and

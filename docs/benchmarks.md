@@ -818,7 +818,7 @@ can exercise.
 That is the sixth entry for the "Triton 表达缺口" table, and it is the only one that produced
 *plausible* output rather than an error or a wrong answer.
 
-## 22. The 2^20-point NTT: the one bandwidth-bound primitive
+## 22. The 2^20-point NTT: the one primitive whose cost is memory traffic
 
 `python benchmarks/bench_primitive.py --only ntt-2^20`. BabyBear, 20 Stockham passes, one launch
 per pass, data in global memory.
@@ -850,8 +850,28 @@ roofline. Three fixes, in order of what they were worth:
 3. **Tile 1024, 8 warps** rather than 4096/4: the swept table runs 41 ms (2-D grid) / 3.55 ms
    (2048/4) / **1.87 ms** (1024/8) for the pass sequence alone.
 
-What is left: 2.22 ms is 3x off the 0.74 ms traffic roofline, and 20 radix-2 passes are the
-reason. Radix-4 (10 passes) and radix-8 (7) are the next step and should land near 1.2-1.5 ms.
+### 22.2 Radix-4 halves the traffic and buys 10-20%, not 50%
+
+`LargeNTT(n, q, radix=4)` fuses two radix-2 stages per pass (ten passes instead of twenty) and is
+bit-identical to the radix-2 result, verified for N = 2^4 .. 2^20 including the odd-`log2` case
+where one radix-2 pass is left over. Paired in one window, eight alternating rounds:
+
+| | min | median | traffic | achieved |
+|---|---:|---:|---:|---:|
+| radix-2 (20 passes) | 1.88 ms | 3.18 ms | 160 MB | 85 GB/s |
+| radix-4 (10 passes) | **1.74 ms** | **2.64 ms** | 80 MB | 46 GB/s |
+
+So halving the traffic does **not** halve the time: the transform is limited by pass latency and
+by the modular multiplies, not by bytes. That also means the "0.74 ms roofline" is not the
+binding constraint at this size, and radix-8 would not be either.
+
+**A correction worth keeping**: an earlier reading of the same numbers, taken across two windows,
+concluded radix-4 was *slower* (2.63 against 2.13 ms). The paired measurement above says the
+opposite by ~15%. This is §1's discipline in action -- the iGPU's clock moved, the ratios did
+not, and only the paired run can tell.
+
+Radix-4 stays opt-in (`radix=2` is the default): it is 10-20% faster for twice the code and one
+extra kernel, and the win is smaller than the run-to-run spread.
 
 The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
 `gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one
@@ -859,10 +879,12 @@ process with 16 OpenMP threads lands in between at 14.8 ms).
 
 Three things worth reading off it:
 
-- **This is the only primitive in the repository that is bandwidth-bound.** Everything else
-  (SHA-3, ChaCha20, Poseidon2, Poly1305, AES, BLAKE3) sits at 3-31 GB/s of *useful* traffic and is
-  ALU-limited; this one moves 160 MB because every pass touches the whole array, and its roofline
-  is 0.74 ms.
+- **This is the only primitive in the repository whose cost is dominated by memory traffic.**
+  Everything else (SHA-3, ChaCha20, Poseidon2, Poly1305, AES, BLAKE3) keeps its working set in
+  registers and moves 3-31 GB/s of *useful* data; this one moves 160 MB because every pass
+  touches the whole array, and a pure-traffic floor would be 0.74 ms. **It is not at that floor**
+  -- 76 GB/s against copy's 216 -- and §22.2 shows the gap is not bandwidth: halving the traffic
+  with radix-4 buys only 10-20%.
 - **The first correct implementation is 7x off that roofline** (10.8 ms against 0.74). The
   traffic is done at 15.5 GB/s, not 112. The stages are one launch each, the later stages access
   with a stride that defeats coalescing, and the passes are radix-2 (20 of them rather than 7

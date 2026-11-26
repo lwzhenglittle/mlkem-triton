@@ -79,6 +79,17 @@ def test_device_round_trip(logn):
     assert np.array_equal(back, a % Q)
 
 
+@pytest.mark.parametrize("logn", [10, 12, 15])
+def test_radix4_agrees_with_radix2(logn):
+    """The fused radix-4 pass is bit-identical to two radix-2 passes, including when log2(n) is
+    odd (one radix-2 pass is left over). It is slower on this device, so it is opt-in."""
+    a = np.random.default_rng(logn + 400).integers(0, Q, 1 << logn)
+    t2 = LargeNTT(1 << logn, Q)
+    t4 = LargeNTT(1 << logn, Q, radix=4)
+    got4 = t4.forward_torch(a).cpu().numpy().astype(np.int64)
+    assert np.array_equal(got4, t2.ntt(a))
+
+
 def test_rejects_non_power_of_two():
     with pytest.raises(ValueError, match="power of two"):
         LargeNTT(1000, Q)

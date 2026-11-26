@@ -95,9 +95,9 @@ an integrated GPU with a 16-core hybrid CPU beside it.
 
   This is the answer to the question the project started with. Every ALU-bound primitive loses
   to sixteen cores (0.06-0.5x) and the sponge family wins by 1.6-4x only because x86 has no
-  Keccak instruction. The operators that win by more are the **bandwidth-bound** ones: 160 MB of
-  traffic per useful operation is something sixteen cores cannot beat without 160 MB/shot of
-  their own bandwidth.
+  Keccak instruction. The operators that win by more are the ones whose **working set cannot fit
+  in registers**: 160 MB of traffic per useful call is something sixteen cores cannot match,
+  because each of them has to move the same bytes through the same memory system.
 
 ## 3. Five Triton traps found the hard way
 

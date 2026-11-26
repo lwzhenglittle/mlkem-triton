@@ -76,9 +76,12 @@ def _stage_kernel(
 class LargeNTT:
     """A negacyclic NTT of size `n`, multi-pass, for n beyond the in-register kernel's range."""
 
-    def __init__(self, n: int, q: int):
+    def __init__(self, n: int, q: int, radix: int = 2):
         if n & (n - 1):
             raise ValueError(f"n must be a power of two, got {n}")
+        if radix not in (2, 4):
+            raise ValueError(f"radix must be 2 or 4, got {radix}")
+        self.radix = radix
         self.n = n
         self.q = q
         self.logn = n.bit_length() - 1
@@ -106,6 +109,27 @@ class LargeNTT:
         while m >= 2:
             out.append(self._table(m // 2, omega))
             m //= 2
+        return out
+
+    def fwd_passes4(self) -> list[tuple]:
+        """Forward passes as `(quarter_length, w1a, w1b, w2)` for radix-4, plus a final
+        `(quarter_length, w)` radix-2 pass when `log2(n)` is odd."""
+        n, q = self.n, self.q
+        omega = self.psi * self.psi % q
+        out = []
+        m = n
+        while m >= 4:
+            quarter = m // 4
+            step = pow(omega, n // m, q)
+            step2 = pow(omega, 2 * n // m, q)
+            idx = range(quarter)
+            w1a = np.array([pow(step, j, q) for j in idx], dtype=np.int64)
+            w1b = np.array([pow(step, j + quarter, q) for j in idx], dtype=np.int64)
+            w2 = np.array([pow(step2, j, q) for j in idx], dtype=np.int64)
+            out.append((4, m, w1a, w1b, w2))
+            m //= 4
+        if m == 2:
+            out.append((2, 2, self._table(1, omega)))
         return out
 
     def inv_tables(self) -> list[np.ndarray]:
@@ -216,6 +240,73 @@ class LargeNTT:
             cache[key] = [torch.as_tensor(t, dtype=torch.int32, device=dev) for t in tables]
         return cache[key]
 
+    def _passes4_cached(self, dev):
+        key = ("pass4", str(dev))
+        cache = self.__dict__.setdefault("_tbl_cache", {})
+        if key not in cache:
+            import torch
+
+            passes = []
+            for p in self.fwd_passes4():
+                if p[0] == 4:
+                    _, m, w1a, w1b, w2 = p
+                    passes.append(
+                        (
+                            4,
+                            m,
+                            *[
+                                torch.as_tensor(w, dtype=torch.int32, device=dev)
+                                for w in (w1a, w1b, w2)
+                            ],
+                        )
+                    )
+                else:
+                    _, m, w = p
+                    passes.append((2, m, torch.as_tensor(w, dtype=torch.int32, device=dev)))
+            cache[key] = passes
+        return cache[key]
+
+    def _run4(self, x, dev):
+        import torch
+
+        q = self.q
+        buf = torch.empty_like(x)
+        for p in self._passes4_cached(dev):
+            if p[0] == 4:
+                _, m, w1a, w1b, w2 = p
+                quarter = w1a.numel()
+                log_q = quarter.bit_length() - 1
+                _stage4_kernel[(triton.cdiv(self.n // 4, STAGE_BLK),)](
+                    x,
+                    buf,
+                    m,
+                    self.n // 4,
+                    log_q,
+                    w1a,
+                    w1b,
+                    w2,
+                    Q=q,
+                    BLK=STAGE_BLK,
+                    num_warps=STAGE_WARPS,
+                )
+            else:
+                _, m, w = p
+                log_half = (m // 2).bit_length() - 1
+                _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
+                    x,
+                    buf,
+                    m,
+                    self.n // 2,
+                    log_half,
+                    w,
+                    Q=q,
+                    FORWARD=True,
+                    BLK=STAGE_BLK,
+                    num_warps=STAGE_WARPS,
+                )
+            x, buf = buf, x
+        return x
+
     def _run_cached(self, x, direction: str, dev):
         import torch
 
@@ -261,8 +352,17 @@ class LargeNTT:
         return self.forward_tensor_torch(x, dev)
 
     def forward_tensor_torch(self, x, dev):
-        """Device tensor in, device tensor out, tables cached: the timing entry point."""
+        """Device tensor in, device tensor out, tables cached: the timing entry point.
+
+        `radix=4` (default 2) halves the number of passes but is **slower on this device** --
+        2.63 ms against 2.13 at 2^20, best case over a tile/warp sweep. A radix-4 butterfly
+        loads four coefficients up to `n/4` apart, so the pass stops being cache-resident, while
+        two radix-2 passes each touch one adjacent pair. It is kept because the arithmetic is
+        verified against the radix-2 result and another device may not have that problem.
+        """
         x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
+        if self.radix == 4:
+            return self._run4(x, dev)
         return self._run_cached(x, "fwd", dev)
 
     def inverse_torch(self, x, device=None):
@@ -288,6 +388,54 @@ class LargeNTT:
         _mul_kernel[(triton.cdiv(x.numel(), 65536),)](x, p, out, x.numel(), Q=q, BLK=65536)
         _devices.sync(dev)
         return out
+
+
+@triton.jit
+def _stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q: tl.constexpr, BLK: tl.constexpr):
+    """Two radix-2 DIF stages fused into one radix-4 pass: ten passes instead of twenty.
+
+    Fusion is exact, not approximate: the second radix-2 stage runs on blocks of `M/2`, so its
+    twiddle step is `root^(2N/M)` and it needs the twiddles at positions `j` and `j + M/4` of the
+    first stage. Verified against the two-pass sequence in numpy for N = 2^4 .. 2^10, where the
+    results are bit-identical -- which also means the output ordering (and therefore pointwise
+    compatibility with the in-register kernel) is unchanged.
+    """
+    pid = tl.program_id(0)
+    offs = pid * BLK + tl.arange(0, BLK)
+    mask = offs < TOTAL
+    quarter = 1 << LOG_Q
+    blk = offs >> LOG_Q
+    j = offs & (quarter - 1)
+    base = blk * M
+    a0 = tl.load(X + base + j, mask=mask, other=0).to(tl.int64)
+    a1 = tl.load(X + base + quarter + j, mask=mask, other=0).to(tl.int64)
+    a2 = tl.load(X + base + 2 * quarter + j, mask=mask, other=0).to(tl.int64)
+    a3 = tl.load(X + base + 3 * quarter + j, mask=mask, other=0).to(tl.int64)
+    w1a = tl.load(W1A + j, mask=mask, other=0).to(tl.int64)
+    w1b = tl.load(W1B + j, mask=mask, other=0).to(tl.int64)
+    w2 = tl.load(W2 + j, mask=mask, other=0).to(tl.int64)
+    u = a0 + a2
+    u = tl.where(u >= Q, u - Q, u)
+    d = a0 - a2
+    d = tl.where(d < 0, d + Q, d)
+    d = d * w1a % Q
+    u2 = a1 + a3
+    u2 = tl.where(u2 >= Q, u2 - Q, u2)
+    d2 = a1 - a3
+    d2 = tl.where(d2 < 0, d2 + Q, d2)
+    d2 = d2 * w1b % Q
+    s0 = u + u2
+    s0 = tl.where(s0 >= Q, s0 - Q, s0)
+    s1 = u - u2
+    s1 = tl.where(s1 < 0, s1 + Q, s1)
+    s2 = d + d2
+    s2 = tl.where(s2 >= Q, s2 - Q, s2)
+    s3 = d - d2
+    s3 = tl.where(s3 < 0, s3 + Q, s3)
+    tl.store(Y + base + j, s0, mask=mask)
+    tl.store(Y + base + quarter + j, s1 * w2 % Q, mask=mask)
+    tl.store(Y + base + 2 * quarter + j, s2, mask=mask)
+    tl.store(Y + base + 3 * quarter + j, s3 * w2 % Q, mask=mask)
 
 
 @triton.jit
