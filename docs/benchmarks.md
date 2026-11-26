@@ -416,13 +416,13 @@ is 64-bit lane arithmetic).
 
 | set | B=64 | B=256 | B=1024 | liboqs 1T | liboqs 16P | Python reference |
 |---|---:|---:|---:|---:|---:|---:|
-| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 97.7 µs | 6.1 µs | 5 402 µs |
-| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | 137.6 µs | 8.6 µs | — |
-| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | 181.3 µs | 11.3 µs | — |
+| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 97.7 µs | 28.2 µs | 5 402 µs |
+| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | 137.6 µs | 28.0 µs | — |
+| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | 181.3 µs | 27.7 µs | — |
 
 **Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
 97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and
-with 16 processes the CPU is ~30× ahead. This is not a tuning failure but a shape mismatch: a
+against 16 concurrent processes (28.2 µs/sig) it is 6.8× behind. This is not a tuning failure but a shape mismatch: a
 signature is a short chain of ~4.5 sequential rejection attempts over a `k·l`-sized batch, so the
 device is paying launch latency (~2 ms per attempt, see below) where the CPU pays arithmetic. The
 16P column is the same convention as the rest of this document (aggregate over 16 fork processes).
