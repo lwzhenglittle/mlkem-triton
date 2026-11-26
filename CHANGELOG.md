@@ -110,6 +110,13 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### A read-only input no longer warns in every caller's log
+
+`blake3_hash_torch` handed a `np.frombuffer` view straight to `torch.as_tensor`, which warns about
+non-writable memory (and is undefined behaviour if anything writes). It now copies only when the
+input is read-only, so the common path stays zero-copy and the warning is gone --
+`pytest -W error::UserWarning tests/test_blake3_gpu.py` is the regression guard.
+
 ### The CPU baseline carried one timestamp for seventeen rivals
 
 `bench_cpu.py --merge` bumped a single `meta.timestamp` for the whole file, so a partial

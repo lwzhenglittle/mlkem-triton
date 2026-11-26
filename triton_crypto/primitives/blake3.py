@@ -365,7 +365,13 @@ def blake3_hash_torch(messages, device=None):
     from .. import devices as _devices
 
     dev = _devices.resolve_device(device)
-    msg = torch.as_tensor(np.asarray(messages, dtype=np.uint8), device=dev)
+    arr = np.asarray(messages, dtype=np.uint8)
+    if not arr.flags.writeable:
+        # a read-only view (np.frombuffer, or a sliced bytes literal) makes torch warn on the
+        # zero-copy conversion; nothing here writes to the input, but the copy is cheap compared
+        # to a warning in every caller's log and an undefined-behaviour footnote
+        arr = arr.copy()
+    msg = torch.as_tensor(arr, device=dev)
     if msg.ndim != 2:
         raise ValueError("messages must be [B, nbytes]")
     batch, nbytes = msg.shape
