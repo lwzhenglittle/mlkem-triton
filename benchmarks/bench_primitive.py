@@ -39,7 +39,15 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from triton_crypto import devices
-from triton_crypto.primitives import chacha20, keccak, poly1305, poseidon2, sha2, sponge
+from triton_crypto.primitives import (
+    aes,
+    chacha20,
+    keccak,
+    poly1305,
+    poseidon2,
+    sha2,
+    sponge,
+)
 from triton_crypto.primitives.ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -181,6 +189,27 @@ def bench_poseidon2(batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_aes(batch: int, size: int, dev) -> Bench:
+    """T-table AES-128-CTR. The host key schedule is hoisted out of the timing: it is ~80 us
+    per key, i.e. 0.3 s for 4096 streams, which would swamp the kernel (see §18)."""
+    import torch
+
+    rows, size = max(batch, 1), max(size, 16)
+    rng = np.random.default_rng(0)
+    keys = rng.integers(0, 256, (rows, 16), dtype=np.uint8)
+    nonces = rng.integers(0, 256, (rows, 8), dtype=np.uint8)
+    rk = torch.as_tensor(
+        np.stack([aes.aes128_expand_key_np(bytes(k)) for k in keys]).astype(np.int32), device=dev
+    )
+    return Bench(
+        lambda: aes.aes128_ctr_torch(keys, nonces, size, device=dev, rk=rk),
+        units=rows * size,
+        unit="B",
+        nbytes=rows * size,
+        note="AES-128-CTR, T-table (gather)",
+    )
+
+
 def bench_poly1305(batch: int, size: int, dev) -> Bench:
     rows, size = max(batch, 1), max(size, 16)
     size -= size % 16  # the device path takes whole 16-byte blocks
@@ -241,6 +270,7 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "poseidon2": bench_poseidon2,
     "poly1305": bench_poly1305,
     "chacha20-poly1305": bench_aead,
+    "aes128-ctr": bench_aes,
 }
 
 ORDER = list(CASES)
@@ -261,6 +291,7 @@ WHAT = {
     "poseidon2": "Poseidon2-BabyBear/16 permutation (Plonky3 parameters)",
     "poly1305": "Poly1305 over --size-byte messages (multiple of 16)",
     "chacha20-poly1305": "ChaCha20-Poly1305 seal (encrypt + tag), no AAD",
+    "aes128-ctr": "AES-128-CTR through a T-table (the gather counter-example)",
 }
 
 
@@ -291,6 +322,7 @@ CPU_RIVAL = {
     "sha3-512": "sha3-512",
     "poseidon2": "poseidon2",
     "chacha20-poly1305": "chacha20-poly1305",
+    "aes128-ctr": "aes-128-ctr",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"

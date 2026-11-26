@@ -32,6 +32,7 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
+| `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
@@ -248,6 +249,30 @@ Three things this kernel pins down:
   multi-block message catches it.
 - **The key stride is 32, not 16.** Reading `lane * 16` works for lane 0 and for a batch of 1,
   which is exactly the shape of a hand-written smoke test.
+
+### `_aes_ctr_kernel(RK, NONCE, OUT, TBL, B, COUNTER0, NBLK, BLK)` — `primitives/aes.py`
+
+AES-128-CTR through a T-table, and the repository's measurement of what a lookup-driven cipher
+costs on a GPU.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `RK` | `[B, 44]` | `int32` | expanded round keys (host-side, 44 words per key) |
+| `NONCE` | `[B, 8]` | `uint8` | the nonce half of `nonce || counter(8)` |
+| `OUT` | `[B, NBLK*16]` | `uint8` | keystream |
+| `TBL` | `[5*256]` | `int32` | `Te0..Te3` then the S-box, 4.25 KiB, gathered from global memory |
+
+Two conventions this kernel is a trap for, both caught only by a known-answer vector:
+
+- **`Te0[x] = [2s, s, s, 3s]`** with `s = S[x]`. Building `[s, 2s, 4s, 8s]` is an easy
+  misreading of "the S-box column rotated through the xtime multiples", and it produces
+  plausible ciphertext for every input.
+- **`Rcon` is the round word's top byte**, so it is XORed as `rcon << 24`. XORing it low gives
+  a key schedule that is wrong in every round and still looks like a key schedule.
+
+The host key schedule is *not* in the kernel: expanding 4096 keys with numpy costs ~340 ms,
+which is 50x the kernel for a 4 MiB batch. `aes128_ctr_torch` therefore takes a precomputed
+`rk` and `bench_primitive.py` hoists it out of the timing.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

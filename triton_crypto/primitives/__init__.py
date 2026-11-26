@@ -17,6 +17,7 @@ originally written for ML-KEM alone inside the old `triton_crypto.kernels` packa
     primitives.chacha20 the ARX stream cipher (RFC 8439), the first non-PQC primitive
     primitives.poseidon2 Poseidon2-BabyBear/16, the algebraic hash ZK systems use (Plonky3)
     primitives.poly1305 Poly1305 (RFC 8439) and the ChaCha20-Poly1305 AEAD
+    primitives.aes      AES-128-CTR through a T-table: a gather measurement, not a fast path
 
 ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
 (`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
@@ -36,7 +37,13 @@ Three domains in use:
 
 from __future__ import annotations
 
-from . import chacha20, fields, keccak, ntt, poly1305, poseidon2, sha2, sponge
+from . import aes, chacha20, fields, keccak, ntt, poly1305, poseidon2, sha2, sponge
+from .aes import (
+    aes128_ctr_np,
+    aes128_ctr_torch,
+    aes128_encrypt_block_np,
+    aes128_expand_key_np,
+)
 from .chacha20 import (
     chacha20_keystream,
     chacha20_keystream_np,
@@ -122,6 +129,11 @@ __all__ = [
     "NTTDomain",
     "Poseidon2",
     "PrimeField",
+    "aes",
+    "aes128_ctr_np",
+    "aes128_ctr_torch",
+    "aes128_encrypt_block_np",
+    "aes128_expand_key_np",
     "chacha20",
     "chacha20_keystream",
     "chacha20_keystream_np",

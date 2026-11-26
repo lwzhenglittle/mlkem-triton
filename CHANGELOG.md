@@ -53,6 +53,28 @@ and Gaussian sampler that §5.3 of the eval explicitly rules out for a cross-bac
   against `pqclean`'s own decoder, including a mixed batch where one bad row must not disturb
   its neighbours.
 
+### AES-128-CTR through a T-table, and a prediction that came out 12x wrong
+
+`primitives/aes.py` is the repository's measurement of what a table-driven cipher costs on a
+GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 4.25 KiB table.
+
+- **Measured 10.68 GB/s** at B = 65536, i.e. **0.77x of one AES-NI core** and 0.06x of sixteen
+  processes. `eval-triton-crypto-primitives.md` §4.7 predicted 0.7-0.85 GB/s by extrapolating
+  the probe's random-gather rate; the same cipher is **12x faster** than that. The gather rate
+  turned out to be a property of the table's residency and access pattern, not of the
+  instruction: a hot 4.25 KiB table with 64 blocks per lane is issue-bound L1 traffic, not the
+  probe's cold divergent gather.
+- The conclusion survives anyway -- 0.77x of one core is still not worth 2-3 weeks of
+  bitslicing, and the same 12x uncertainty applies to that prediction -- but the *reason* has
+  changed, and `docs/benchmarks.md` §18 says so.
+- Two conventions cost real time and are recorded in `docs/kernels.md`: `Te0[x] = [2s, s, s,
+  3s]` (not `[s, 2s, 4s, 8s]`), and `Rcon` is the round word's **top** byte (`rcon << 24`).
+  Both produce plausible ciphertext until a known vector is checked.
+- The host key schedule is hoisted out of the benchmark: 4096 numpy key expansions cost 340 ms,
+  50x the kernel for a 4 MiB batch. `aes128_ctr_torch` takes a precomputed `rk` for that reason.
+- FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
+  three are in `tests/test_aes*.py`.
+
 ### Poly1305 and ChaCha20-Poly1305
 
 The primitive layer's last cheap pattern: a 130-bit modular MAC, and the AEAD that composes it

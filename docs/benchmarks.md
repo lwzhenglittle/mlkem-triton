@@ -664,3 +664,30 @@ Two things this pair cost, both worth recording:
   pad16 || le64(len(aad)) || le64(len(ct))`, so the device Poly1305 only ever sees whole
   16-byte blocks, while the ciphertext keeps its exact length. The AEAD therefore supports
   arbitrary message lengths even though `poly1305_torch` itself does not.
+
+## 18. AES-128-CTR through a T-table: the gather surprise
+
+`python benchmarks/bench_primitive.py --only aes128-ctr --batch 4096,65536`. Arc B390, 1 KiB
+streams, min-of-7, key schedule hoisted out of the timing.
+
+| B | rate | GB/s | vs 1T (AES-NI) | vs 16P |
+|---:|---:|---:|---:|---:|
+| 4096 | 5.01 GB/s | 5.0 | 0.36x | 0.03x |
+| 65536 | **10.68 GB/s** | 10.7 | **0.77x** | 0.06x |
+
+**This is 12x better than the prediction it was built to confirm.** `eval-triton-crypto-
+primitives.md` §4.7 expected 0.7-0.85 GB/s, extrapolating from the primitive probe's
+random-gather rate of 7-8.5 Gload/s at 10 lookups per byte. Measured, the same cipher does
+10.7 GB/s — 0.77x of one AES-NI core, not 0.05x.
+
+Why the extrapolation was wrong: **the gather rate is a property of the table's residency, not
+of the instruction**. This table is 4.25 KiB and stays in L1; every lane walks 64 consecutive
+blocks, so the 160 lookups per block are issue-bound L1 hits rather than the probe's random
+accesses over an 8 KiB table with data-dependent addresses. The lesson generalises: "gather is
+10-13x slower than a coalesced load" (the probe's §6 number) is true for a *cold, divergent*
+gather and badly pessimistic for a hot table. Any future "table vs compute" decision needs the
+table size and the access pattern pinned down first.
+
+What survives from the original argument: **the port is still not worth doing**. 0.77x of a
+single AES-NI core and 0.06x of sixteen processes, for 2-3 weeks of bitslicing work predicted at
+20-40 GB/s (0.12-0.23x of 16P). And the same 12x uncertainty applies to that prediction.
