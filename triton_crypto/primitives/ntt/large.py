@@ -387,13 +387,26 @@ class LargeNTT:
         return cache[key]
 
     def _mul_dev(self, x, p_np, dev, q, role: str):
+        """Elementwise `x * p mod q`. Only the twiddle tables are cached.
+
+        `role="pointwise"` is data, not a table: caching it handed a second product the first
+        product's operand, which is the kind of bug that only a comparison against a different
+        path (here `mul_np`) catches.
+        """
         import torch
 
-        key = ("mul", role, p_np.shape[0], str(dev))
-        cache = self.__dict__.setdefault("_tbl_cache", {})
-        if key not in cache:
-            cache[key] = torch.as_tensor(p_np, dtype=torch.int32, device=dev)
-        p = cache[key]
+        if role in ("pre", "post"):
+            key = ("mul", role, p_np.shape[0], str(dev))
+            cache = self.__dict__.setdefault("_tbl_cache", {})
+            if key not in cache:
+                cache[key] = torch.as_tensor(p_np, dtype=torch.int32, device=dev)
+            p = cache[key]
+        else:
+            p = (
+                p_np
+                if isinstance(p_np, torch.Tensor)
+                else torch.as_tensor(p_np, dtype=torch.int32, device=dev)
+            )
         out = torch.empty_like(x)
         _mul_kernel[(triton.cdiv(x.numel(), 65536),)](x, p, out, x.numel(), Q=q, BLK=65536)
         return out
@@ -432,6 +445,36 @@ class LargeNTT:
 
     def inverse_tensor_torch(self, t, dev):
         return self._run_cached(t, "inv", dev)
+
+    # ------------------------------------------------------------------ products
+
+    def mul_torch(self, a, b, device=None):
+        """Negacyclic product in `Z_q[X]/(X^n + 1)`, all on the device: NTT, pointwise, INTT.
+
+        This is the operation a ZK prover actually calls at 2^20, and the reason the multi-pass
+        transform exists. Both operands and the result stay on the device.
+        """
+        import torch
+
+        from ... import devices as _devices
+
+        dev = _devices.resolve_device(device)
+        fa = self.forward_tensor_torch(
+            torch.as_tensor(np.asarray(a, dtype=np.int64) % self.q, dtype=torch.int32, device=dev),
+            dev,
+        )
+        fb = self.forward_tensor_torch(
+            torch.as_tensor(np.asarray(b, dtype=np.int64) % self.q, dtype=torch.int32, device=dev),
+            dev,
+        )
+        prod = self._mul_dev(fa, fb, dev, self.q, "pointwise")
+        return self.inverse_tensor_torch(prod, dev)
+
+    def mul_np(self, a, b) -> np.ndarray:
+        """The same product through the numpy path, as the oracle."""
+        fa = self.ntt(a)
+        fb = self.ntt(b)
+        return self.intt(fa * fb % self.q)
 
     @staticmethod
     def _mul(x, p, dev, q):

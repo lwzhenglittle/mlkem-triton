@@ -110,6 +110,23 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### `LargeNTT.mul_torch`: the product a prover calls, and the cache bug it exposed
+
+The multi-pass transform now exposes the operation it exists for: `mul_torch(a, b)` is the
+negacyclic product in `Z_q[X]/(X^n+1)` -- forward both operands, multiply pointwise, inverse once.
+At 2^20 that is **9.3-11.9 ms**, roughly 22x one CPU core and 1.7x sixteen processes.
+
+Verification is two-layered because a 2^20 schoolbook product does not exist: random operands at
+2^10 against the numpy path, plus **monomials at 2^20**, where `X^i * X^j` has an exact closed form
+(`X^(i+j)` or `-X^(i+j-n)`) that exercises the transform, the pointwise multiply, the inverse and
+the `X^n + 1` wrap at the target size.
+
+The second layer earned its keep immediately. The first version cached the pointwise multiplier
+the way it caches the twiddle tables -- keyed by `(role, length, device)` -- so a second call
+multiplied by the *first* call's operand. Forward, inverse, round trip and the first monomial case
+all passed; only device-vs-numpy on a later case disagreed. **A cache keyed by shape rather than
+identity is invisible to same-shape random tests.**
+
 ### The 2^20 NTT reaches the memory roofline: 10.8 -> 1.0 ms in four steps
 
 Folding the negacyclic pre- and post-twiddles into the first and last passes (they are

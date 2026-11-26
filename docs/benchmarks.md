@@ -965,3 +965,25 @@ will publish the wrong winner with complete confidence.
 The same trap exists for `benchmarks/blake3_ref` (the `blake3` crate picks its SIMD path at
 runtime, so it is safe) and for `benchmarks/ntt_cpu` (a plain `gcc -O3 -march=native` build, where
 `-march=native` is the thing to check).
+
+### 22.3 The product, which is what a prover actually calls
+
+`LargeNTT.mul_torch(a, b)` is the negacyclic product in `Z_q[X]/(X^n+1)`: forward both operands,
+multiply pointwise, inverse once. At 2^20 that is **9.3-11.9 ms** (min/median of five, one
+process) -- three transforms and a pointwise pass, so it tracks the single-transform row at the
+same ratio: roughly **22x one CPU core and 1.7x sixteen processes**.
+
+Verification is in two layers, because a 2^20 schoolbook product does not exist:
+
+- random operands at 2^10, device against the numpy path (`mul_np`), plus the schoolbook
+  negacyclic convolution at 2^8;
+- **monomials at 2^20**: `X^i * X^j` is either `X^(i+j)` or `-X^(i+j-n)`, an exact closed form that
+  exercises the transform, the pointwise multiply, the inverse and the `X^n + 1` wrap at the
+  target size.
+
+**The bug that layer two caught is worth recording.** The first version cached the pointwise
+multiplier the way it caches the twiddle tables -- keyed by `(role, length, device)` -- so the
+second call to `mul_torch` multiplied by the *first* call's operand. The single-transform tests
+all passed (forward, inverse, round trip), and the first monomial case passed too; only comparing
+device against numpy on a later case showed the disagreement. A cache keyed by shape instead of
+identity is exactly the kind of bug that a same-shape random test will not find.

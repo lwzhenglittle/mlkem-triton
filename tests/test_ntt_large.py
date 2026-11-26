@@ -95,6 +95,42 @@ def test_rejects_non_power_of_two():
         LargeNTT(1000, Q)
 
 
+def test_device_product_matches_the_numpy_product():
+    logn = 10
+    t = LargeNTT(1 << logn, Q)
+    rng = np.random.default_rng(11)
+    a = rng.integers(0, Q, 1 << logn)
+    b = rng.integers(0, Q, 1 << logn)
+    got = t.mul_torch(a, b).cpu().numpy().astype(np.int64)
+    assert np.array_equal(got, t.mul_np(a, b))
+
+
+@pytest.mark.slow
+def test_product_of_monomials_at_2_20():
+    """A closed form at full scale: `X^i * X^j` is `X^(i+j)` or `-X^(i+j-n)`.
+
+    There is no way to check a 2^20 negacyclic product against a schoolbook one, but monomials
+    have an exact answer, and it exercises every piece: the transform, the pointwise multiply, the
+    inverse, and the `X^n + 1` wrap.
+    """
+    logn = 20
+    n = 1 << logn
+    t = LargeNTT(n, Q)
+    for i, j in ((1, 1), (0, n - 1), (n // 3, (2 * n) // 3 + 7), (n - 1, n - 1)):
+        a = np.zeros(n, dtype=np.int64)
+        b = np.zeros(n, dtype=np.int64)
+        a[i] = 5
+        b[j] = 7
+        got = t.mul_torch(a, b).cpu().numpy().astype(np.int64)
+        want = np.zeros(n, dtype=np.int64)
+        k = i + j
+        if k < n:
+            want[k] = 35
+        else:
+            want[k - n] = Q - 35  # -35 mod q
+        assert np.array_equal(got, want), f"X^{i} * X^{j}"
+
+
 @pytest.mark.slow
 def test_the_zk_target_size():
     """2^20: correct, and the number that matters is in docs/benchmarks.md §22."""
