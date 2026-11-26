@@ -145,3 +145,39 @@ def test_the_porting_rule_is_not_the_refuted_one():
     # the two counterexamples must stay named, because they are what makes the rule wrong
     assert "SHA-NI" in text and "1.55" in text
     assert "BLAKE3" in text and "0.18" in text
+
+
+def test_the_readme_performance_table_matches_the_snapshot_it_names():
+    """The README's benchmark table is the first numbers a reader sees, and it had drifted three rows.
+
+    Falcon said 24.5 us e2e while the snapshot said 16.7; the 2^20 NTT said 2.2 ms while it had
+    become 0.85-1.2 ms; BLAKE3 carried a ratio from an older window. The table now names its
+    snapshot, and this test reads that file and checks the rows that come from it.
+    """
+    import re
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    readme = (root / "README.md").read_text()
+
+    named = re.search(r"benchmarks/(snapshot-\d{8}T\d{6}Z\.md)", readme)
+    assert named, "the performance table must name the snapshot it came from"
+    snap = (root / "benchmarks" / named.group(1)).read_text()
+
+    # Falcon: the core figure and both ratios are printed by the falcon section itself
+    core = re.search(r"device core ([\d.]+) us/op = ([\d.]+)x 1T, ([\d.]+)x 16P", snap)
+    assert core, "the snapshot should carry the falcon core line"
+    falcon_row = next(
+        line for line in readme.splitlines() if line.startswith("| Falcon-512 verify")
+    )
+    assert f"{float(core.group(1)):.2f} µs/op" in falcon_row, falcon_row
+    assert f"{float(core.group(3)):.1f}×" in falcon_row, falcon_row
+    assert f"{float(core.group(2)):.1f}×" in falcon_row, falcon_row
+
+    # BLAKE3: GB/s and the two ratios
+    blake = next(line for line in snap.splitlines() if line.startswith("| `blake3`"))
+    gbs = re.search(r"\| ([\d.]+)G B/s", blake).group(1)
+    ratios = re.findall(r"([\d.]+)x", blake)
+    blake_row = next(line for line in readme.splitlines() if "BLAKE3, 1 KiB" in line)
+    assert f"{float(gbs):.1f} GB/s" in blake_row, blake_row
+    assert f"{float(ratios[-2]):.1f}×" in blake_row, blake_row
+    assert f"{float(ratios[-1]):.2f}×" in blake_row, blake_row
