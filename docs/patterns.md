@@ -102,8 +102,14 @@ an integrated GPU with a 16-core hybrid CPU beside it.
 
 ## 3. Five Triton traps found the hard way
 
-All of them are recorded at the site where they bit, and every one of them produced *plausible*
-output before a known-answer vector caught it.
+All of them are recorded at the site where it bit. The four that are claims about the *toolchain*
+rather than about this code -- the truncated `%`, the non-contiguous `expand`, the tuple in a
+runtime loop, and the 32-bit shift by its own width -- are now checked against the installed backend
+by `tests/test_triton_behaviour.py`, because a claim like that goes stale when the wheel changes and
+nothing would notice. (The `tl.sort` entry in that file is narrowed: 1-D and last-axis sorts are
+correct on this build, and `axis=0` raises a `CompilationError` instead of returning a permutation.
+The 32-bit shift test skips itself when the kernel comes from the compile cache, since the warning
+that is the only evidence for it is emitted at compile time and never again.)
 
 1. **Signed `%` is C's truncated remainder**, not numpy's floored modulo. `(a - b) % q` leaves
    negative differences negative; Falcon's norm check was wrong for half the coefficients.
