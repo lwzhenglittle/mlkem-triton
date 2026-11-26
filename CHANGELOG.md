@@ -94,6 +94,22 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### Two more independent oracles: Poly1305 and AES against OpenSSL
+
+The known-answer vectors each primitive already had were one point each. Two new test files
+extend the cross-check to the inputs those vectors cannot reach, against implementations that
+share no code with this one:
+
+- `tests/test_poly1305_openssl.py` binds OpenSSL's `EVP_MAC("POLY1305")` with ctypes and checks
+  23 block-boundary lengths (0, 1, 15/16/17, 31/32/33, ..., 1024/1025, 4096) plus 40 random
+  (key, length) pairs, plus the clamp property (an all-ones `r` must behave as the RFC mask).
+- `tests/test_aes_openssl.py` shells out to `openssl enc`: 40 random blocks through ECB, CTR
+  streams at six lengths, and a stream started at `counter0 = 2^32-1` so the 64-bit counter's low
+  half crosses the boundary -- the one arithmetic detail the T-table kernel could get wrong
+  without any single KAT noticing.
+
+Both skip when the tool is missing; neither adds a runtime dependency. **1084 tests.**
+
 ### `docs/patterns.md`: the table the project was actually for
 
 The roadmap asked for ten *computational patterns*, not ten algorithms, on the theory that the
