@@ -417,8 +417,8 @@ is 64-bit lane arithmetic).
 | set | B=256 | B=1024 | B=4096 | liboqs 1T | liboqs 16P |
 |---|---:|---:|---:|---:|---:|
 | ML-DSA-44 | 60.4 µs | **43.0 µs** | **33.6 µs** | 97 µs | 28.2 µs |
-| ML-DSA-65 | — | ~50 µs | — | 131 µs | 28.0 µs |
-| ML-DSA-87 | — | ~60 µs | — | 169 µs | 27.7 µs |
+| ML-DSA-65 | 79.1 µs | **56.6 µs** | — | 152 µs | 28.0 µs |
+| ML-DSA-87 | 88.9 µs | **58.0 µs** | — | 186 µs | 27.7 µs |
 
 **Signing now reaches parity with one CPU core at B ≈ 200 and wins above it** (1.7× / 2.0× / 2.3× at
 B=1024). What got it there:

@@ -230,11 +230,11 @@ Throughput (Arc B390), against liboqs on one CPU thread (≈ 90 / 131 / 169 µs 
 | set | B=256 | B=1024 | B=4096 |
 |---|---:|---:|---:|
 | ML-DSA-44 | 60.4 µs | **43.0 µs** | **33.6 µs** |
-| ML-DSA-65 | — | **~50 µs** | — |
-| ML-DSA-87 | — | **~60 µs** | — |
+| ML-DSA-65 | 79.1 µs | **56.6 µs** | — |
+| ML-DSA-87 | 88.9 µs | **58.0 µs** | — |
 
-**Signing is 2.3× faster than one CPU core at B=1024** (liboqs: 97-100 µs) and reaches parity at
-B ≈ 150. Three things got it there: a fused acceptance-test kernel, *speculation* (a row's k-th
+**Signing is 2.3× / 2.7× / 3.2× faster than one CPU core at B=1024** (liboqs: 97 / 152 / 186 µs
+for 44 / 65 / 87) and reaches parity at B ≈ 150. Three things got it there: a fused acceptance-test kernel, *speculation* (a row's k-th
 attempt depends only on κ + k·ℓ, so a pass evaluates 8 candidates and keeps the first that accepts —
 the signature is bit-identical), and signing messages of **mixed lengths in one batch** (each row
 pads its own block, so no grouping). Against 16 CPU processes the device is behind at small batches
