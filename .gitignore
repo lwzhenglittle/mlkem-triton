@@ -6,3 +6,6 @@ __pycache__/
 build/
 dist/
 .venv/
+
+# vendored builds (liboqs, etc.)
+third_party/

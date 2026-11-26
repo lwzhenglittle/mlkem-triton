@@ -295,6 +295,7 @@ produced by **liboqs 0.16.0 with ML-DSA enabled** under one public key, so the C
 the GPU verifier consume exactly the same signatures.
 
 | scheme | B | device only | dev µs/op | e2e | e2e µs/op | liboqs 1T | liboqs 16P | dev vs 16P |
+| | | | | | | *(per-algorithm symbols, rebuilt 0.16.0)* | | |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | ML-DSA-44 | 1024 | 2.481 ms | 2.42 | 4.061 ms | 3.97 | 58.7 µs | 10.57 µs | 4.4× |
 | ML-DSA-44 | 4096 | 7.698 ms | **1.88** | 13.227 ms | 3.23 | 58.7 µs | 10.57 µs | 5.6× |
@@ -413,11 +414,18 @@ is 64-bit lane arithmetic).
 
 `benchmarks/bench_mldsa_sign.py`, Arc B390, one private key, batch of independent messages:
 
-| set | B=64 | B=256 | B=1024 | Python reference |
-|---|---:|---:|---:|---:|
-| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 5 402 µs |
-| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | — |
-| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | — |
+| set | B=64 | B=256 | B=1024 | liboqs 1T | liboqs 16P | Python reference |
+|---|---:|---:|---:|---:|---:|---:|
+| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 97.7 µs | 6.1 µs | 5 402 µs |
+| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | 137.6 µs | 8.6 µs | — |
+| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | 181.3 µs | 11.3 µs | — |
+
+**Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
+97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and
+with 16 processes the CPU is ~30× ahead. This is not a tuning failure but a shape mismatch: a
+signature is a short chain of ~4.5 sequential rejection attempts over a `k·l`-sized batch, so the
+device is paying launch latency (~2 ms per attempt, see below) where the CPU pays arithmetic. The
+16P column is the same convention as the rest of this document (aggregate over 16 fork processes).
 
 Two things make this different from verification.
 

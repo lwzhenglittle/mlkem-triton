@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.6.2] — liboqs rebuilt, and the honest comparison it produces
+
+The liboqs build that earlier baselines were taken against was no longer in the workspace, so it was
+rebuilt from 0.16.0 (minimal build: ML-DSA-44/65/87 and the six SHAKE SLH-DSA sets) and every
+ML-DSA number re-measured in one session.
+
+**Verification got better, not worse.** Calling the per-algorithm entry points
+(`OQS_SIG_ml_dsa_44_verify`) instead of the generic `OQS_SIG_verify` dispatch is ~3× faster on the
+CPU side: 19.6 / 31.6 / 47.3 µs instead of 58.7 / 93.0 / 136.1 µs for 44/65/87. Against the freshly
+measured device numbers (1.8 / 2.4 / 3.5 µs at B=4096) the speed-up is **10.9× / 13.2× / 13.5× over
+one thread**, and 4.4× / 4.4× / 2.3× over 16 concurrent processes. The earlier table quoted the
+generic-API baseline; the README and docs/benchmarks.md now say which one they use and why the two
+differ.
+
+**Signing is a loss, and it is now stated as one.** liboqs signs ML-DSA-44 in 97.7 µs on one core
+(65: 137.6 µs, 87: 181.3 µs, min of five rounds of 100), against 191 / 199 / 209 µs on the device at
+B=1024 — i.e. 1.96× / 1.45× / 1.15× *slower*, and roughly 20-30× behind the 16-process aggregate.
+The rejection loop makes a signature a chain of ~4.5 short sequential attempts, which is the shape
+the GPU is worst at. The previous entry's "≈28× over the Python reference" was true and misleading:
+the reference is an oracle, not a competitor.
+
+The SLH-DSA baselines were checked against the same fresh build and reproduce (1 473 µs measured vs
+1 333 µs documented for SHAKE-128f, 501 vs 458 for 128s), so those tables stand.
+
 ## [0.6.1] — signing is 1.33× faster, and the ceiling is dispatch, not arithmetic
 
 Optimising the signing path, measured A/B in one session (ML-DSA-44, B=1024, best of 3):

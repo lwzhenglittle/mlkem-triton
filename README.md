@@ -181,11 +181,18 @@ ok = v.verify(messages, sigs, prehash="SHA2-256")  # HashML-DSA
 ok = v.verify_mu(mu, sigs)  # external-μ interface
 ```
 
-| scheme | device-side, B=4096 | e2e (numpy→GPU→bool) | liboqs 1T | liboqs 16P | speed-up dev / e2e |
+| scheme | device-side, B=4096 | e2e (numpy→GPU→bool) | liboqs 1T | liboqs 16P | speed-up dev / vs 16P |
 |---|---:|---:|---:|---:|---:|
-| ML-DSA-44 | **1.9 µs** | 3.2 µs | 58.7 µs | 10.6 µs | 5.6× / 3.3× |
-| ML-DSA-65 | **2.5 µs** | 4.1 µs | 93.0 µs | 13.9 µs | 5.6× / 3.4× |
-| ML-DSA-87 | **3.8 µs** | 5.7 µs | 136.1 µs | 20.5 µs | 5.4× / 3.6× |
+| ML-DSA-44 | **1.8 µs** | 2.2 µs | 19.6 µs | 7.9 µs | 10.9× / 4.4× |
+| ML-DSA-65 | **2.4 µs** | 2.9 µs | 31.6 µs | 10.6 µs | 13.2× / 4.4× |
+| ML-DSA-87 | **3.5 µs** | 4.2 µs | 47.3 µs | 8.2 µs | 13.5× / 2.3× |
+
+The CPU column was **re-measured** for this release against a freshly built liboqs 0.16.0, calling
+the per-algorithm entry points (`OQS_SIG_ml_dsa_44_verify`) rather than the generic `OQS_SIG_verify`
+dispatch: the generic path costs ~3× more (58.7 µs for ML-DSA-44) and was what an earlier revision
+of this table quoted. The SLH-DSA baselines below were taken through the per-algorithm symbols from
+the start, and re-measuring them against the new build reproduced them within 10 % (1 473 µs vs
+1 333 µs for 128f).
 
 Intel Arc B390, torch 2.15 / triton-xpu 3.9, 32-byte messages; the corpus is **signed by
 liboqs** 0.16.0 (ML-DSA enabled) so the timing and the cross-implementation check share their
@@ -219,7 +226,12 @@ sigs = s.sign_mu(mus)  # external-μ interface
 | batches large enough to exercise the rejection compaction, then verified by `Verifier` | pass |
 
 Throughput at B = 1024 (Arc B390): **191 µs** (ML-DSA-44), **199 µs** (65), **209 µs** (87) per
-signature, against 5 402 µs for this repository's Python reference (≈28×). Writing a signature is
+signature. **Against liboqs on one CPU thread that is a loss, not a win**: 97.7 / 137.6 / 181.3 µs,
+so the device is 1.96× / 1.45× / 1.15× *slower*, and against 16 concurrent processes it is far
+behind. Signing is the one operation in this repository the GPU does not accelerate — the reason is
+in the shape of the work: a signature is ~4.5 sequential rejection attempts, each a small
+`k·l`-sized batch, so the device pays launch latency where the CPU pays arithmetic. Verification
+(10-13×) is the opposite case. Writing a signature is
 *not* the same kind of problem as verifying one: the rejection loop leaves the number of attempts
 data-dependent, so a batch of 1024 runs ~4.5 attempts per message on average and up to ~80 for the
 slowest, and each attempt is a ~18-launch pipeline that costs ~2 ms to dispatch no matter how many
