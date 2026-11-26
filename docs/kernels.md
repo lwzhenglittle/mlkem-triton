@@ -87,7 +87,7 @@ and the traps for the ones with a kernel behind them.
 | `HASHES` / `HashFn` | the registry `hash_np` / `hash_np_batch` look names up in |
 | `DOMAIN_SHA3` / `DOMAIN_SHAKE` | the pad bytes those configurations use |
 | `IV256` / `K256` / `IV512` / `K512` | SHA-2 initial values and round constants |
-| `annotations` | a `__future__` re-export; harmless, not an API |
+| `annotations` | the `__future__` feature object itself, which the module import accidentally binds into its namespace. Not an API; listed because it is genuinely reachable as `triton_crypto.primitives.annotations` |
 | `keccak_f_ref` | scalar Keccak-f[1600], the oracle for the kernel |
 | `hash_np` / `hash_np_batch` / `pad_torch` / `pad_batch` / `pad10star1` / `padded_len` | the sponge reference and its padding helpers |
 | `ntt_np` / `intt_np` / `mul_np` / `negacyclic_conv_np` / `bitrev` | the NTT reference path (`ntt/ref.py`, `fields.py`) |
@@ -99,6 +99,10 @@ and the traps for the ones with a kernel behind them.
 | `chacha20_keystream_np` / `chacha20_keystream_torch` | ChaCha20 keystream, reference and device |
 | `poly1305_np_batch` / `poly1305_torch` / `chacha20_poly1305_torch` / `chacha20_poly1305_open_torch` | Poly1305 and the AEAD, reference and device |
 | `blake3_hash_np` / `blake3_hash_torch` | BLAKE3 reference and the tree-hash device path |
+| `get_sponge` / `sponge_padded` / `sha_absorb` / `sha2` | the sponge/sha2 entry points the schemes call |
+| `intt_torch` / `mont_mul` / `poseidon2_permute_torch` | the device inverse NTT, the Montgomery helper and the device permutation |
+| `chacha20_xor` | ChaCha20 XOR (the AEAD's data path), one `_xor_kernel` launch |
+| `compress_np` | the 7-round BLAKE3 compression primitive `compression_np` wraps |
 | `compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on |
 
 ## Primitives
