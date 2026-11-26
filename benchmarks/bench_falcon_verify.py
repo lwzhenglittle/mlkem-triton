@@ -131,18 +131,18 @@ def main() -> int:
         if valid != n:
             print(f"  WARNING: only {valid}/{n} accepted -- timing a wrong path is useless")
         t_dev = best(lambda c=c, s2=s2: verifier.verify_core_torch(c, s2), args.reps, dev)
+        last_dev_per_op = t_dev / n  # reused by the summary line, so both quote one measurement
         t_e2e = best(lambda m=m, s=s: verifier.verify(m, s), max(3, args.reps // 3), dev)
         print(
             f"{n:6d} {t_dev * 1e3:9.3f} {t_dev / n * 1e6:10.2f} {n / t_dev / 1e6:9.2f} "
             f"{t_e2e * 1e3:9.3f} {t_e2e / n * 1e6:10.2f}   {valid}/{n}"
         )
 
+    # The summary quotes the table's last row instead of re-timing: re-running the same kernel a
+    # hundred launches later measured 1.11 us/op where the table had said 0.60, and printing two
+    # numbers for one quantity is how a report ends up contradicting itself.
     n = batches[-1]
-    s2, _ = comp_decode_batch(
-        [x[1 + params.nonce_len :] for x in sigs[:n]], params, padded=args.ps.endswith("padded-512")
-    )
-    c = ref.hash_to_point_batch([x[1 : 1 + params.nonce_len] for x in sigs[:n]], msgs[:n], params)
-    t_dev = best(lambda: verifier.verify_core_torch(c, s2), args.reps, dev) / n
+    t_dev = last_dev_per_op
     if cpu:
         print(f"\nliboqs CPU baseline ({cpu['one_thread']:.0f}/s 1T, {cpu['procs16']:.0f}/s 16P):")
         print(

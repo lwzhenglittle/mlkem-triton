@@ -110,6 +110,16 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### The Falcon summary line quoted a second measurement of the same thing
+
+`bench_falcon_verify.py` printed `device core 1.11 us/op` below a table whose last row said
+`0.60` -- the summary re-timed the kernel a hundred launches later, after the clock had drifted,
+and printed a second number for one quantity. It now reuses the table's last row, so the two
+cannot disagree: `device core 0.61 us/op = 57.5x 1T, 3.77x 16P` alongside `4096 2.495 0.61`.
+
+Same discipline as the rest of the harness, applied to its own output: one quantity, one
+measurement, and the ratio next to the number it came from.
+
 ### One non-reproducing test failure, chased and left as an open note
 
 A full-suite run reported `1 failed, 137 passed` and then nineteen consecutive runs were clean.
