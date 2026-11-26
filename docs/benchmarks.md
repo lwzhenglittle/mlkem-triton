@@ -953,6 +953,20 @@ What is left either way: collapse the tail stages (`m <= 64`) into a single regi
 pass that does one whole block per program -- that targets the *low* clock, where the transform is
 latency-bound.
 
+**That last idea does not work in Triton, and the reason is a language limit rather than a
+performance one.** A 64-coefficient block in registers needs the DIF butterfly pairing
+`x[j]` with `x[j + m/2]` -- a *half split* of the tile. Measured on triton-xpu 3.9:
+
+- `tl.split` only handles a last dimension of size 2, so `reshape(v, (32, 2))` + `split` gives the
+  **even/odd** (stride-2) pairing, which is the DIT order, not the DIF one;
+- slicing a 2-D tile (`reshape(v, (2, 32))[0, :]`) is a `CompilationError`, so the halves cannot be
+  separated at all.
+
+Switching the tail to DIT order would need the data permuted into bit-reversed order first, and
+that permutation costs a full pass -- exactly the traffic the collapse was meant to save. So the
+tail stays as five separate passes, and this is recorded so the next attempt does not start from
+the same expectation.
+
 **Barrett is not worth it, and that is measured.** Since `Q` is a `tl.constexpr`, LLVM already
 turns `a * b % Q` into a multiply-high sequence; hand-rolling the BabyBear fold
 (`2^31 = 2^27 - 1`, so `x = lo + (x >> 31) * (2^27 - 1)`) came out **1.02x** the modulo path over

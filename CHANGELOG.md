@@ -346,6 +346,23 @@ with a fresh keypair and nonce per run, and this build offers no way to freeze i
 -1). The module docstring now says so, points at the hunting probe, and records what it found. A
 test that cannot reproduce its own failure should say so out loud rather than look green.
 
+### The NTT tail collapse is not expressible in Triton (measured, not assumed)
+
+`docs/benchmarks.md` §22 proposed collapsing the last stages (`m <= 64`) into one register-resident
+pass. It cannot be done with triton-xpu 3.9's ops, and that was measured rather than argued:
+
+- `tl.split` handles only a last dimension of 2, so `reshape(v, (32, 2))` + `split` yields the
+  **even/odd** (stride-2) pairing -- the DIT order, not the DIF half split the transform needs;
+- slicing a 2-D tile (`reshape(v, (2, 32))[0, :]`) is a `CompilationError`, so the halves cannot be
+  separated at all.
+
+Reordering the tail as DIT would require a bit-reversal permutation first, which costs a full pass
+-- precisely the traffic the collapse was meant to save. The tail stays as five passes.
+
+Recorded so the next attempt starts from the measurement instead of the expectation. This is the
+second idea tonight that a 10-line probe killed before any implementation (the first was Barrett at
+1.02x).
+
 ### Barrett reduction: measured, 1.02x, not adopted
 
 `q = 2^31 - 2^27 + 1`, so a 62-bit product can be reduced with shifts, adds and one narrow
