@@ -1,0 +1,140 @@
+"""What counts as "a primitive is done", as a red light instead of a convention.
+
+The 0.8.0 review (`eval-repo-structure-0.8.0.md`, P1-1) asked for this and it has been owed
+since. Every module under `primitives/` must:
+
+1. be re-exported from `triton_crypto.primitives` and listed in its `__all__`;
+2. ship a numpy reference (`*_np`, `*_np_batch` or `*_ref`) -- the oracle for the device path;
+3. ship a device path (`*_torch`, a kernel factory such as `get_kernel`/`get_sponge`, a grid
+   launch, or an inline `@triton.jit`), or be listed in `HOST_ONLY` with a reason;
+4. have tests: `tests/test_<module>*.py`, or coverage in the shared `test_primitives*.py`;
+5. have its kernel contract written down in `docs/kernels.md`.
+
+The point is not the list, it is that adding a module without one of these turns the suite
+red. `fields.py` is the only host-only module: it is arithmetic that other modules' kernels
+call, so it has no batch entry point of its own.
+"""
+
+from __future__ import annotations
+
+import ast
+import re
+from pathlib import Path
+
+import pytest
+
+from triton_crypto import primitives
+
+PRIMITIVES = Path(__file__).resolve().parent.parent / "triton_crypto" / "primitives"
+KERNELS_DOC = Path(__file__).resolve().parent.parent / "docs" / "kernels.md"
+TESTS = Path(__file__).resolve().parent
+
+HOST_ONLY = {
+    "fields": "shared modular arithmetic; kernels that use it live in ntt/ and poseidon2",
+}
+
+MODULES = sorted(p.stem for p in PRIMITIVES.glob("*.py") if p.stem not in {"__init__"}) + sorted(
+    p.name for p in PRIMITIVES.iterdir() if p.is_dir() and (p / "__init__.py").exists()
+)
+
+
+def _source(name: str) -> str:
+    path = PRIMITIVES / name
+    if path.is_dir():
+        return "\n".join(p.read_text() for p in sorted(path.glob("*.py")))
+    return (PRIMITIVES / f"{name}.py").read_text()
+
+
+GRID_LAUNCH = re.compile(r"\b\w+\s*\[\s*\(?\s*triton\.cdiv|\b\w+\s*\[\s*grid\s*\]")
+
+
+def _jit_kernels(name: str) -> list[str]:
+    """Every function in the module decorated with `@triton.jit`, by source order."""
+    found = []
+    paths = (
+        [PRIMITIVES / name / "kernel.py"]
+        if (PRIMITIVES / name).is_dir()
+        else [PRIMITIVES / f"{name}.py"]
+    )
+    for path in paths:
+        if not path.exists():
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if ast.unparse(target) in ("triton.jit", "tl.jit", "jit"):
+                    found.append(node.name)
+    return found
+
+
+def test_modules_are_discoverable():
+    assert MODULES, "no primitive modules found -- the glob is wrong"
+    assert "poseidon2" in MODULES and "chacha20" in MODULES
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_exported_and_in_dunder_all(name: str):
+    assert hasattr(primitives, name), f"`{name}` is not re-exported from triton_crypto.primitives"
+    assert name in primitives.__all__, f"`{name}` is missing from primitives.__all__"
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_has_a_numpy_reference(name: str):
+    module = getattr(primitives, name)
+    refs = [
+        a
+        for a in dir(module)
+        if a.endswith(("_np", "_np_batch", "_ref")) and callable(getattr(module, a))
+    ]
+    assert refs, f"{name}: no `*_np`/`*_ref` reference -- the device path has no oracle"
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_has_a_device_path_or_says_why_not(name: str):
+    module = getattr(primitives, name)
+    src = _source(name)
+    dev = [a for a in dir(module) if a.endswith("_torch") and callable(getattr(module, a))]
+    has_dev = (
+        bool(dev)
+        or _jit_kernels(name)
+        or any(hasattr(module, f) for f in ("get_kernel", "get_sponge", "compile_generated"))
+        or bool(GRID_LAUNCH.search(src))
+    )
+    if name in HOST_ONLY:
+        assert HOST_ONLY[name].strip(), "host-only modules must carry a reason"
+        return
+    assert has_dev, f"{name}: no device entry point found (torch fn, kernel, or grid launch)"
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_has_tests(name: str):
+    hits = sorted(p.name for p in TESTS.glob(f"test_{name}*.py"))
+    if hits:
+        return
+    # Keccak and the sponge share the primitive-level test files; that is still coverage.
+    shared = "\n".join(p.read_text() for p in TESTS.glob("test_primitives*.py"))
+    assert f"primitives.{name}" in shared or f"primitives import {name}" in shared, (
+        f"{name}: no tests/test_{name}*.py and no coverage in test_primitives*.py"
+    )
+
+
+@pytest.mark.parametrize("name", MODULES)
+def test_kernel_contract_is_documented(name: str):
+    """The doc has to name the module it documents, so a new primitive cannot land with no
+    kernel contract just because its kernel happens to be underscore-prefixed."""
+    doc = KERNELS_DOC.read_text()
+    assert f"primitives/{name}.py" in doc or f"primitives/{name}/" in doc, (
+        f"{name}: no kernel contract in docs/kernels.md (expected 'primitives/{name}.py')"
+    )
+
+
+def test_every_primitive_has_a_bench_case_or_says_why_not():
+    """`bench_primitive.py` is the only place the primitive layer is measured; a module that
+    is not in it has no number, which is how the structure review described the old state."""
+    bench = (TESTS.parent / "benchmarks" / "bench_primitive.py").read_text()
+    # The harness may legitimately leave out an arithmetic-only module.
+    missing = [m for m in MODULES if m not in bench and m not in HOST_ONLY]
+    assert not missing, f"primitives with no bench_primitive case: {missing}"

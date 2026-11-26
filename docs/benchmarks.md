@@ -553,3 +553,44 @@ frequency state. **This table is a high-clock session** (copy 217 GB/s); an earl
 same day measured copy at 110 GB/s, Keccak at 116 M perm/s and ChaCha20 at 13.7 GB/s, with every
 `%copy` cell within a point or two of the values above. Quote the ratios, not the absolute rates —
 the ratios come from one process and one second, the absolutes do not.
+
+### 15.1 The CPU rival: the column that decides whether a primitive is worth doing
+
+`python benchmarks/bench_cpu.py` measures the same work on the same machine and writes
+`benchmarks/cpu_baseline.json`; `bench_primitive.py` joins it in as `vs 1T` / `vs 16P`.
+Without that column a table says "this is 7% of copy bandwidth", which reads like 14x of
+headroom when the honest answer is "0.4x of sixteen x86 cores".
+
+Three sources, each the fastest implementation that exists for its family: **OpenSSL 3.5**
+(AES-NI, SHA-NI, vectorised Keccak), **liboqs 0.16.0** (the same C the GPU code is
+cross-checked against) and **Plonky3 0.8** packed monty-31x8 for Poseidon2.
+
+Arc B390 / Core Ultra X7 358H (4P+8E+4LP), governor `powersave` at 400 MHz idle, 16P = sixteen
+concurrent **processes** (threads do not scale on this hybrid part), min-of-5:
+
+| rival | 1T | 16P | scale | source |
+|---|---:|---:|---:|---|
+| ChaCha20 | 4.73 GB/s | **29.1 GB/s** | 6.1x | openssl |
+| ChaCha20-Poly1305 | 3.20 GB/s | 20.7 GB/s | 6.5x | openssl |
+| AES-128-CTR | 13.8 GB/s | **166 GB/s** | 12.0x | openssl |
+| SHA-256 | 4.17 GB/s | 49.4 GB/s | 11.8x | openssl |
+| SHA-512 | 1.10 GB/s | 13.4 GB/s | 12.2x | openssl |
+| SHA3-256 | 0.72 GB/s | **7.90 GB/s** | 11.0x | openssl |
+| SHA3-512 | 0.38 GB/s | 4.27 GB/s | 11.2x | openssl |
+| Poseidon2-BabyBear/16 | 9.53 M/s | **134 M/s** | 14.1x | Plonky3 packed |
+| ML-DSA-44 verify | 61.5 k/s (16.3 µs) | 946 k/s (1.06 µs) | 15.4x | liboqs |
+| Falcon-512 verify | 42.2 k/s (23.7 µs) | 459 k/s (2.18 µs) | 10.9x | liboqs |
+| Falcon-padded-512 verify | 24.7 k/s (40.5 µs) | 436 k/s (2.29 µs) | 17.7x | liboqs |
+| SLH-DSA-SHA2-128f verify | 1 045 /s (957 µs) | 14.4 k/s (69 µs) | 13.8x | liboqs |
+
+Read the two orders of magnitude: **whether a GPU port can win is decided by whether the CPU
+has hardware support for that primitive**, far more than by anything about the GPU. AES-NI
+makes AES a 166 GB/s wall (a bitsliced GPU AES at a predicted 20–40 GB/s is 0.12–0.23x);
+Keccak has no x86 instruction, so SHA3-256 is 0.72 GB/s per core and the device's 31.6 GB/s is
+**4.0x the whole 16-process CPU**.
+
+Caveats, both visible in the table: the two Falcon rows disagree by 1.7x on one thread for
+identical verification work (clock state, min-of-3), so quote the 16P number or the ratio,
+not four significant figures; and the 16P column is the sum of per-process rates measured
+while all sixteen run, which is why `scale` is 6x for ChaCha20 (memory-bound) and 15x for the
+signatures (register-bound).

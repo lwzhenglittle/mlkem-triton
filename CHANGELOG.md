@@ -26,7 +26,38 @@ the column that was missing: what the same work costs on the CPU **in the same w
 - `% Q` on int64 is enough for 31-bit operands (`a*b < 2^62`), so the kernel carries no
   Montgomery representation; `mont_mul` would cost two extra instructions per multiply.
 - 18 new tests (Plonky3 vectors, numpy↔device at batches around the block size, singles, an
-  `out=` buffer, the extremes) — **909 tests** total? (see below).
+  `out=` buffer, the extremes).
+
+### The CPU rival, as a script and as two columns
+
+`benchmarks/bench_cpu.py` measures the work the primitive table is compared against, on the
+same machine and in the same session, and writes `benchmarks/cpu_baseline.json` with the
+metadata needed to know when the number is stale (host, governor, current/max frequency,
+liboqs builds, OpenSSL version). Twelve rivals: OpenSSL for ChaCha20 / AEAD / AES-CTR /
+SHA-2 / SHA-3, liboqs for ML-DSA / Falcon / SLH-DSA verification, and Plonky3 for Poseidon2.
+
+`bench_primitive.py` reads it and adds **`≈copy`** (one operation expressed as bytes of copy
+bandwidth — the only column that does not move with the iGPU clock state), **`vs 1T`** and
+**`vs 16P`**. Rows without a CPU reference print `n/a` rather than vanishing. Two conventions
+are enforced in code: 16P is sixteen concurrent *processes*, and each child reports its own
+measured rate (summing rates, not bytes over a wall clock that includes process start-up —
+the first version of this over-reported by 2x).
+
+The numbers change what "worth doing" means. AES-128-CTR is **166 GB/s over 16P** because of
+AES-NI, so a bitsliced GPU AES at a predicted 20–40 GB/s is 0.12–0.23x; SHA3-256 is
+**0.72 GB/s per core** because x86 has no Keccak instruction, so the device's 31.6 GB/s is
+**4.0x the whole 16-process CPU**. Whether the CPU has hardware support decides the outcome
+far more reliably than any property of the device.
+
+### A contract test for the primitive layer
+
+`tests/test_primitives_contract.py` (owed since the 0.8.0 review, P1-1) turns "what counts as
+a finished primitive" into a red light: exported from `primitives` and listed in `__all__`,
+a numpy reference, a device path (or a declared reason in `HOST_ONLY`), a test file or shared
+coverage, a kernel contract in `docs/kernels.md`, and a case in `bench_primitive.py`. Adding a
+module without one of those fails.
+
+**946 tests** (up from 891), `ruff check .` and `ruff format --check .` clean.
 
 ## [1.0.0] — the pre-0.8 layout is gone (breaking)
 

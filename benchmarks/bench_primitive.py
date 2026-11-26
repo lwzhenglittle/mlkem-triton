@@ -26,6 +26,8 @@ Unit conventions:
 from __future__ import annotations
 
 import argparse
+import json
+import platform
 import sys
 import time
 from collections.abc import Callable
@@ -243,6 +245,56 @@ def measure(bench: Bench, dev, reps: int = REPS) -> tuple[float, float]:
     return times[0], times[len(times) // 2]
 
 
+# Which CPU rival answers which row. Measured by `benchmarks/bench_cpu.py` (openssl, liboqs,
+# Plonky3) into `benchmarks/cpu_baseline.json`; a row with no rival prints `n/a`, never a
+# silently missing column. Rows whose CPU work is not measurable with a fast reference
+# (Keccak's bare permutation, the NTTs -- numpy is 10-100x off) are deliberately absent.
+CPU_RIVAL = {
+    "chacha20": "chacha20",
+    "sha256": "sha256",
+    "sha512": "sha512",
+    "sha3-256": "sha3-256",
+    "sha3-512": "sha3-512",
+    "poseidon2": "poseidon2",
+}
+
+CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"
+
+
+def load_cpu(path: Path = CPU_BASELINE) -> dict | None:
+    """The CPU baseline, if it exists and was taken on this machine."""
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    meta = data.get("meta", {})
+    if meta.get("host") != platform.node():
+        print(
+            f"# ignoring {path.name}: measured on {meta.get('host')!r}, this is "
+            f"{platform.node()!r} -- rerun benchmarks/bench_cpu.py",
+            file=sys.stderr,
+        )
+        return None
+    return data
+
+
+def _speedup(device: float, cpu: float) -> str:
+    """`12.3x` / `0.40x` -- and no number at all when the ratio would be meaningless."""
+    if not cpu or not device:
+        return "n/a"
+    r = device / cpu
+    return f"{r:.1f}x" if r >= 10 else f"{r:.2f}x"
+
+
+def _bytes_fmt(v: float | None) -> str:
+    if v is None:
+        return "n/a"
+    for scale, suffix in ((1e6, "MB"), (1e3, "kB")):
+        if v >= scale:
+            return f"{v / scale:.1f}{suffix}"
+    return f"{v:.0f}B"
+
+
 def _rate(units: int, t: float) -> str:
     r = units / t
     for scale, suffix in ((1e9, "G"), (1e6, "M"), (1e3, "k")):
@@ -260,6 +312,11 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="list the primitives and exit")
     ap.add_argument("--device", default=None)
     ap.add_argument("--md", action="store_true", help="emit a markdown table")
+    ap.add_argument(
+        "--no-cpu",
+        action="store_true",
+        help="skip the vs-CPU columns (benchmarks/cpu_baseline.json)",
+    )
     args = ap.parse_args()
 
     if args.list:
@@ -307,31 +364,64 @@ def main() -> int:
                 "unit": bench.unit,
                 "gbs": gbs,
                 "share": share,
+                "bytes": bench.nbytes / t,
+                "ops": bench.units / t,
+                # One *unit* of work, expressed as bytes of copy bandwidth. A byte-rate row
+                # has no meaningful per-unit version, so it stays None.
+                "copy_equiv": None if bench.unit == "B" else (t / bench.units) * copy_bw * 1e9,
             }
+        )
+
+    cpu = None if args.no_cpu else load_cpu()
+    for r in rows:
+        rival_name = CPU_RIVAL.get(r["name"])
+        rival = (cpu or {}).get("rivals", {}).get(rival_name) if rival_name else None
+        if rival is None:
+            r["vs1t"] = r["vs16p"] = "n/a"
+            continue
+        unit = rival["unit"]
+        device_rate = r["bytes"] if unit == "B/s" else r["ops"]
+        r["vs1t"] = _speedup(device_rate, rival["one_thread"])
+        r["vs16p"] = _speedup(device_rate, rival["procs16"])
+
+    if cpu:
+        meta = cpu.get("meta", {})
+        print(
+            f"# CPU baseline: {meta.get('cpu')} from {meta.get('timestamp')} "
+            f"({len(cpu['rivals'])} rivals, 16P = 16 processes)"
         )
 
     if args.md:
         print()
-        print("| primitive | what | ms | rate | GB/s | % of copy BW |")
-        print("|---|---|---:|---:|---:|---:|")
+        print("| primitive | what | ms | rate | GB/s | % of copy BW | ≈B copy | vs 1T | vs 16P |")
+        print("|---|---|---:|---:|---:|---:|---:|---:|---:|")
         for r in rows:
             print(
                 f"| `{r['name']}` | {r['note']} | {r['ms']:.3f} | "
-                f"{r['rate']} {r['unit']}/s | {r['gbs']:.1f} | {r['share']:.0f}% |"
+                f"{r['rate']} {r['unit']}/s | {r['gbs']:.1f} | {r['share']:.0f}% | "
+                f"{_bytes_fmt(r['copy_equiv'])} | {r['vs1t']} | {r['vs16p']} |"
             )
         return 0
 
     print()
-    print(f"{'primitive':14s} {'what':34s} {'ms':>9s} {'rate':>10s} {'GB/s':>7s} {'%copy':>6s}")
+    print(
+        f"{'primitive':14s} {'what':30s} {'ms':>8s} {'rate':>10s} {'GB/s':>6s} {'%copy':>6s} "
+        f"{'≈copy':>8s} {'vs 1T':>7s} {'vs 16P':>7s}"
+    )
     for r in rows:
         print(
-            f"{r['name']:14s} {r['note'][:34]:34s} {r['ms']:9.3f} "
-            f"{r['rate'] + ' ' + r['unit'] + '/s':>10s} {r['gbs']:7.1f} {r['share']:5.0f}%"
+            f"{r['name']:14s} {r['note'][:30]:30s} {r['ms']:8.3f} "
+            f"{r['rate'] + ' ' + r['unit'] + '/s':>10s} {r['gbs']:6.1f} {r['share']:5.0f}% "
+            f"{_bytes_fmt(r['copy_equiv']):>8s} {r['vs1t']:>7s} {r['vs16p']:>7s}"
         )
     print(
         "\n# the GB/s column is traffic (read+write) over device time; for a hash it is the\n"
         "# absorbed message, not the digest. `%copy` is meaningless for perm/poly rows and is\n"
-        "# printed anyway so the table has one shape."
+        "# printed anyway so the table has one shape.\n"
+        "# `≈B copy` is the time one operation takes, expressed as bytes of copy bandwidth --\n"
+        "# the only column here that does not move with the iGPU's clock state.\n"
+        "# `vs 1T`/`vs 16P` compare against benchmarks/cpu_baseline.json (16P = 16 processes);\n"
+        "# `n/a` means no CPU reference exists for that row, not that the row is fast."
     )
     return 0
 

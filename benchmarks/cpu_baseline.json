@@ -1,0 +1,97 @@
+{
+  "meta": {
+    "host": "lwzheng-TB14-AOSC",
+    "cpu": "Intel(R) Core(TM) Ultra X7 358H",
+    "nproc": 16,
+    "scaling": {
+      "scaling_governor": "powersave",
+      "scaling_cur_freq": "400339",
+      "cpuinfo_max_freq": "4700000",
+      "cpuinfo_min_freq": "400000"
+    },
+    "timestamp": "2026-11-26T12:24:52+00:00",
+    "python": "3.14.10",
+    "openssl": "OpenSSL 3.5.9 29 Sep 2026 (Library: OpenSSL 3.5.9 29 Sep 2026)",
+    "liboqs_builds": [
+      "third_party/liboqs/build-all/lib/liboqs.so",
+      "third_party/liboqs/build-falcon/lib/liboqs.so",
+      "third_party/liboqs/build-mldsa/lib/liboqs.so",
+      "third_party/liboqs/build-multi/lib/liboqs.so"
+    ],
+    "poseidon2_ref": "benchmarks/poseidon2_ref/target/release/poseidon2-ref"
+  },
+  "rivals": {
+    "chacha20": {
+      "unit": "B/s",
+      "one_thread": 4731879420.0,
+      "procs16": 29071359570.0,
+      "note": "openssl speed -evp chacha20"
+    },
+    "chacha20-poly1305": {
+      "unit": "B/s",
+      "one_thread": 3204481020.0,
+      "procs16": 20653963720.0,
+      "note": "openssl speed -evp chacha20-poly1305"
+    },
+    "aes-128-ctr": {
+      "unit": "B/s",
+      "one_thread": 13792034820.0,
+      "procs16": 165912081870.0,
+      "note": "openssl speed -evp aes-128-ctr"
+    },
+    "sha256": {
+      "unit": "B/s",
+      "one_thread": 4171546620.0,
+      "procs16": 49346428640.0,
+      "note": "openssl speed -evp sha256"
+    },
+    "sha512": {
+      "unit": "B/s",
+      "one_thread": 1104066460.0,
+      "procs16": 13441393250.0,
+      "note": "openssl speed -evp sha512"
+    },
+    "sha3-256": {
+      "unit": "B/s",
+      "one_thread": 719754080.0,
+      "procs16": 7903588120.0,
+      "note": "openssl speed -evp sha3-256"
+    },
+    "sha3-512": {
+      "unit": "B/s",
+      "one_thread": 382550020.0,
+      "procs16": 4272488610.0,
+      "note": "openssl speed -evp sha3-512"
+    },
+    "poseidon2": {
+      "unit": "op/s",
+      "one_thread": 9530000.0,
+      "procs16": 134160000.0,
+      "note": "Plonky3 0.8 packed monty-31x8 (cargo ref)"
+    },
+    "mldsa-44-verify": {
+      "unit": "op/s",
+      "one_thread": 61542.45587259299,
+      "procs16": 944598.7295430001,
+      "note": "liboqs 0.16.0 ML-DSA-44 verify"
+    },
+    "falcon-512-verify": {
+      "unit": "op/s",
+      "one_thread": 42154.01792987526,
+      "procs16": 458473.86768183415,
+      "note": "liboqs 0.16.0 Falcon-512 verify"
+    },
+    "falcon-padded-512-verify": {
+      "unit": "op/s",
+      "one_thread": 24674.308801846637,
+      "procs16": 435751.1318496759,
+      "note": "liboqs 0.16.0 Falcon-padded-512 verify"
+    },
+    "slhdsa-128f-verify": {
+      "unit": "op/s",
+      "one_thread": 1044.5887951965087,
+      "procs16": 14388.770171822358,
+      "note": "liboqs 0.16.0 SLH-DSA-SHA2-128f verify"
+    }
+  }
+}

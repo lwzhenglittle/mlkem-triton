@@ -35,7 +35,7 @@ Three domains in use:
 
 from __future__ import annotations
 
-from . import chacha20, fields, keccak, ntt, sha2, sponge
+from . import chacha20, fields, keccak, ntt, poseidon2, sha2, sponge
 from .chacha20 import (
     chacha20_keystream,
     chacha20_keystream_np,
@@ -137,6 +137,7 @@ __all__ = [
     "pad_batch",
     "pad_torch",
     "padded_len",
+    "poseidon2",
     "poseidon2_permute_np",
     "poseidon2_permute_torch",
     "sha2",

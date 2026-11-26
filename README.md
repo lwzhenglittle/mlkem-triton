@@ -21,9 +21,10 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)` |
 | `primitives.fields` | prime-field arithmetic: the 32-bit Montgomery product, shared by every modular primitive |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
+| `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |
 
-**891 tests** — NIST ACVP vectors, RFC 8439 vectors, liboqs cross-checks and independent numpy
-references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
+**946 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
+cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.
 
@@ -124,7 +125,10 @@ digests = hash_np_batch(messages, SHA3_256)  # [B, 32] uint8
 The same negacyclic NTT, parameterised by `(q, N, ζ, layers)`, serves both schemes — and a third
 domain (BabyBear, for ZK work) needs no new kernel; the sponge provides SHA3/SHAKE at any rate and
 output length, batched. `benchmarks/bench_primitive.py` prints one throughput table for this whole
-layer against a measured copy bandwidth.
+layer against a measured copy bandwidth, and joins in `benchmarks/cpu_baseline.json` (from
+`benchmarks/bench_cpu.py`) as `vs 1T` / `vs 16P` columns — the rival that decides whether a
+port is worth doing. `benchmarks/poseidon2_ref/` is a small cargo project on Plonky3 that both
+emits the Poseidon2 known-answer vectors and supplies that CPU number.
 
 ## Performance
 
