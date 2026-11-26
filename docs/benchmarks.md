@@ -936,10 +936,12 @@ state rather than with its own code: 0.98 ms when the iGPU is at its top clock (
 traffic, 72% of copy bandwidth, i.e. essentially at the memory roofline of 0.71 ms) and 1.8 ms at
 the low end. Both are measured in one process, min and median of twelve alternating runs.
 
-**This is the only row in the repository whose `vs 16P` is above 1.** Every other primitive is
-ALU-limited and loses to sixteen cores by 2-16x; this one moves 160 MB per transform
-(`≈copy 479 MB`, i.e. one transform costs as long as copying 479 MB) and the CPU cannot match
-that through 20 serial passes of its own.
+**Seven rows have `vs 16P` above 1** -- SHA-2 and SHA-3/SHAKE (1.55-4.11x) and this one (5.9x, or
+4.1x after the CPU rival was measured as 1.5x too slow). What is unique here is the *reason*:
+every other winner is ALU-limited and wins because the CPU cannot execute its shape, while this
+one is limited by moving bytes -- 84 MB per transform at radix-4 (160 MB at radix-2), i.e. one
+transform costs about as long as copying 190 MB -- which sixteen cores cannot beat by computing
+harder.
 
 ### 22.1 Getting from 10.8 ms to 2.2 ms (5x, three changes)
 

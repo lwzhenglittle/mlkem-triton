@@ -388,8 +388,9 @@ Two things it has to get right, and both are the same two that bit other kernels
   The first version rebuilt them per call with a million-iteration Python loop, which cost more
   than the transform it fed (1686 ms against 10.8 ms).
 
-Memory traffic is 20 passes x 8 MB = 160 MB for N = 2^20: this is the only primitive here whose
-cost is dominated by traffic, at 76 GB/s of the 216 GB/s copy bandwidth. It is *not*
+Memory traffic is 8 MB per pass: **84 MB** at the default radix-4 (ten passes), 160 MB at
+radix-2. This is the only primitive here whose cost is dominated by traffic -- 84 MB in 0.85 ms is
+about 98 GB/s, 45% of the 217 GB/s copy bandwidth. It is *not*
 bandwidth-saturated -- `_stage4_kernel` halves the traffic and buys 10-20% -- so the remaining
 limit is pass latency plus the modular multiplies (`docs/benchmarks.md` §22.1-§22.2).
 
