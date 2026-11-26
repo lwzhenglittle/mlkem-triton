@@ -105,6 +105,31 @@ present) precisely because a dirty build directory is invisible in the source tr
 - Use the scripts in `benchmarks/`; they self-check fused against the fully-fallback path.
 - Every benchmark number must be accompanied by: hardware model, software versions, batch size,
   and timing convention (pure kernel vs host-included).
+- **Pair the device number with a CPU baseline measured in the same window.** `bench_cpu.py`
+  writes `benchmarks/cpu_baseline.json` (one thread and sixteen concurrent processes per rival) and
+  `bench_primitive.py` turns it into the `vs 1T` / `vs 16P` columns. A ratio whose two sides came
+  from different windows is not a ratio.
+- **`benchmarks/snapshot.py` runs everything in one window** (CPU rivals, the primitive table, the
+  four scheme benchmarks; about two minutes) and writes a timestamped markdown plus a JSON header.
+  Prefer one snapshot over a set of hand-collected numbers.
+- **Quote the traffic a row actually moves.** One number here was overstated by 2x for a while
+  because the benchmark derived it from the radix-2 pass count after the transform had moved to
+  radix-4; the traffic, the GB/s and the `%copy` were all wrong together. If a figure is computed,
+  take its inputs from the implementation (`LargeNTT.n_passes`, not a literal).
+- **A checker must contain a case that fails.** `check-docs.py` in the workspace next to this
+  repository went two rounds reporting PASS while one of its parsers matched nothing; it now has
+  `--selftest`. The same applies to tests: a loop over a loaded corpus passes vacuously when the
+  corpus is empty, which is why `tests/test_primitives_contract.py` asserts the corpora are
+  populated.
+
+## Where the decisions are written down
+
+- `docs/patterns.md` — which computational patterns are worth porting, with the measured
+  `vs 16P` column and the rule that decides it (the CPU's instruction set, not the GPU's speed).
+- `docs/kernels.md` — one contract per kernel: tensors, dtypes, launch shape, and the Triton traps
+  each one hit. A kernel that is not named there fails the suite.
+- `docs/benchmarks.md` — the measured record, including the ideas that lost (`§22` has two of them).
+- `docs/support.md` — what runs on which backend, with "not run" marked as such.
 
 ## Commits
 
