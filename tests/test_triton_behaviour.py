@@ -159,4 +159,6 @@ def test_shifting_a_32_bit_value_by_32_gives_zero_and_only_warns():
     # second run of this suite sees no warning at all. That is part of the trap: the only evidence
     # is printed once, on a build nobody re-runs, and gone afterwards.
     if not caught:
-        pytest.skip("kernel came from the compile cache; the warning is only emitted on a fresh build")
+        pytest.skip(
+            "kernel came from the compile cache; the warning is only emitted on a fresh build"
+        )

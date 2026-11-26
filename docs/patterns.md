@@ -83,7 +83,7 @@ Two corollaries that still hold:
 
 | result | number | why it wins |
 |---|---:|---|
-| SHA3-256 / SHAKE128 / SHAKE256 | **4.0x** | no Keccak instruction on x86 |
+| SHA3-256 / SHAKE128 / SHAKE256 | **4.0x** | no Keccak instruction, 4 usable lanes, 24 dependent rounds |
 | SHA-256 | 1.58x | SHA-NI is real but slower than the device's rolled schedule |
 | Falcon-512 verification | **3.58x** | the CPU has no way to batch thousands of independent 512-point transforms |
 | SHA3-512 / SHA-512 | 4.07x / 3.57x | same as SHA3-256 (wide lanes) |
@@ -163,12 +163,20 @@ that is the only evidence for it is emitted at compile time and never again.)
 1. Find the fastest CPU implementation that exists (OpenSSL, liboqs, the reference crate) and
    measure **1 thread and 16 processes on this machine, in the same window** as the device
    number. `benchmarks/bench_cpu.py` + `benchmark/snapshot.py` do exactly that.
-2. If the CPU has a hardware instruction for it (AES-NI, SHA-NI, PCLMUL), expect 0.06-0.5x and
-   do not port it for throughput.
-3. If it does not (Keccak, algebraic hashes, batched small transforms), expect 1.6-4x and the
-   work is worth it.
-4. If it is a *shape* the CPU cannot batch (thousands of independent small transforms), the
+2. **Score three things, not one.** The old checklist here said "if the CPU has a hardware
+   instruction, do not port; if not, the work is worth it", and this project's own numbers refute
+   both halves -- SHA-256 *has* SHA-NI and wins 1.55x, BLAKE3 has *no* instruction and loses 0.18x.
+   Score instead:
+   - **dedicated instruction?** AES-NI / VAES / PCLMUL / SHA-NI -> the CPU side is at 14-165 GB/s
+     and you lose. Necessary to lose, not sufficient.
+   - **how wide a SIMD does the shape admit?** 16 lanes (BLAKE3) or 8-16 (ChaCha20) and the CPU
+     wins by 2-6x; 4 lanes (Keccak) or a serial chain and it does not.
+   - **how long is the serial dependency chain?** 24-80 rounds of dependent work per block leaves a
+     core latency-bound, which is where the GPU's parallelism actually pays.
+   All three favourable -> 0.06-0.2x. All three unfavourable -> 1.6-4x. Mixed -> measure, do not
+   guess: SHA-256 is the mixed case and it came out at 1.55x.
+3. If it is a *shape* the CPU cannot batch (thousands of independent small transforms), the
    GPU wins by 3-60x regardless of instruction counts — that is what Falcon verification and
    the SLH-DSA suite demonstrate.
-5. If it needs cross-warp communication (sort, scan, irregular reduction), check the gather and
+4. If it needs cross-warp communication (sort, scan, irregular reduction), check the gather and
    atomics costs first; `docs/benchmarks.md` §15 and §16 have the numbers.

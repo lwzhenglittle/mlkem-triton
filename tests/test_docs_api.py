@@ -124,3 +124,24 @@ def test_the_documented_test_count_is_the_real_one():
         quoted[name] = [int(n) for n in re.findall(r"\*\*(\d+) tests(?: green)?\*\*", text)]
     stale = {name: nums for name, nums in quoted.items() if nums and set(nums) != {actual}}
     assert not stale, f"the suite collects {actual} tests, but: {stale}"
+
+
+def test_the_porting_rule_is_not_the_refuted_one():
+    """`docs/patterns.md` §0 used to claim one factor decides everything; the CPU table refutes it.
+
+    SHA-256 has SHA-NI and still wins 1.55x; BLAKE3 has no instruction and loses 0.18x. If either
+    half of the old binary rule comes back into the guidance, this fails -- it is the sentence a
+    reader will act on.
+    """
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "patterns.md").read_text()
+    assert "three factors" in text.lower() or "three things" in text.lower(), (
+        "the corrected rule should still be there"
+    )
+    for refuted in (
+        "if the CPU has a hardware instruction for it (AES-NI, SHA-NI, PCLMUL), expect 0.06-0.5x and\n"
+        "   do not port it for throughput",
+    ):
+        assert refuted not in text, "the refuted binary rule is back"
+    # the two counterexamples must stay named, because they are what makes the rule wrong
+    assert "SHA-NI" in text and "1.55" in text
+    assert "BLAKE3" in text and "0.18" in text
