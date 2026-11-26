@@ -8,13 +8,18 @@ row below is measured in the same window against `benchmarks/cpu_baseline.json`,
 
 ### At a glance
 
-The section below is a working log, newest first, 31 entries long. This is the version summary.
+The log below is newest-first and keeps growing, so this summary does not state how many entries it
+has. **Its numbers are as of the 1.1.0 commit**; where later work moved one, the working log below
+says so -- the 2^20 NTT is now **0.85-1.2 ms** (57x one core, 2.9-4.1x sixteen processes, after the
+CPU rival was measured as 1.5x too slow and rebuilt at radix-4) and Falcon's end-to-end is
+**16.7 us** (the host decoder went 21.4 -> 13.5 us).
 
 **Added** — `primitives/poseidon2.py` (Plonky3 params, 38.7 ns/perm),
 `primitives/poly1305.py` (+ ChaCha20-Poly1305 AEAD), `primitives/aes.py` (T-table, a gather
 measurement rather than a fast path), `primitives/gemm.py` (exact int8, 3.96 TMAC/s at n = 2048),
 `primitives/blake3.py` (the tree hash, 10.2 GB/s), `primitives/ntt/large.py` (multi-pass to
-2^20), `falcon/` (FIPS 206 draft verification), `benchmarks/bench_cpu.py` (17 rivals, 1T and 16P),
+2^20), `primitives/gemm.py`'s `gf2_8_matmul_torch` (a GF(2^8) product from 64 int8 GEMMs, the number
+`PLAN_ffgemm` needed), `falcon/` (FIPS 206 draft verification), `benchmarks/bench_cpu.py` (17 rivals, 1T and 16P),
 `benchmarks/snapshot.py` (one command, one window), `docs/patterns.md`, and two new test oracles
 (OpenSSL for Poly1305 and AES).
 
