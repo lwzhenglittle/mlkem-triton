@@ -414,11 +414,15 @@ is 64-bit lane arithmetic).
 
 `benchmarks/bench_mldsa_sign.py`, Arc B390, one private key, batch of independent messages:
 
-| set | B=64 | B=256 | B=1024 | liboqs 1T | liboqs 16P | Python reference |
-|---|---:|---:|---:|---:|---:|---:|
-| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 97.7 µs | 28.2 µs | 5 402 µs |
-| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | 137.6 µs | 28.0 µs | — |
-| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | 181.3 µs | 27.7 µs | — |
+| set | B=64 | B=256 | B=1024 | B=4096 | B=8192 | liboqs 1T | liboqs 16P |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ML-DSA-44 | 1 075 µs | 466 µs | 193 µs | **94.6 µs** | **81.0 µs** | 97.7 µs | 28.2 µs |
+| ML-DSA-65 | 1 021 µs | 490 µs | 199 µs | — | — | 137.6 µs | 28.0 µs |
+| ML-DSA-87 | 1 273 µs | 487 µs | 209 µs | — | — | 181.3 µs | 27.7 µs |
+
+**The batch size decides whether signing wins.** ML-DSA-44 crosses over at B ≈ 3 000-4 000: below
+that the device is 1.9-4.5× slower than one CPU core, above it the device is 1.1-1.3× faster. The
+same API, no flag — a bigger batch is the whole optimisation.
 
 **Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
 97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and
@@ -451,6 +455,26 @@ decompose 9 %, ExpandMask 8 %, everything else the rest.
 
 A/B in one session (ML-DSA-44, B=1024, best of 3): **236.0 µs → 176.8 µs, 1.33×**.
 
-The next real step would be fusing an attempt into fewer, larger kernels (the three INTTs and the
-three decompose passes are the obvious candidates); micro-level tuning of the current pipeline is
-out of headroom, because it is dispatch-bound rather than compute-bound.
+### Where the time goes, and why the tail is the problem
+
+At B=1024 a batch runs **84 attempts**: 13 with 64 rows or more, and **71 with fewer**. Those 71
+tail attempts process ~500 rows between them but cost about 60 % of the wall clock, because an
+attempt costs ~2 ms of dispatch whether it carries 1024 rows or two. The tail exists because the
+acceptance rate is ~22 %, so the unluckiest signature in a batch needs ~80 tries and the loop cannot
+finish without it; bigger batches do not shorten the tail, they only amortise it (which is exactly
+why B=8192 wins).
+
+Three things were tried against that tail and **all three failed**, measured:
+
+| idea | result |
+|---|---|
+| capture the whole attempt into an `XPUGraph` and replay it for the tail (one submission instead of ~13 launches) | 229 µs/sig at B=1024 — **worse** than 177; capture works on this stack, the replay just is not cheaper than the launches it replaces |
+| a slot/queue model keeping the batch full | 196-320 µs — worse |
+| fusing the three pointwise products into one launch | 186 µs — no gain |
+
+What is left has real potential but is real work: **fuse the attempt into ~6 kernels** (merge
+`ExpandMask`'s sponge and unpack, the three `decompose`/norm-check passes, and the `w1Encode` sponge),
+and **overlap two half-batches on two streams** so the latency-bound tail of one hides under the
+compute-bound main phase of the other. A persistent, grid-synchronised kernel for a whole attempt is
+not expressible in Triton today. Note the ceiling: even a perfect 2× would put small-batch signing at
+~90 µs, i.e. level with one CPU core, and nowhere near the 16-process aggregate (28 µs/sig).

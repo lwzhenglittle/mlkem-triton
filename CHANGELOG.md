@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.6.3] — where signing actually wins: the batch size, and a measured dead end
+
+Signing's cost is dominated by a batch's *tail*: at B=1024 the loop runs 84 attempts, 71 of them on
+fewer than 64 rows, and those 71 cost ~60 % of the wall clock because an attempt costs ~2 ms of
+dispatch regardless of how many rows it carries. The tail exists because the acceptance rate is
+~22 %, so the unluckiest signature needs ~80 tries and the loop cannot finish without it.
+
+That reframes the comparison. Bigger batches amortise the tail without changing the API:
+ML-DSA-44 goes 466 µs/signature at B=256 → 193 µs at 1024 → **94.6 µs at 4096 → 81.0 µs at 8192**,
+against 97.7 µs for liboqs on one core. **The crossover is at B ≈ 3 000-4 000**; above it the device
+is 1.1-1.3× faster.
+
+Tried against the tail and rejected, all measured:
+
+- **XPU-graph replay** of the whole attempt (capture verified working on this stack): 229 µs/sig at
+  B=1024 versus 177 — the replay is not cheaper than the ~13 launches it replaces.
+- slot/queue model: 196-320 µs. Fusing the three pointwise products: 186 µs.
+
+Still open, with real work attached: fuse an attempt into ~6 kernels (ExpandMask's sponge+unpack,
+the three decompose/norm passes, w1Encode's sponge), and overlap two half-batches on two streams so
+a latency-bound tail hides under a compute-bound main phase. The ceiling is worth stating: even 2×
+would only draw level with one CPU core, and the 16-process aggregate (28 µs) is out of reach for
+this workload shape.
+
 ## [0.6.2] — liboqs rebuilt, and the honest comparison it produces
 
 The liboqs build that earlier baselines were taken against was no longer in the workspace, so it was

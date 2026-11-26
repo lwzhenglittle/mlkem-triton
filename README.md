@@ -225,9 +225,11 @@ sigs = s.sign_mu(mus)  # external-μ interface
 | fresh keys, all three sets, byte-exact against the reference | pass |
 | batches large enough to exercise the rejection compaction, then verified by `Verifier` | pass |
 
-Throughput at B = 1024 (Arc B390): **191 µs** (ML-DSA-44), **199 µs** (65), **209 µs** (87) per
-signature. **Against liboqs on one CPU thread that is a loss, not a win**: 97.7 / 137.6 / 181.3 µs,
-so the device is 1.96× / 1.45× / 1.15× *slower*, and 6.8× behind 16 concurrent processes. Signing is the one operation in this repository the GPU does not accelerate — the reason is
+Throughput (Arc B390, ML-DSA-44): 466 µs/signature at B=256, **193 µs at B=1024, 94.6 µs at
+B=4096, 81.0 µs at B=8192**, against 97.7 µs for liboqs on one CPU thread — so **the batch size
+decides whether signing wins**: below ~3 000 signatures the device loses, above it the device wins
+by 1.1-1.3×. At B=1024 that is 1.96× (44) / 1.45× (65) / 1.15× (87) *slower* than one core, and
+6.8× behind 16 processes. Signing is the one operation in this repository the GPU does not accelerate — the reason is
 in the shape of the work: a signature is ~4.5 sequential rejection attempts, each a small
 `k·l`-sized batch, so the device pays launch latency where the CPU pays arithmetic. Verification
 (10-13×) is the opposite case. Writing a signature is
