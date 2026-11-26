@@ -293,10 +293,7 @@ SHA3_512 = HashFn("SHA3-512", 72, DOMAIN_SHA3, 64, "sha3_512")
 SHAKE128 = HashFn("SHAKE128", 168, DOMAIN_SHAKE, None, "shake_128")
 SHAKE256 = HashFn("SHAKE256", 136, DOMAIN_SHAKE, None, "shake_256")
 
-HASHES = {
-    h.name: h
-    for h in (SHA3_224, SHA3_256, SHA3_384, SHA3_512, SHAKE128, SHAKE256)
-}
+HASHES = {h.name: h for h in (SHA3_224, SHA3_256, SHA3_384, SHA3_512, SHAKE128, SHAKE256)}
 
 
 def hash_np_batch(

@@ -120,9 +120,7 @@ def as_batch_bytes(
     ):
         arr = np.ascontiguousarray(x, dtype=np.uint8)
         if arr.size % item_size:
-            raise ValueError(
-                f"{name} length {arr.size} is not a multiple of {item_size}"
-            )
+            raise ValueError(f"{name} length {arr.size} is not a multiple of {item_size}")
         if not arr.size:
             return np.empty((0, item_size), dtype=np.uint8)
         return arr.reshape(-1, item_size)
@@ -150,7 +148,5 @@ def as_batch_bytes(
     else:
         for i, r in enumerate(rows):
             if len(r) != item_size:
-                raise ValueError(
-                    f"{name}[{i}] must be {item_size} bytes, got {len(r)}"
-                )
+                raise ValueError(f"{name}[{i}] must be {item_size} bytes, got {len(r)}")
     return np.frombuffer(b"".join(rows), dtype=np.uint8).reshape(len(rows), item_size)

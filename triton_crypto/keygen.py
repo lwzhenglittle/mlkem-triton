@@ -54,7 +54,9 @@ class KeyGenerator:
             if t.dtype != torch.uint8:
                 raise ValueError(f"{name} must be uint8, got {t.dtype}")
         if d.shape != z.shape or d.ndim != 2 or d.shape[1] != 32:
-            raise ValueError(f"d/z must both be [B,32] uint8, got {tuple(d.shape)} / {tuple(z.shape)}")
+            raise ValueError(
+                f"d/z must both be [B,32] uint8, got {tuple(d.shape)} / {tuple(z.shape)}"
+            )
         B = d.shape[0]
         d = d.contiguous().to(dev)
         z = z.contiguous().to(dev)
@@ -192,7 +194,9 @@ def _random_bytes(count: int, rng=None) -> np.ndarray:
     if rng is None:
         import secrets
 
-        return np.frombuffer(secrets.token_bytes(32 * count), dtype=np.uint8).reshape(count, 32).copy()
+        return (
+            np.frombuffer(secrets.token_bytes(32 * count), dtype=np.uint8).reshape(count, 32).copy()
+        )
     if hasattr(rng, "integers"):
         return np.asarray(rng.integers(0, 256, (count, 32), dtype=np.uint8))
     buf = bytes(rng(32 * count))
@@ -209,7 +213,9 @@ def _as_seed_matrix(seeds, count: int, name: str) -> np.ndarray:
     try:
         return arr.reshape(count, 32)
     except ValueError as exc:
-        raise ValueError(f"{name} must contain {count} 32-byte seeds, got shape {arr.shape}") from exc
+        raise ValueError(
+            f"{name} must contain {count} 32-byte seeds, got shape {arr.shape}"
+        ) from exc
 
 
 def generate_keypairs(ps: str, count: int = 1, device=None):
