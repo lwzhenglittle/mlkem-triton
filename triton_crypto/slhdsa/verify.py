@@ -29,6 +29,7 @@ from ..devices import resolve_device
 from ..primitives import sha2 as _sha2
 from ..primitives import sponge as _sponge
 from . import kernels as _kernels
+from . import thash_sha2 as _thash
 from .params import SLHParams, get
 from .ref import FORS_ROOTS, FORS_TREE, OID, PH, TREE, WOTS_HASH, WOTS_PK
 
@@ -182,7 +183,7 @@ class Verifier:
             if out is not None
             else torch.empty((rows, nout), dtype=dtype, device=self._dev_t())
         )
-        _sha2.sha_thash(
+        _thash.sha_thash(
             hin,
             data.contiguous(),
             out_words,
