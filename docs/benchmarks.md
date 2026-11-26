@@ -677,10 +677,16 @@ Two numbers, because they answer different questions:
 
 | stage | where | µs/signature | share of e2e |
 |---|---|---:|---:|
-| device core (2 NTTs, pointwise, norm) | device | **0.60** | 2% |
-| signature decode (`comp_decode`) | host, numpy | 23.5 | 96% |
-| `HashToPoint` (SHAKE256 + rejection) | **device** since 1.1.0 | **0.6** | 2% |
-| e2e total | | 24.4 | 100% |
+| device core (2 NTTs, pointwise, norm) | device | **0.61** | 3% |
+| signature decode (`comp_decode`) | host, numpy | **16.8** | 81% |
+| `HashToPoint` (SHAKE256 + rejection) | **device** since 1.1.0 | **0.6** | 3% |
+| e2e total | | **20.8** | 100% |
+
+The decoder's own history is 134 µs (per-signature Python) -> 21.4 µs (batched, six gathers per
+coefficient) -> **16.8 µs** (one 32-bit window per coefficient, which answers both the 8-bit header
+and the 16-bit unary run at once). It is still 81% of the end-to-end cost, and still the right
+place for the next attempt -- on the host, where a vectorised scan beats the device's per-coefficient
+gather by 35x.
 
 `HashToPoint` moved to the device after a probe measured both halves of it
 (`probes/hashpoint-shape-probe.py`): the sponge costs 0.10 µs/signature and the

@@ -242,14 +242,20 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
         buf[i, : len(b)] = np.frombuffer(b, dtype=np.uint8)
     rows = np.arange(B)
 
-    def window(bitpos):
-        """24 bits starting at `bitpos` (MSB-first), zero-padded past the buffer."""
-        byte = bitpos >> 3
-        b0 = buf[rows, np.minimum(byte, width - 1)].astype(np.int64)
-        b1 = buf[rows, np.minimum(byte + 1, width - 1)].astype(np.int64)
-        b2 = buf[rows, np.minimum(byte + 2, width - 1)].astype(np.int64)
-        w24 = (b0 << 16) | (b1 << 8) | b2
-        return w24 >> (8 - (bitpos & 7))
+    clip = width - 1
+
+    def window32(byte):
+        """32 bits starting at the byte boundary `byte`, zero-padded past the buffer.
+
+        One 32-bit window answers both questions a step asks -- the 8-bit header at `bitpos` and
+        the 16-bit unary run at `bitpos + 8` -- so the scan does four gathers per coefficient
+        instead of six, which is where two thirds of its time went.
+        """
+        b0 = buf[rows, np.minimum(byte, clip)].astype(np.int64)
+        b1 = buf[rows, np.minimum(byte + 1, clip)].astype(np.int64)
+        b2 = buf[rows, np.minimum(byte + 2, clip)].astype(np.int64)
+        b3 = buf[rows, np.minimum(byte + 3, clip)].astype(np.int64)
+        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
 
     # Leading-zero count of a 16-bit window, as a table: one gather instead of 16 `where`s.
     lead = np.zeros(1 << 16, dtype=np.int64)
@@ -258,19 +264,20 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
     x = np.zeros((B, params.n), dtype=np.int64)
     pos = np.zeros(B, dtype=np.int64)
     ok = np.ones(B, dtype=bool)
+    bits = lens * 8
+    max_mag = params.max_abs_coefficient
     for u in range(params.n):
-        w = window(pos)  # 16 bits: sign + low 7 bits + 8 bits of the unary prefix
-        head = (w >> 8) & 0xFF
+        w = window32(pos >> 3)
+        shift = pos & 7
+        head = (w >> (24 - shift)) & 0xFF  # 8 bits at `pos`: sign + low 7 magnitude bits
         sign = (head & 0x80) != 0
-        mag = head & 0x7F
-        cont = window(pos + 8) & 0xFFFF  # the unary run lives in the next 16 bits
-        # number of leading zeros in `cont` == number of 0 bits before the terminating 1
+        cont = (w >> (8 - shift)) & 0xFFFF  # 16 bits at `pos + 8`: the unary run
         k = lead[cont]
-        bad = cont == 0  # no terminating 1 within 16 bits => magnitude would exceed 2047
-        mag = mag + 128 * k
-        bad |= mag > params.max_abs_coefficient
+        mag = (head & 0x7F) + 128 * k
+        bad = cont == 0  # no terminating 1 within 16 bits => |c| would exceed 2047
+        bad |= mag > max_mag
         bad |= sign & (mag == 0)  # "-0" is forbidden
-        bad |= (pos + 8 + k + 1) > lens * 8  # ran past the end of this signature
+        bad |= (pos + 8 + k + 1) > bits  # ran past the end of this signature
         ok &= ~bad
         x[:, u] = np.where(sign, -mag, mag)
         pos = pos + 8 + k + 1

@@ -179,6 +179,21 @@ the n odd powers of a 2n-th root, so the pre-twiddled sum runs over n terms and
 (zero stays zero, the constant agrees with the numpy path) and asserts the *false* assumption is
 false, so nobody re-derives it.
 
+### Falcon's host decoder: one 32-bit window per coefficient, 21.4 -> 16.8 µs
+
+The decoder is 81% of Falcon's end-to-end cost, so it was worth another look. Each coefficient
+needs two bit fields -- an 8-bit header at `pos` and the 16-bit unary run at `pos + 8` -- and the
+batched scan gathered six bytes per step to get them. A single 32-bit window at the enclosing byte
+boundary answers both with four gathers, and the shift arithmetic is `head = (w >> (24 - r)) & 0xFF`
+and `cont = (w >> (8 - r)) & 0xFFFF` for a bit offset `r`.
+
+**21.4 -> 16.8 µs per signature** at B = 4096, bit-identical output over a 4096-signature liboqs
+corpus (4096/4096 still valid). End to end: **24.4 -> 20.8 µs**.
+
+Worth recording how the first attempt failed: it used `16 - r` for the second shift, which is wrong
+by eight bits, and the strict-validity count went from 4096/4096 to 0/4096 -- the tests said so in
+one run, which is why the decoder has a 4096-signature oracle rather than a 64-byte vector.
+
 ### Two dead helpers removed, one untested entry point covered
 
 A static sweep for functions that are never referenced found `LargeNTT._run` and `LargeNTT._mul`,
