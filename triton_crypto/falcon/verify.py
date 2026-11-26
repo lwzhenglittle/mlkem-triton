@@ -24,11 +24,12 @@ loop decodes a signature body in ~200 us, which is why the device core is timed 
 from __future__ import annotations
 
 import numpy as np
+import triton
 
 from .. import devices as _devices
 from ..primitives.ntt import intt_torch, ntt_torch
 from . import ref
-from .kernels import _check_kernel, _mul_ntt_kernel
+from .kernels import _check_kernel, _hash_to_point_kernel, _mul_ntt_kernel
 from .params import FALCON_512, FalconParams
 
 __all__ = ["Verifier", "comp_decode_batch"]
@@ -53,6 +54,43 @@ def comp_decode_batch(
             if len(body) == pad_len and not any(body[used[i] :]):
                 ok[i] = True
     return x.astype(np.int32), ok
+
+
+def hash_to_point_batch_torch(nonces, messages, params: FalconParams = FALCON_512, device=None):
+    """`HashToPoint` for a batch of equal-length `nonce || message`, all on the device.
+
+    Returns `(c [B, n] int32, ok [B] bool)`. The uniform-length requirement is real: the sponge
+    absorbs a fixed number of blocks per row, so messages whose padding lands in different block
+    counts cannot share a launch (the ML-DSA signer groups them for the same reason). Callers
+    with mixed lengths fall back to `ref.hash_to_point_batch`.
+    """
+    import torch
+
+    from .. import devices as _devices
+    from ..primitives import sponge
+
+    dev = _devices.resolve_device(device)
+    n = params.n
+    nsamp = n + params.oversample
+    outlen = -(-nsamp * 2 // 8) * 8  # whole 64-bit words; the extra bytes are ignored
+    lens = {len(no) + len(m) for no, m in zip(nonces, messages, strict=True)}
+    if len(lens) != 1:
+        raise ValueError(f"device HashToPoint needs one message length, got {sorted(lens)}")
+    msgs = np.empty((len(nonces), lens.pop()), dtype=np.uint8)
+    for i, (no, m) in enumerate(zip(nonces, messages, strict=True)):
+        msgs[i, : len(no)] = np.frombuffer(no, dtype=np.uint8)
+        msgs[i, len(no) :] = np.frombuffer(m, dtype=np.uint8)
+    padded = sponge.pad_batch(msgs, sponge.SHAKE256.rate, sponge.DOMAIN_SHAKE)
+    stream = sponge.sponge_padded(torch.as_tensor(padded, device=dev), sponge.SHAKE256.rate, outlen)
+    pairs = stream.reshape(len(nonces), outlen // 2, 2).to(torch.int32)
+    samples = (pairs[:, :, 0] << 8) | pairs[:, :, 1]  # big-endian 16-bit samples
+    out = torch.zeros((len(nonces), n), dtype=torch.int32, device=dev)
+    ok = torch.zeros(len(nonces), dtype=torch.bool, device=dev)
+    blk = 32
+    _hash_to_point_kernel[(triton.cdiv(len(nonces), blk),)](
+        samples, out, ok, len(nonces), N=n, NSAMP=outlen // 2, Q=params.q, BLK=blk
+    )
+    return out, ok.cpu().numpy()
 
 
 class Verifier:
@@ -135,7 +173,17 @@ class Verifier:
             nonces.append(sig[1 : 1 + p.nonce_len])
             bodies.append(sig[1 + p.nonce_len :])
         s2, decode_ok = comp_decode_batch(bodies, p, padded=self.padded)
-        c = np.stack([ref.hash_to_point(n, m, p) for n, m in zip(nonces, messages, strict=True)])
+        lens = {len(no) + len(m) for no, m in zip(nonces, messages, strict=True)}
+        if len(lens) == 1:
+            # uniform lengths share one sponge launch (the common case for a benchmark, and for
+            # any protocol that fixes the message size); mixed lengths take the host path.
+            c_t, hash_ok = hash_to_point_batch_torch(nonces, messages, p, self.device)
+            c = c_t.cpu().numpy()
+            decode_ok = decode_ok & hash_ok
+        else:
+            c = np.stack(
+                [ref.hash_to_point(n, m, p) for n, m in zip(nonces, messages, strict=True)]
+            )
         ok, _ = self.verify_core_torch(c, s2)
         return decode_ok & ok.cpu().numpy().astype(bool)
 

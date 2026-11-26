@@ -645,11 +645,19 @@ Two numbers, because they answer different questions:
 | stage | where | µs/signature | share of e2e |
 |---|---|---:|---:|
 | device core (2 NTTs, pointwise, norm) | device | **0.60** | 2% |
-| signature decode (`comp_decode`) | host, numpy | 23.5 | 75% |
-| `HashToPoint` (SHAKE256 + rejection) | host, hashlib | 9.3 | 30% |
-| e2e total | | 31.3 | 100% |
+| signature decode (`comp_decode`) | host, numpy | 23.5 | 96% |
+| `HashToPoint` (SHAKE256 + rejection) | **device** since 1.1.0 | **0.6** | 2% |
+| e2e total | | 24.4 | 100% |
 
-  The obvious next step -- move `comp_decode` to the device -- **was tried and lost**. The
+`HashToPoint` moved to the device after a probe measured both halves of it
+(`probes/hashpoint-shape-probe.py`): the sponge costs 0.10 µs/signature and the
+rejection-plus-prefix-sum filter 0.47 µs, against 9.3 µs on the host -- a 16x win, and the
+prefix-sum-plus-scatter shape is the one a multi-pass NTT will need. `comp_decode` did **not**
+survive the same test (see below), so the end-to-end number is now 96% decode.
+
+  `HashToPoint` went to the device (16x win, measured, wired into `Verifier.verify` for
+  uniform-length batches with a host fallback for mixed ones). `comp_decode` -- the other 96%
+  -- **was tried and lost**. The
   kernel is one lane per signature with 512 sequential steps (the code is a prefix code, so
   there is no way to bit-gather a batch), which makes every step a 3-byte gather at a
   data-dependent address plus two table lookups for the unary run length. Measured: **2.6

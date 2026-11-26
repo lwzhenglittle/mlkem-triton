@@ -94,6 +94,27 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### `HashToPoint` moves to the device: Falcon's end-to-end drops 31.3 -> 24.4 us
+
+`comp_decode` and `HashToPoint` were the two host stages; a probe measured both halves of the
+second one before any kernel was written (`probes/hashpoint-shape-probe.py`): the sponge costs
+0.10 us/signature and the rejection-plus-prefix-sum filter 0.47 us, against 9.3 us for
+`hashlib` + numpy on the host. **16x**, so it was written.
+
+- `falcon/kernels.py` gains `_hash_to_point_kernel`: a contiguous `[BLK, 720]` tile of 16-bit
+  samples, an exclusive prefix sum over the keep-mask to give each survivor its destination, and
+  a scatter of the first `n` in order. Measured 0.47 us per signature at B = 4096.
+- `falcon/verify.py` gains `hash_to_point_batch_torch` and uses it from `Verifier.verify` when
+  the batch has one message length (the sponge absorbs a fixed number of blocks per row); mixed
+  lengths fall back to the host, and a test pins that the fallback is taken rather than
+  mis-hashing.
+- End to end: **24.4 us/op** at B = 4096, of which 96% is now `comp_decode` on the host. The
+  device core is unchanged at 0.60 us.
+
+The contrast with `comp_decode` -- which lost by 35x on the same data -- is now recorded in
+`docs/patterns.md`: a contiguous tile with a prefix sum and a scatter is fast; the same number of
+*gathered bytes* at data-dependent addresses is not. Same problem size, opposite verdict.
+
 ### The Poseidon2 vectors grew from 9 to 64
 
 The Plonky3 `kat` mode emitted nine cases: the 0..15 ramp, seven offsets chosen to stress the

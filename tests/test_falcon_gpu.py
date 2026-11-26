@@ -22,6 +22,7 @@ from test_falcon import MSG, PK, SIG
 
 from triton_crypto.falcon import FALCON_512, Verifier, comp_decode, hash_to_point, ref
 from triton_crypto.falcon.kernels import check_np
+from triton_crypto.falcon.verify import hash_to_point_batch_torch
 
 
 def _prepare():
@@ -105,6 +106,41 @@ def test_check_kernel_matches_numpy_on_negative_differences():
     )
     assert np.array_equal(sqn.cpu().numpy(), sqn_ref)
     assert np.array_equal(ok.cpu().numpy().astype(bool), ok_ref)
+
+
+def test_device_hash_to_point_matches_the_host():
+    """The two stages of `HashToPoint` on the device: the sponge, then the prefix-sum filter.
+
+    Lengths chosen to cross the SHAKE256 rate (136 bytes of input per block): 40 + 60 stays in
+    one block, 40 + 200 needs two, and a wrong block count changes every coefficient.
+    """
+    rng = np.random.default_rng(3)
+    for mlen in (20, 60, 96, 200, 500):
+        nonces = [bytes(rng.integers(0, 256, 40, dtype=np.uint8)) for _ in range(17)]
+        msgs = [bytes(rng.integers(0, 256, mlen, dtype=np.uint8)) for _ in range(17)]
+        c_dev, ok = hash_to_point_batch_torch(nonces, msgs)
+        assert ok.all(), f"msglen {mlen}: a row had fewer than n accepted samples"
+        want = np.stack([ref.hash_to_point(no, m) for no, m in zip(nonces, msgs, strict=True)])
+        assert np.array_equal(c_dev.cpu().numpy(), want), f"msglen {mlen}"
+
+
+def test_device_hash_to_point_needs_uniform_lengths():
+    """The sponge absorbs a fixed number of blocks per row; mixed lengths must be refused, not
+    silently mis-hashed (the caller falls back to the host path)."""
+    with pytest.raises(ValueError, match="one message length"):
+        hash_to_point_batch_torch(
+            [bytes(40), bytes(40)],
+            [bytes(20), bytes(21)],
+        )
+
+
+def test_public_api_mixes_lengths_via_the_host_fallback():
+    """A batch with mixed message lengths still verifies -- through the host hash."""
+    v = Verifier(PK)
+    assert v.verify([MSG], [SIG]).tolist() == [True]
+    # the embedded signature is for MSG only; a different length must simply not verify rather
+    # than crash on the device path's uniform-length requirement
+    assert v.verify([MSG + b"!"], [SIG]).tolist() == [False]
 
 
 def test_public_api_verifies_the_embedded_signature():

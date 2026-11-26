@@ -78,12 +78,17 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   mask or the `[B, chunks, 8]` addressing, never isolated). The vectors, the numpy reference and
   the CPU rival are committed in `data/vectors/blake3/` and `benchmarks/blake3_ref/`; the README
   there records the three attempts.
-- **Falcon signature decoding on the device.** Tried because `comp_decode` is 75% of Falcon's
+- **Falcon signature decoding on the device.** Tried because `comp_decode` is 96% of Falcon's
   end-to-end cost. One lane per signature, 512 sequential steps (a prefix code cannot be
   bit-gathered across a batch). **Measured 2.6 ms/signature against the host's 75 us — 35x
   slower.** The host numpy version processes all signatures in lockstep against contiguous
   memory; the device version turns every coefficient into a data-dependent gather. Reverted;
   `docs/benchmarks.md` §16 records it.
+
+  The contrast with `HashToPoint`, which *did* move to the device (9.3 -> 0.6 us/signature), is
+  the useful part: a contiguous `[BLK, 720]` tile with a prefix-sum and a scatter is fast
+  (0.47 us per row), while the same number of gathered *bytes* at data-dependent addresses is
+  35x slower. Same problem size, opposite verdict — the access pattern, not the arithmetic.
 - **Large-N NTT (2^20).** Needs a multi-pass, global-memory structure, i.e. the same
   "one launch per level" shape that BLAKE3's tree needs. It is blocked behind pattern 2 for the
   same reason, and it is the item most likely to win once that shape works (predicted 1.4 ms,
