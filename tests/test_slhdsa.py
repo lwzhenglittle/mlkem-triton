@@ -181,6 +181,9 @@ def test_prehash_function_is_part_of_the_message():
         "SLH-DSA-SHAKE-192s",
         "SLH-DSA-SHAKE-256f",
         "SLH-DSA-SHAKE-256s",
+        "SLH-DSA-SHA2-128f",
+        "SLH-DSA-SHA2-192f",
+        "SLH-DSA-SHA2-256f",
     ],
 )
 def test_matches_liboqs_on_a_fresh_key(ps):
