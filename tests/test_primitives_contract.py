@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -314,3 +315,25 @@ def test_the_package_description_names_what_shipped():
         "gemm",
     ):
         assert name in description, f"pyproject description does not mention {name}"
+
+
+def test_bench_cpu_refuses_to_shrink_the_baseline():
+    """`--only x` without `--merge` replaced `cpu_baseline.json` with a one-rival file.
+
+    Every ratio in every document is computed against that file, so the loss is silent and total;
+    it happened in this session and nothing complained. The script now refuses, and this pins it.
+    """
+    import subprocess
+
+    root = Path(__file__).resolve().parent.parent
+    baseline = root / "benchmarks" / "cpu_baseline.json"
+    before = baseline.read_text()
+    result = subprocess.run(
+        [sys.executable, "benchmarks/bench_cpu.py", "--only", "mldsa-44-verify"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "--merge" in result.stderr, result.stderr
+    assert baseline.read_text() == before, "the baseline changed despite the refusal"

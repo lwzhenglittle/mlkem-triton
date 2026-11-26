@@ -541,6 +541,19 @@ def main() -> int:
         return 2
 
     out_path = Path(args.out)
+    # `--only x` without `--merge` used to *replace* the file with a one-rival baseline, silently
+    # destroying the other sixteen -- which is what every ratio in every document is computed
+    # against. It happened during this session: one `--only mldsa-44-verify` left a baseline with
+    # a single rival and nothing said so. Refuse instead of guessing.
+    if args.only and not args.merge and out_path.exists():
+        print(
+            f"error: --only would replace {out_path} with {len(names)} rival(s) and drop the rest.",
+            file=sys.stderr,
+        )
+        print(
+            "       pass --merge to update in place, or --out to write elsewhere.", file=sys.stderr
+        )
+        return 2
     if args.merge and out_path.exists():
         results = json.loads(out_path.read_text())
         results["meta"] = metadata()  # the fresh window wins ... but see the warning below
