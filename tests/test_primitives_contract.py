@@ -156,3 +156,40 @@ def test_every_primitive_has_a_bench_case_or_says_why_not():
     # The harness may legitimately leave out an arithmetic-only module.
     missing = [m for m in MODULES if m not in bench and m not in HOST_ONLY]
     assert not missing, f"primitives with no bench_primitive case: {missing}"
+
+
+# The vectors the suite leans on, with the smallest count that still means something. A test that
+# loops over a vector file passes vacuously if the file is empty or truncated, and nothing in the
+# suite would notice -- the same silent-success shape as a checker whose parser matches nothing.
+TEST_VECTORS = {
+    "data/vectors/blake3/kat.json": ("vectors", 26),
+    "data/vectors/poseidon2/bb16.json": ("vectors", 64),
+}
+
+
+def test_the_vector_files_are_not_empty():
+    import json
+
+    root = Path(__file__).resolve().parent.parent
+    for rel, (key, floor) in TEST_VECTORS.items():
+        data = json.loads((root / rel).read_text())
+        entries = data.get(key, data)
+        assert len(entries) >= floor, f"{rel}: {len(entries)} entries, expected at least {floor}"
+
+
+def test_the_acvp_directories_are_populated():
+    """Same argument for the ACVP corpora: an empty directory would make several suites vacuous."""
+    import json
+
+    root = Path(__file__).resolve().parent.parent / "data"
+    # each corpus is a few fat files, so count test *groups* inside them rather than file names
+    floors = {"acvp": 20, "acvp-mldsa": 50, "acvp-slhdsa": 20, "acvp-lms": 10}
+    for name, floor in floors.items():
+        total = 0
+        for f in (root / name).rglob("*.json"):
+            data = json.loads(f.read_text())
+            if isinstance(data, list):  # the LMS files are a bare list of cases
+                total += len(data)
+            else:
+                total += sum(len(data[k]) for k in ("testGroups", "groups") if k in data)
+        assert total >= floor, f"data/{name}: {total} groups, expected >= {floor}"
