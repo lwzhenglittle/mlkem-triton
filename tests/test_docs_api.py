@@ -12,7 +12,9 @@ constants in block 4 are checked by value because they are quoted.
 
 from __future__ import annotations
 
+import ast
 import inspect
+import pathlib
 
 import pytest
 
@@ -72,3 +74,21 @@ def test_primitives_block():
     assert "counters" in _params(chacha20_keystream)
     assert _params(hash_np_batch)[:2] == ["msgs", "hf"]
     assert SHA3_256.rate == 136
+
+
+def test_the_package_parses_as_python_3_10():
+    """`pyproject.toml` claims `requires-python = ">=3.10"`; this repository runs 3.14.
+
+    The claim is only checked by the grammar version here -- no 3.10 interpreter is available on
+    this machine -- so it catches syntax, not standard-library additions. That is the failure mode
+    worth catching: a PEP 695 type parameter or a same-quote f-string nests in 3.12 and produces a
+    `SyntaxError` for the very users the metadata promises.
+    """
+    root = pathlib.Path(__file__).resolve().parent.parent
+    bad = []
+    for p in list((root / "triton_crypto").rglob("*.py")) + list((root / "benchmarks").glob("*.py")):
+        try:
+            ast.parse(p.read_text(), filename=str(p), feature_version=(3, 10))
+        except SyntaxError as exc:
+            bad.append(f"{p.relative_to(root)}:{exc.lineno} {exc.msg}")
+    assert not bad, "syntax newer than the declared floor: " + "; ".join(bad)

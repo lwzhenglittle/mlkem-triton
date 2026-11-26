@@ -50,6 +50,8 @@ jobs:
               "triton_crypto/primitives/poly1305.py",
               "triton_crypto/primitives/aes.py",
               "triton_crypto/primitives/gemm.py",
+              "triton_crypto/primitives/blake3.py",
+              "triton_crypto/primitives/ntt/large.py",
           ):
               assert required in names, f"{required} missing from {wheel}"
           print("wheel layout OK")
