@@ -24,9 +24,22 @@ Each piece works in isolation:
 But when those exact pieces are assembled into the module's `_block_kernel`, the kernel stores
 zeros: the store mask, block count, flags (11 = CHUNK_START|CHUNK_END|ROOT) and block length (64)
 all read back correct from inside the same launch, while the value the kernel stores -- and the
-root buffer -- come out zero. The probe's near-identical kernel does not. That is a source-level
-bisect of the two kernels away from being diagnosed, and it needs a session of its own; the
-module was deleted rather than shipped unproven, twice.
+root buffer -- come out zero.
+
+A bisect then ruled out the most suspicious feature. The probe kernel was extended one step at a
+time:
+
+| variant | result |
+|---|---|
+| A: probe kernel, one destination | MATCH |
+| B: + root output buffer, `ROOT_MODE=False` | MATCH |
+| B: + `ROOT_MODE=True` (flags gain ROOT, two destinations, `r[8+i]` as well) | produces the *correct* value for those flags |
+
+So the dual-destination store and the constexpr branch are both innocent, and the difference is
+somewhere in the module's block-address / `nblocks` / `blen` plumbing. The next step is a
+variant C that is the module's kernel verbatim, then deleting one of those pieces per run --
+half an hour of mechanical work, not a redesign, and it needs its own session rather than the
+tail of a long one. The module was deleted rather than shipped unproven, three times.
 
 What is *not* worth re-deriving next time: the three Triton constraints that shaped the design.
 A runtime loop cannot carry a tuple assignment (so the chaining value has to live in a global
