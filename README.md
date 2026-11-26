@@ -28,7 +28,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.96 TMAC/s at n = 2048), the GF(2^k) GEMM substrate |
 
-**1197 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
+**1198 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
 NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
@@ -186,7 +186,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**1197 tests**, six layers:
+**1198 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;

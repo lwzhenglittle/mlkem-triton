@@ -735,7 +735,8 @@ not the work inside them.
 halve the 512 steps, but the second coefficient's position depends on the first's length, so it
 costs the same ~13 calls as the first -- 256 steps of ~26 calls is the same 6700 calls. The only
 way down is fewer calls *per coefficient*, and a prefix code gives no way to batch across
-coefficients: that is exactly the property that made the device decoder 35x slower (`§16`). It is still 81% of the end-to-end cost, and still the right
+coefficients: that is exactly the property that made the device decoder 35x slower when it was tried
+(`§16`; 190x by today's 13.5 us host decoder). It is still 81% of the end-to-end cost, and still the right
 place for the next attempt -- on the host, where a vectorised scan beats the device's per-coefficient
 gather by 35x.
 
@@ -745,11 +746,12 @@ claims in the evaluation documents as well, so they are not shipped in the packa
 costs 0.10 µs/signature and the
 rejection-plus-prefix-sum filter 0.47 µs, against 9.3 µs on the host -- a 16x win, and the
 prefix-sum-plus-scatter shape is the one a multi-pass NTT will need. `comp_decode` did **not**
-survive the same test (see below), so the end-to-end number is now 96% decode.
+survive the same test (see below). The decode share was 96% before the host decoder was cut from
+134 to 13.5 us; it is **81%** now (13.5 of 16.7 us).
 
   `HashToPoint` went to the device (16x win, measured, wired into `Verifier.verify` for
-  uniform-length batches with a host fallback for mixed ones). `comp_decode` -- the other 96%
-  -- **was tried and lost**. The
+  uniform-length batches with a host fallback for mixed ones). `comp_decode` -- the other 81% of the
+  end-to-end cost -- **was tried and lost**. The
   kernel is one lane per signature with 512 sequential steps (the code is a prefix code, so
   there is no way to bit-gather a batch), which makes every step a 3-byte gather at a
   data-dependent address plus two table lookups for the unary run length. Measured: **2.6

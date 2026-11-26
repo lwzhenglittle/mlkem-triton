@@ -375,3 +375,51 @@ def test_no_cpu_baseline_row_claims_superlinear_scaling():
         f"the allow-list is stale: measured {sorted(offenders)}, documented "
         f"{sorted(known_upper_bounds)}"
     )
+
+
+def test_docs_do_not_cite_paths_that_only_exist_on_the_author_machine():
+    """Every path a doc cites should exist in the repository, or say that it lives outside it.
+
+    Twice tonight an artifact existed only in the author's workspace: `gf2_8_matmul_torch` was not
+    imported by `__init__.py`, and the snapshot the README quotes was gitignored. A fresh clone
+    caught both. This catches the cheap version of the same mistake -- a path in a doc that is not
+    in the tree and not explained.
+
+    `probes/`, `benchmarks/ntt_cpu` and the liboqs builds are deliberately outside the repository;
+    a citation is allowed to point at them **if the same line or the line before says so**.
+    """
+    import re
+
+    root = Path(__file__).resolve().parent.parent
+    pat = re.compile(r"`((?:benchmarks|docs|tests|data|probes|triton_crypto)/[A-Za-z0-9_./\-]+?)`")
+    outside = ("probes/", "benchmarks/ntt_cpu", "benchmarks/blake3_ref", "third_party/")
+    allow_context = (
+        "beside this repository",
+        "not shipped",
+        "build it",
+        "in the workspace",
+        "outside the repository",
+        "gcc",
+        # a changelog and CONTRIBUTING both cite paths that were removed; that is the point
+        "removed",
+        "no longer exist",
+        "still contained",
+        "disappeared",
+    )
+    offenders = []
+    for doc in [
+        root / "README.md",
+        root / "CONTRIBUTING.md",
+        *sorted((root / "docs").glob("*.md")),
+    ]:
+        if not doc.exists():
+            continue
+        lines = doc.read_text().splitlines()
+        for lineno, line in enumerate(lines):
+            for ref in pat.findall(line):
+                if "*" in ref or (root / ref).exists() or ref.startswith(outside):
+                    continue
+                context = " ".join(lines[max(0, lineno - 1) : lineno + 1])
+                if not any(token in context for token in allow_context):
+                    offenders.append(f"{doc.name}:{lineno + 1} {ref}")
+    assert not offenders, f"cited paths that are neither in the repo nor explained: {offenders}"

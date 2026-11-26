@@ -429,7 +429,8 @@ the value starts at byte 23, i.e. three bytes into a word, so the block words ar
 
 A product in GF(2^8) with the AES polynomial `x^8 + x^4 + x^3 + x + 1`, assembled from int8 GEMMs.
 This is the construction `PLAN_ffgemm.md` rests on, exposed so the assumption has an end-to-end
-number (`benchmarks/../probes/gf2-8-matmul-probe.py`, `docs/benchmarks.md` §19.3).
+number (`probes/gf2-8-matmul-probe.py`, which lives in the workspace beside this repository
+rather than in it, and `docs/benchmarks.md` §19.3).
 
 | argument | shape | dtype | meaning |
 |---|---|---|---|
