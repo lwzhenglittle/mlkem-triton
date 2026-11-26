@@ -16,3 +16,4 @@ benchmarks/poseidon2_ref/target/
 # measurement snapshots (benchmarks/snapshot.py): timestamped artifacts, not sources
 benchmarks/snapshot-*.md
 benchmarks/snapshot-*.json
+benchmarks/ntt_cpu

@@ -233,6 +233,31 @@ def bench_aes(batch: int, size: int, dev) -> Bench:
     )
 
 
+_LARGE_NTT = None
+
+
+def bench_ntt_large(batch: int, size: int, dev) -> Bench:
+    """The 2^20 multi-pass transform; `batch` and `size` do not apply."""
+    import torch
+
+    global _LARGE_NTT
+    from triton_crypto.primitives.ntt import LargeNTT
+
+    if _LARGE_NTT is None:
+        _LARGE_NTT = LargeNTT(1 << 20, 2013265921)
+    t = _LARGE_NTT
+    x = torch.as_tensor(
+        np.random.default_rng(0).integers(0, 2013265921, 1 << 20), dtype=torch.int32, device=dev
+    )
+    return Bench(
+        lambda: t.forward_tensor_torch(x, dev),
+        units=1,
+        unit="p2^20",
+        nbytes=(1 << 20) * 4 * 2 * 20,
+        note="BabyBear 2^20, 20 passes",
+    )
+
+
 def bench_blake3(batch: int, size: int, dev) -> Bench:
     rows, size = max(batch, 1), max(size, 1)
     rng = np.random.default_rng(0)
@@ -309,6 +334,7 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "aes128-ctr": bench_aes,
     "gemm-int8": bench_gemm_int8,
     "blake3": bench_blake3,
+    "ntt-2^20": bench_ntt_large,
 }
 
 ORDER = list(CASES)
@@ -332,6 +358,7 @@ WHAT = {
     "aes128-ctr": "AES-128-CTR through a T-table (the gather counter-example)",
     "gemm-int8": "exact int8 GEMM, 256x256x256 (the GF(2^k) GEMM substrate)",
     "blake3": "BLAKE3 (tree hash), --size-byte messages",
+    "ntt-2^20": "BabyBear negacyclic NTT, 2^20 points (multi-pass)",
 }
 
 
@@ -367,6 +394,7 @@ CPU_RIVAL = {
     "shake128": "shake128",
     "shake256": "shake256",
     "blake3": "blake3",
+    "ntt-2^20": "ntt-2^20",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"

@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1104 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1122 tests green** |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -23,7 +23,8 @@ same idioms but **not run** there. Nothing in this column is claimed beyond that
 |---|---|---|---|---|
 | `primitives.sponge` / `keccak` | SHA3-224/256/384/512, SHAKE128/256, any rate | ✅ | ⚠️ | NIST CAVP, numpy reference |
 | `primitives.sha2` | SHA-256 / SHA-512 compression | ✅ | ⚠️ | ACVP via the SLH-DSA/LMS suites |
-| `primitives.ntt` | negacyclic NTT, `(q, N, ζ, layers)` | ✅ | ⚠️ | per-domain numpy, schoolbook convolution |
+| `primitives.ntt` | negacyclic NTT, `(q, N, ζ, layers)`, N<=1024 | ✅ | ⚠️ | per-domain numpy, schoolbook convolution |
+| `primitives.ntt.large` | multi-pass NTT up to 2^20 (bandwidth-bound) | ✅ | ⚠️ | `NTTDomain` at sizes both can do, round trip, negacyclic product |
 | `primitives.fields` | 32-bit Montgomery product, prime-field | ✅ | ⚠️ | numpy twin, cross-module call test |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) | ✅ | ⚠️ | RFC 8439 §2.3.2 / §2.4.2, OpenSSL |
 | `primitives.poly1305` | Poly1305 + ChaCha20-Poly1305 AEAD | ✅ | ⚠️ | RFC 8439 §2.5.2 / §2.8.2, OpenSSL EVP_MAC |

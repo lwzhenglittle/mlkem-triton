@@ -7,8 +7,7 @@ Three modules, because they change for different reasons:
     ref.py      `ntt_np` / `intt_np` / `mul_np` / `negacyclic_conv_np`
 
 A 2^20-point transform is a different algorithm (multi-pass, global memory), not a bigger
-tile: it belongs next to `kernel.py` as a separate entry point, and this split is what
-leaves room for it.
+tile: `large.py` is that entry point -- one launch per stage, `LargeNTT`.
 
 Primitives:
     NTTDomain      q, N, ζ, layers  (+ cached twiddle tables, both directions)
@@ -32,16 +31,20 @@ from .domain import (
     mlkem_domain,
 )
 from .kernel import intt_torch, ntt_torch
+from .large import LargeNTT, large_ntt_np, large_ntt_torch
 from .ref import intt_np, mul_np, negacyclic_conv_np, ntt_np
 
 __all__ = [
     "BABYBEAR_NTT",
     "DILITHIUM",
     "KYBER",
+    "LargeNTT",
     "NTTDomain",
     "bitrev",
     "intt_np",
     "intt_torch",
+    "large_ntt_np",
+    "large_ntt_torch",
     "mldsa_domain",
     "mlkem_domain",
     "mul_np",

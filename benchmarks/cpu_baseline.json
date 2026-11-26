@@ -5,11 +5,11 @@
     "nproc": 16,
     "scaling": {
       "scaling_governor": "powersave",
-      "scaling_cur_freq": "4648979",
+      "scaling_cur_freq": "4120180",
       "cpuinfo_max_freq": "4700000",
       "cpuinfo_min_freq": "400000"
     },
-    "timestamp": "2026-11-26T14:46:48+00:00",
+    "timestamp": "2026-11-26T15:00:52+00:00",
     "python": "3.14.10",
     "openssl": "OpenSSL 3.5.9 29 Sep 2026 (Library: OpenSSL 3.5.9 29 Sep 2026)",
     "liboqs_builds": [
@@ -116,6 +116,12 @@
       "one_thread": 2929400000.0,
       "procs16": 51910000000.0,
       "note": "official BLAKE3 (cargo ref)"
+    },
+    "ntt-2^20": {
+      "unit": "op/s",
+      "one_thread": 14.311270125223611,
+      "procs16": 190.334546358446,
+      "note": "gcc -O3 Stockham NTT, 2^20 BabyBear"
     }
   }
 }

@@ -817,3 +817,35 @@ can exercise.
 
 That is the sixth entry for the "Triton 表达缺口" table, and it is the only one that produced
 *plausible* output rather than an error or a wrong answer.
+
+## 22. The 2^20-point NTT: the one bandwidth-bound primitive
+
+`python benchmarks/bench_primitive.py --only ntt-2^20`. BabyBear, 20 Stockham passes, one launch
+per pass, data in global memory.
+
+| | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
+|---|---:|---:|---:|---:|---:|
+| 2^20 forward NTT | **10.81 ms** | 69.9 ms | 5.25 ms | **6.46x** | 0.49x |
+| traffic (20 x 8 MB) | 160 MB | | | | |
+| achieved | 15.5 GB/s (7% of copy) | 2.4 GB/s | 30 GB/s | | |
+
+The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
+`gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one
+process with 16 OpenMP threads lands in between at 14.8 ms).
+
+Three things worth reading off it:
+
+- **This is the only primitive in the repository that is bandwidth-bound.** Everything else
+  (SHA-3, ChaCha20, Poseidon2, Poly1305, AES, BLAKE3) sits at 3-31 GB/s of *useful* traffic and is
+  ALU-limited; this one moves 160 MB because every pass touches the whole array, and its roofline
+  is 0.74 ms.
+- **The first correct implementation is 7x off that roofline** (10.8 ms against 0.74). The
+  traffic is done at 15.5 GB/s, not 112. The stages are one launch each, the later stages access
+  with a stride that defeats coalescing, and the passes are radix-2 (20 of them rather than 7
+  radix-4 passes or 5 radix-8). That gap is what the eval's "2-3 weeks" buys.
+- **6.5x one core, 0.49x sixteen processes** — the same shape as every other ALU-bound row, even
+  though this one is memory-bound, because the CPU's 16 cores bring 30 GB/s of their own.
+
+What it does buy: the algorithm is `2^20` in a repository whose in-register kernel stops at 1024,
+it agrees exactly with the numpy reference and the in-register `NTTDomain` at sizes both can do,
+and the pass structure is the one BLAKE3's tree proved.

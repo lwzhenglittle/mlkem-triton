@@ -94,6 +94,27 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### The 2^20-point NTT: the first bandwidth-bound primitive
+
+`primitives/ntt/large.py` — a multi-pass Stockham transform, one launch per stage, for sizes the
+in-register kernel cannot hold. 20 passes over 2^20 coefficients, pre-twiddled for the
+negacyclic wrap, DIF forward and DIT inverse.
+
+- **10.81 ms** for a 2^20 forward transform, against 69.9 ms for one CPU core and 5.25 ms for
+  sixteen concurrent processes: **6.46x and 0.49x**.
+- The CPU rival is a C Stockham implementation (`benchmarks/ntt_large_cpu_rival.c`, 16P = sixteen
+  processes with `OMP_NUM_THREADS=1`). The first version of it charged the CPU a `powmod` per
+  coefficient for the pre-twiddle; the table is now built once, like the device's.
+- Correctness chain: agrees with `NTTDomain` (the in-register kernel's numpy twin) at 2^4 and
+  2^8, round trip exact at 2^4..2^20, and the pointwise product reproduces a schoolbook
+  negacyclic convolution.
+- **It is 7x off its own roofline** (160 MB of traffic, 0.74 ms at copy bandwidth, 15.5 GB/s
+  achieved). The stages are radix-2 and the later ones have a stride that defeats coalescing;
+  radix-4/8 plus a blocked layout is the next 2-3 weeks, and it is the strongest candidate for a
+  result that beats sixteen processes.
+- Also here: the pre/post twiddle tables are built in log n numpy passes and cached per device.
+  A million-iteration Python loop was costing 1686 ms per call -- 150x the transform.
+
 ### BLAKE3 lands on the fourth attempt, and the bug was one line of undefined behaviour
 
 `primitives/blake3.py`: 7-round compression, 1 KiB chunks, a level-by-level tree — one launch per

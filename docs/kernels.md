@@ -34,6 +34,8 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
 | `_gemm_int8_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN))` | `gemm_int8_torch` |
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
+| `_stage_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/2, 4096),)` | `LargeNTT`, one launch per pass |
+| `_mul_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N, 65536),)` | the negacyclic pre/post twiddle |
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
@@ -316,6 +318,25 @@ Four constraints shaped this, and the fourth cost four sessions:
   results to zero** -- with every input reading back correct from inside the same launch. The
   counter is now an explicit `(low, high)` pair and the guard is a test: any message over 1 KiB
   has a non-zero chunk counter, which is exactly the case a 64-byte KAT cannot see.
+
+### `_stage_kernel(X, Y, N, M, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
+
+One Stockham pass of a 2^20-point transform, i.e. one launch per stage with the data in global
+memory. `M` is the stage's block length: it halves for the forward DIF pass (N, N/2, ..., 2) and
+doubles for the inverse DIT pass (2, 4, ..., N). `W` holds that stage's `M/2` twiddles.
+
+Two things it has to get right, and both are the same two that bit other kernels here:
+
+- **`%` on a negative int64 is C's truncated remainder**, so `u - v` is normalised with an
+  explicit `tl.where(t < 0, t + Q, t)` rather than a modulo;
+- the twiddle table and the negacyclic pre/post tables are **built once and cached per device**.
+  The first version rebuilt them per call with a million-iteration Python loop, which cost more
+  than the transform it fed (1686 ms against 10.8 ms).
+
+Memory traffic is 20 passes x 8 MB = 160 MB for N = 2^20, so this kernel is bandwidth-bound --
+the only primitive here that is. It currently runs at 15.5 GB/s of traffic (7% of copy
+bandwidth), i.e. 7x off the roofline; radix-4/8 passes and a blocked layout are the obvious next
+step and are why the eval estimated 2-3 weeks for a tuned version.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

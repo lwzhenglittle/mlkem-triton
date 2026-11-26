@@ -360,6 +360,50 @@ def blake3_pair(nbytes: int = 1 << 20) -> tuple[float, float]:
     return one, many
 
 
+def _ntt_cpu_pair(logn: int = 20) -> tuple[float, float]:
+    """2^logn BabyBear NTT: one thread, and sixteen concurrent single-thread processes.
+
+    OpenMP inside one process is *not* the convention here (see `docs/benchmarks.md` §1: threads
+    do not scale on this hybrid part), so the 16-way figure is sixteen processes. For reference,
+    one process with `OMP_NUM_THREADS=16` lands between the two (14.8 ms against 71.4 / 5.2).
+    """
+    exe = ROOT / "benchmarks" / "ntt_cpu"
+    if not exe.exists():
+        raise RuntimeError(
+            "build it: gcc -O3 -march=native -fopenmp -o benchmarks/ntt_cpu "
+            "benchmarks/ntt_large_cpu_rival.c"
+        )
+
+    def one() -> float:
+        best = 1e30
+        for _ in range(3):
+            out = subprocess.run(
+                [str(exe), str(logn)],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "OMP_NUM_THREADS": "1"},
+            )
+            best = min(best, json.loads(out.stdout)["ms"])
+        return best
+
+    t1 = one() / 1e3  # seconds per transform
+    rates = _parallel_rate(_ntt_cpu_child, [(logn,)] * NPROC)
+    return 1.0 / t1, rates
+
+
+def _ntt_cpu_child(args) -> float:
+    """Transforms per second in a fresh process (module level: the pool must pickle it)."""
+    (logn,) = args
+    exe = ROOT / "benchmarks" / "ntt_cpu"
+    out = subprocess.run(
+        [str(exe), str(logn)],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "OMP_NUM_THREADS": "1"},
+    )
+    return 1e3 / json.loads(out.stdout)["ms"]
+
+
 def _poseidon_exe() -> Path:
     exe = ROOT / "benchmarks" / "poseidon2_ref" / "target" / "release" / "poseidon2-ref"
     if not exe.exists():
@@ -428,6 +472,7 @@ CASES: dict[str, Rival] = {
     ),
     "poly1305": Rival("B/s", poly1305_pair, "OpenSSL 3.5 EVP_MAC POLY1305", ("poly1305",)),
     "blake3": Rival("B/s", blake3_pair, "official BLAKE3 (cargo ref)", ("blake3",)),
+    "ntt-2^20": Rival("op/s", _ntt_cpu_pair, "gcc -O3 Stockham NTT, 2^20 BabyBear", ("ntt-2^20",)),
     "poseidon2": Rival(
         "op/s", poseidon2_pair, "Plonky3 0.8 packed monty-31x8 (cargo ref)", ("poseidon2",)
     ),
