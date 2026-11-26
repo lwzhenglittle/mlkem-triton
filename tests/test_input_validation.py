@@ -73,3 +73,48 @@ def test_poly1305_refuses_wrong_key_lengths():
     for n in (16, 64):
         with pytest.raises(ValueError, match="32 bytes"):
             poly1305.poly1305_np(b"k" * n, b"m")
+
+
+def test_scheme_verifiers_refuse_mismatched_batches():
+    """A batch of 10 messages and 9 signatures must not verify 9 of them and misalign the rest.
+
+    All four verifiers check this before any kernel runs; the assertion here is that the check
+    exists, because a silent `zip` would produce a well-formed `[9]` verdict array that a caller
+    would read as `[10]`.
+    """
+    import pathlib
+    import re
+
+    from triton_crypto.falcon import Verifier
+
+    src = pathlib.Path(__file__).resolve().parent / "test_falcon.py"
+    text = src.read_text()
+
+    def grab(name):
+        block = re.search(name + r" = \(\n(.*?)\n\)", text, re.S).group(1)
+        return bytes.fromhex("".join(re.findall(r'"([0-9a-f]+)"', block)))
+
+    pk, sig = grab("PK_HEX"), grab("SIG_HEX")
+    msg = re.search(r'MSG = b"(.*?)"', text).group(1).encode()
+    verifier = Verifier(pk)
+    assert verifier.verify([msg], [sig]).tolist() == [True]
+    with pytest.raises(ValueError, match=r"1 messages but 2 signatures"):
+        verifier.verify([msg], [sig, sig])
+    with pytest.raises(ValueError, match="2 messages"):
+        verifier.verify([msg, msg], [sig])
+
+
+def test_key_generators_refuse_a_negative_count():
+    from triton_crypto import generate_keypairs
+
+    with pytest.raises(ValueError, match="non-negative"):
+        generate_keypairs("ML-KEM-768", -1)
+
+
+def test_scheme_constructors_refuse_wrong_key_lengths():
+    from triton_crypto import Decapsulator, Encapsulator
+
+    with pytest.raises(ValueError, match="dk length"):
+        Decapsulator("ML-KEM-768", bytes(100))
+    with pytest.raises(ValueError, match="ek length"):
+        Encapsulator("ML-KEM-768", bytes(100))
