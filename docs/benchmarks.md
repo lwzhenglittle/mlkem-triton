@@ -632,11 +632,20 @@ Two numbers, because they answer different questions:
 - **dev/op** is `Verifier.verify_core_torch`: `NTT(s2)`, the pointwise product, the inverse
   NTT and the norm check. The transforms are **39%** of it (0.14 + 0.11 µs at B = 4096), which
   is why the rest of the row is one fused kernel rather than three.
-- **e2e/op** is `Verifier.verify`, which also pays for the variable-length signature decoder
-  (24 µs/signature) and SHAKE256 + rejection sampling (9 µs) on the host. That is the honest
-  end-to-end cost today and it is **host-bound**, not device-bound: the decoder and
-  `HashToPoint` are the next two kernels to write, and they are the reason this row is not
-  0.65 µs.
+- **e2e/op** is `Verifier.verify`, which also pays for the host side. Measured breakdown at
+  B = 4096, same window (`benchmarks/snapshot.py`):
+
+| stage | where | µs/signature | share of e2e |
+|---|---|---:|---:|
+| device core (2 NTTs, pointwise, norm) | device | **0.60** | 2% |
+| signature decode (`comp_decode`) | host, numpy | 23.5 | 75% |
+| `HashToPoint` (SHAKE256 + rejection) | host, hashlib | 9.3 | 30% |
+| e2e total | | 31.3 | 100% |
+
+  The two host stages are the next two kernels to write, and they are the reason this row is
+  not 0.60 µs. `comp_decode` is a prefix code with per-lane bit positions, so it is a
+  sequential scan per signature -- on the device that is 512 iterations per lane but all lanes
+  in parallel, which is why it should be worth writing rather than parallelising on the host.
 
 Two things worth knowing before reading Falcon numbers anywhere:
 
