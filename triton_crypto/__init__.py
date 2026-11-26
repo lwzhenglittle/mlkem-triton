@@ -34,7 +34,6 @@ ML-KEM, all three operations (also available from `triton_crypto.mlkem`):
     from triton_crypto.slhdsa import Verifier
     from triton_crypto.lms import Verifier
 
-The `mlkem_triton` name still imports this same package (deprecated until 1.0).
 
 Kernel contracts: docs/kernels.md. Design notes: README.md, docs/design.md.
 Measurements, and how they were taken: docs/benchmarks.md.
@@ -45,7 +44,7 @@ from __future__ import annotations
 from .devices import available_devices, backend_of, describe, gemm_cfg, resolve_device
 from .mlkem.params import PARAMS, N, Params, Q
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"
 
 __all__ = [
     "PARAMS",

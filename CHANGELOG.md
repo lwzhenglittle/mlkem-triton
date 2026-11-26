@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.0.0] — the pre-0.8 layout is gone (breaking)
+
+0.9.0 gave the primitive layer a floor. This is the removal the deprecation shims had been
+promising since 0.8.0: everything that existed only to keep the old `mlkem_triton` name and the
+old root module paths alive is deleted, and the package is 1.0.
+
+**Migration** — the old path on the left now raises `ModuleNotFoundError`:
+
+| before 1.0 | now |
+|---|---|
+| `import mlkem_triton` | `import triton_crypto` |
+| `triton_crypto.pipeline` | `triton_crypto.mlkem.pipeline` |
+| `triton_crypto.params` | `triton_crypto.mlkem.params` |
+| `triton_crypto.keygen` / `.encaps` / `.keyprep` / `.ops` / `.ntt_ref` / `.acvp` / `.gpu_hash` | `triton_crypto.mlkem.*` |
+| `triton_crypto.refimpl` / `.sampling_cpu` / `.pipeline_host_hash` | `triton_crypto.mlkem.reference.*` |
+| `triton_crypto.kernels.*` | `triton_crypto.mlkem.kernels.*` |
+| `triton_crypto.primitives.sha2.sha_thash` | `triton_crypto.slhdsa.thash_sha2.sha_thash` |
+
+Unchanged: `from triton_crypto import Decapsulator, Encapsulator, KeyGenerator,
+generate_keypairs, encapsulate, decaps_batch` (the ML-KEM entry points), every scheme subpackage
+and every `primitives` import.
+
+**Removing the shims found three imports that had been resolving through them**, which is the
+honest argument for doing this at all: `mlkem/reference/pipeline_host_hash.py` imported
+`...keyprep`, `...kernels` and `...params` — the deprecated root aliases — rather than its own
+sibling modules. They now resolve inside `mlkem`, so a future shuffle of that package cannot be
+masked the same way.
+
+**Enforcement, not just deletion.** `tests/test_removed_api.py` asserts every removed path stays
+removed (18 module paths, the `sha_thash` attribute, and that `find_packages()` no longer returns
+`mlkem_triton`), and the CI wheel check fails if any of them reappears in a wheel. The removal
+tests replace `tests/test_compat.py`, which used to assert the opposite.
+
+`pyproject.toml` now ships only `triton_crypto*`. **891 tests** (the 4 compat assertions were
+replaced by 36), `ruff check .` and `ruff format --check .` clean.
+
 ## [0.9.0] — the primitive layer gets a floor, and the library stops being PQC-only
 
 The 0.8.0 refactor made the four schemes uniform. This release does the same job one layer

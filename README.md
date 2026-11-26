@@ -22,10 +22,14 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.fields` | prime-field arithmetic: the 32-bit Montgomery product, shared by every modular primitive |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
 
-**860 tests** — NIST ACVP vectors, RFC 8439 vectors, liboqs cross-checks and independent numpy
+**891 tests** — NIST ACVP vectors, RFC 8439 vectors, liboqs cross-checks and independent numpy
 references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.
+
+> **1.0 removed the pre-0.8 import paths.** `import mlkem_triton` and the old root modules
+> (`triton_crypto.pipeline`, `.params`, `.kernels.*`, ...) are gone; the migration table is in
+> [CHANGELOG.md](CHANGELOG.md). `from triton_crypto import Decapsulator` is unchanged.
 
 ## Install
 
@@ -150,7 +154,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**860 tests**, five layers:
+**891 tests**, five layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;

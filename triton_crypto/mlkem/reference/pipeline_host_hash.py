@@ -17,11 +17,11 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from ... import keyprep
 from ...devices import resolve_device
-from ...kernels import elementwise as ew
-from ...kernels.gemm_modq import gemm_modq
-from ...params import PARAMS
+from .. import keyprep
+from ..kernels import elementwise as ew
+from ..kernels.gemm_modq import gemm_modq
+from ..params import PARAMS
 from .sampling_cpu import G, J, cbd, prf
 
 

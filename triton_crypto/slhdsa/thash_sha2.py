@@ -6,7 +6,6 @@ builds the 22-byte compressed address and the message in registers and runs the
 compression loop. It lives in the scheme package because it is FIPS 205's construction,
 not a generic SHA-2 primitive; `primitives/sha2.py` keeps the compression kernel.
 
-The old location (`primitives.sha2.sha_thash`) still works as a deprecated alias.
 """
 
 from __future__ import annotations

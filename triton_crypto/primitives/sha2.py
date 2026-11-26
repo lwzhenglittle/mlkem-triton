@@ -2,7 +2,7 @@
 primitives used to check it and to precompute constant states.
 
 These are what the **SHA-2 parameter sets of FIPS 205** use on device (`slhdsa/verify.py`
-dispatches to `sha_thash` / `sha_absorb` when the set is not SHAKE). Validated against numpy and
+dispatches to `sha_absorb` when the set is not SHAKE). Validated against numpy and
 `hashlib` in `tests/test_sha2.py`, and end-to-end against the ACVP vectors for all six SHA-2 sets.
 
 SLH-DSA's SHA-2 parameter sets need these. Their hashes are `SHA(PK.seed || 0…0 || ADRSc || M)`
@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from .._codegen import compile_generated
 
-__all__ = ["IV256", "IV512", "K256", "K512", "compress_np", "sha_absorb", "sha_thash"]
+__all__ = ["IV256", "IV512", "K256", "K512", "compress_np", "sha_absorb"]
 
 IV256 = [
     0x6A09E667,
@@ -403,18 +403,3 @@ def word_tensor(values: list[int], bits: int, device):
 
 def iv_tensor(bits: int, device):
     return word_tensor(IV256 if bits == 256 else IV512, bits, device)
-
-
-def sha_thash(*args, **kwargs):
-    """Deprecated alias for `triton_crypto.slhdsa.thash_sha2.sha_thash`."""
-    import warnings
-
-    warnings.warn(
-        "triton_crypto.primitives.sha2.sha_thash moved to "
-        "triton_crypto.slhdsa.thash_sha2; the alias will be removed in 1.0",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    from ..slhdsa.thash_sha2 import sha_thash as _impl
-
-    return _impl(*args, **kwargs)

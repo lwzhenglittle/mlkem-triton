@@ -42,7 +42,7 @@ _NO_GPU_OK = {
     "test_ref.py",
     "test_primitives.py",
     "test_mldsa_ref.py",
-    "test_compat.py",
+    "test_removed_api.py",
     "test_slhdsa_ref.py",
     "test_sha2.py",
     "test_fields.py",

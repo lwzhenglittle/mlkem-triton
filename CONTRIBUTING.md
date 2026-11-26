@@ -79,6 +79,20 @@ Only `triton_crypto/devices.py` needs to change:
 **State the exact hardware model you measured in the PR.** Do not submit configurations that
 are only "supposed to be faster".
 
+## Packaging
+
+```bash
+python -m build --wheel          # the release path: builds from the sdist, in isolation
+```
+
+**Do not use `pip wheel .` or `setup.py bdist_wheel` for a release unless you have removed
+`build/` first.** `build_py` copies the package tree into `build/lib/` and does not delete files
+that have disappeared from the source, so a wheel built on top of a stale `build/` ships modules
+that no longer exist — this actually happened when 1.0.0 removed the pre-0.8 layout: the wheel
+still contained `mlkem_triton/`, `triton_crypto/params.py` and `triton_crypto/kernels/`.
+The `package` job in CI asserts both directions (every required module present, no removed path
+present) precisely because a dirty build directory is invisible in the source tree.
+
 ## Measurement discipline (this project has been burned; follow it)
 
 - **Only same-process interleaved A/B ratios are trustworthy.** GPU clocks differ by 2–4×

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "triton-crypto-kernels"
-version = "0.9.0"
+version = "1.0.0"
 description = "Cryptographic kernels in pure Triton: ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and LMS/HSS (SP 800-208), on a shared layer of Keccak/sponge, SHA-2, parameterised NTT, prime-field and ChaCha20 primitives"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -55,7 +55,7 @@ ref = ["kyber-py>=1.0"]
 test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
-include = ["triton_crypto*", "mlkem_triton*"]
+include = ["triton_crypto*"]
 
 
 [tool.pytest.ini_options]
@@ -90,7 +90,6 @@ ignore = [
 # Inside a Triton kernel `if CONST: ... else: ...` is a **compile-time** branch, far clearer
 # than a conditional expression -- and a conditional expression lowers to two branches plus a
 # select under jit. SIM108/SIM102 do not apply here.
-"triton_crypto/kernels/*" = ["SIM108", "SIM102"]
 "triton_crypto/mlkem/kernels/*" = ["SIM108", "SIM102"]
 # Same reason in the parameterised NTT kernel: `if MONT: ... else: ...` selects an arithmetic
 # path at compile time.
