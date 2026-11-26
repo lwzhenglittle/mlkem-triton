@@ -34,7 +34,8 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
 | `_gemm_int8_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN))` | `gemm_int8_torch` |
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
-| `_stage_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/2, 4096),)` | `LargeNTT`, one launch per pass |
+| `_stage_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/2, 1024),)` | `LargeNTT`, one launch per radix-2 pass |
+| `_stage4_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/4, 1024),)` | `LargeNTT(radix=4)`, two stages per pass |
 | `_mul_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N, 65536),)` | the negacyclic pre/post twiddle |
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
@@ -319,7 +320,7 @@ Four constraints shaped this, and the fourth cost four sessions:
   counter is now an explicit `(low, high)` pair and the guard is a test: any message over 1 KiB
   has a non-zero chunk counter, which is exactly the case a 64-byte KAT cannot see.
 
-### `_stage_kernel(X, Y, N, M, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
+### `_stage_kernel(X, Y, M, TOTAL, LOG_HALF, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
 
 One Stockham pass of a 2^20-point transform, i.e. one launch per stage with the data in global
 memory. `M` is the stage's block length: it halves for the forward DIF pass (N, N/2, ..., 2) and
@@ -333,10 +334,22 @@ Two things it has to get right, and both are the same two that bit other kernels
   The first version rebuilt them per call with a million-iteration Python loop, which cost more
   than the transform it fed (1686 ms against 10.8 ms).
 
-Memory traffic is 20 passes x 8 MB = 160 MB for N = 2^20, so this kernel is bandwidth-bound --
-the only primitive here that is. It currently runs at 15.5 GB/s of traffic (7% of copy
-bandwidth), i.e. 7x off the roofline; radix-4/8 passes and a blocked layout are the obvious next
-step and are why the eval estimated 2-3 weeks for a tuned version.
+Memory traffic is 20 passes x 8 MB = 160 MB for N = 2^20: this is the only primitive here whose
+cost is dominated by traffic, at 76 GB/s of the 216 GB/s copy bandwidth. It is *not*
+bandwidth-saturated -- `_stage4_kernel` halves the traffic and buys 10-20% -- so the remaining
+limit is pass latency plus the modular multiplies (`docs/benchmarks.md` §22.1-§22.2).
+
+### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q, BLK)` — `primitives/ntt/large.py`
+
+Two radix-2 stages fused into one radix-4 pass, so ten passes instead of twenty and half the
+traffic. Bit-identical to the radix-2 sequence (verified 2^4..2^20, including the odd-`log2` case
+where one radix-2 pass is left over), which also means the output ordering -- and therefore
+pointwise compatibility with the in-register kernel -- is unchanged. It needs the first stage's
+twiddles at positions `j` and `j + M/4` plus the second stage's at `j`, hence three tables.
+
+Opt-in (`LargeNTT(..., radix=4)`): faster by 10-20% when both are measured in the same window, and
+*slower* by 20% if the two are compared across windows -- the clock-drift trap in
+`docs/benchmarks.md` §22.2.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

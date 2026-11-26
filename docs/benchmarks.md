@@ -6,6 +6,39 @@ measured, it says so. Comparison against other implementations lives in
 
 ---
 
+## Contents
+
+- [1. Machines and conventions](#1-machines-and-conventions)
+- [2. Decapsulation throughput, ML-KEM-768](#2-decapsulation-throughput-ml-kem-768)
+- [3. Encapsulation](#3-encapsulation)
+- [4. Key generation](#4-key-generation)
+- [5. Where the device time goes (decaps, B=4096)](#5-where-the-device-time-goes-decaps-b4096)
+- [6. Fusion A/B (paired, same process)](#6-fusion-ab-paired-same-process)
+- [7. Host side, B=4096, Intel](#7-host-side-b4096-intel)
+- [8. CPU baseline (liboqs 0.16.0, same machine, same ACVP ciphertexts)](#8-cpu-baseline-liboqs-0160-same-machine-same-acvp-ciphertexts)
+- [9. One-time cost](#9-one-time-cost)
+- [10. Reproducing](#10-reproducing)
+- [11. ML-DSA signature verification (FIPS 204)](#11-ml-dsa-signature-verification-fips-204)
+- [12. SLH-DSA (FIPS 205) verification](#12-slh-dsa-fips-205-verification)
+- [13. LMS / HSS verification (SP 800-208)](#13-lms--hss-verification-sp-800-208)
+- [14. ML-DSA signing](#14-ml-dsa-signing)
+- [14.5 The synthesis: `docs/patterns.md`](#145-the-synthesis-docspatternsmd)
+- [15. The primitive layer itself](#15-the-primitive-layer-itself)
+- [16. Falcon-512 verification (FIPS 206 draft)](#16-falcon-512-verification-fips-206-draft)
+- [17. Poly1305 and ChaCha20-Poly1305](#17-poly1305-and-chacha20-poly1305)
+- [18. AES-128-CTR through a T-table: the gather surprise](#18-aes-128-ctr-through-a-t-table-the-gather-surprise)
+- [19. Exact int8 GEMM: the substrate for a finite-field GEMM](#19-exact-int8-gemm-the-substrate-for-a-finite-field-gemm)
+- [20. One window, one file: `benchmarks/snapshot.py`](#20-one-window-one-file-benchmarkssnapshotpy)
+- [21. BLAKE3: the tree hash, and the UB that hid for four sessions](#21-blake3-the-tree-hash-and-the-ub-that-hid-for-four-sessions)
+- [22. The 2^20-point NTT: the one primitive whose cost is memory traffic](#22-the-220-point-ntt-the-one-primitive-whose-cost-is-memory-traffic)
+
+§1–§10 are the ML-KEM/ML-DSA/SLH-DSA work on two machines; §11–§14 are the other
+schemes; §15–§22 are the scheme-agnostic primitive layer, including the CPU rival table
+that decides whether a port is worth doing. Every number is same-window against a CPU
+baseline; §2.2 of the overnight report and §1 here explain why only ratios travel.
+
+---
+
 ## 1. Machines and conventions
 
 | | Intel Arc B390 | NVIDIA GB10 |
