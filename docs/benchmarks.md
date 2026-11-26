@@ -858,9 +858,14 @@ per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **2.22 ms** | 69.9 ms | 5.25 ms | **31.5x** | **2.37x** |
-| traffic (20 x 8 MB) | 160 MB | | | | |
-| achieved | 75.7 GB/s (35% of copy) | 2.4 GB/s | 30 GB/s | | |
+| 2^20 forward NTT | **1.0–1.8 ms** | 69.9 ms | 5.25 ms | **70x / 39x** | **5.3x / 2.9x** |
+| traffic (19 passes x 8 MB) | 152 MB | | | | |
+| achieved (fast clock) | 155 GB/s (72% of copy) | 2.4 GB/s | 30 GB/s | | |
+
+Two numbers per cell because this transform is the one row whose result moves with the clock
+state rather than with its own code: 0.98 ms when the iGPU is at its top clock (155 GB/s of
+traffic, 72% of copy bandwidth, i.e. essentially at the memory roofline of 0.71 ms) and 1.8 ms at
+the low end. Both are measured in one process, min and median of twelve alternating runs.
 
 **This is the only row in the repository whose `vs 16P` is above 1.** Every other primitive is
 ALU-limited and loses to sixteen cores by 2-16x; this one moves 160 MB per transform
@@ -882,6 +887,10 @@ roofline. Three fixes, in order of what they were worth:
    late stages have `half = 1`, so that grid degenerates into 524288 one-element programs.
 3. **Tile 1024, 8 warps** rather than 4096/4: the swept table runs 41 ms (2-D grid) / 3.55 ms
    (2048/4) / **1.87 ms** (1024/8) for the pass sequence alone.
+4. **The negacyclic pre- and post-twiddles are folded into the first and last passes.** They are
+   index-dependent only, so the stage that already touches every element can apply them on the way
+   in or out: one launch and 8 MB less per direction. 2.2 -> **1.0-1.8 ms**, and the inverse gets
+   the same treatment (0.99 ms at the fast clock) instead of a separate `x_j *= post_j` pass.
 
 ### 22.2 Radix-4 halves the traffic and buys 10-20%, not 50%
 
@@ -908,11 +917,14 @@ extra kernel, and the win is smaller than the run-to-run spread.
 
 **What that rules out.** Radix-8 is not the next step either: it would cut the traffic another
 30% for even more arithmetic per pass, and the radix-4 experiment already showed that traffic is
-not what binds. The remaining 3x to the traffic roofline is per-pass latency and the two modular
-multiplies per butterfly. The directions with signal are: fold the negacyclic pre-twiddle into the
-first pass (one launch and 8 MB less), replace `%` with a Barrett reduction on int32
-intermediates, and collapse the tail stages (`m <= 64`) into a single register-resident pass that
-does one whole block per program.
+not what binds *at the low clock*. At the high clock the picture is different -- 0.98 ms at
+155 GB/s is 72% of copy bandwidth -- so the transform changes regime with the clock, and a tuning
+decision made in one regime can be wrong in the other. That is the same trap as §22.2, one level
+deeper.
+
+What is left either way: replace `%` with a Barrett reduction on int32 intermediates (two modular
+multiplies per butterfly), and collapse the tail stages (`m <= 64`) into a single
+register-resident pass that does one whole block per program.
 
 The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
 `gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one

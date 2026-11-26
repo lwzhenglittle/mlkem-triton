@@ -49,7 +49,7 @@ Two corollaries this project ran into:
 | 3 | sponge | SHA3/SHAKE | ✅ | 31.5 GB/s | 43.9x | **4.00x** | easy and a winner: one lane holds 25 uint64 and the round loop must be *rolled*, not unrolled (unrolled: `spill_size=3584`, rolled: 0 and 30% faster) |
 | 4 | lookup vs bitslice | AES-CTR T-table | ✅ | 10.6 GB/s | 0.77x | 0.06x | 160 gathers/block into a 4.25 KiB hot table; bitslice (2-3 weeks) not attempted |
 | 5 | multi-limb big integer | Poly1305 | ✅ | 11.6 GB/s | 1.53x | 0.15x | 5x26-bit limbs fit int64 exactly; no `umulhi` pairs needed. X25519 not attempted |
-| 6 | small-prime NTT | ML-KEM/ML-DSA/BabyBear NTT | ✅ | 24.9 / 6.9 / 6.9 M poly/s (N<=1024); **2^20 in 2.22 ms** | **31.5x** | **2.37x** | the `(q, N, ζ, layers)` parameterisation covered BabyBear and Falcon with no new kernel; 2^20 needed a multi-pass one (`ntt/large.py`) and is the only bandwidth-bound primitive here |
+| 6 | small-prime NTT | ML-KEM/ML-DSA/BabyBear NTT | ✅ | 24.9 / 6.9 / 6.9 M poly/s (N<=1024); **2^20 in 1.0-1.8 ms** | **70x** | **5.3x** | the `(q, N, ζ, layers)` parameterisation covered BabyBear and Falcon with no new kernel; 2^20 needed a multi-pass one (`ntt/large.py`) and is the only bandwidth-bound primitive here |
 | 7 | algebraic hash | Poseidon2-BabyBear/16 | ✅ | 38.7 ns/perm | 2.72x | 0.19x | 16 int64 state words per lane, one program per 128 permutations; state as int32 + widen per multiply is *slower* |
 | 8 | finite-field GEMM | exact int8 GEMM (UOV/RS substrate) | ✅ | 1.94 TMAC/s (n=1024), 3.96 (n=2048) | — | — | 16% of the int8 peak with an untuned tile table; the GF(2^8) product itself is verified via bit planes |
 | 9 | floating-point FFT | Falcon *signing* | ❌ | — | — | — | deliberately not attempted: Triton does not expose FMA fusion, so a cross-backend bit-exact signature is not claimable. fp64 itself works and is bit-exact elementwise |
@@ -88,10 +88,11 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   (0.47 us per row), while the same number of gathered *bytes* at data-dependent addresses is
   35x slower. Same problem size, opposite verdict — the access pattern, not the arithmetic.
 - **Large-N NTT (2^20) — landed and tuned, and it is the one row that wins.** `ntt/large.py` is
-  correct (agrees with `NTTDomain` where both fit, round trip exact) and takes **2.22 ms:
-  31.5x one CPU core and 2.37x sixteen processes.** Three fixes took it from 10.8 to 2.2 ms (a
-  per-call table rebuild, an int64 division in the index math, and the tile/warp choice --
-  `docs/benchmarks.md` §22.1). Radix-4/8 is the remaining 2-3x to the traffic roofline.
+  correct (agrees with `NTTDomain` where both fit, round trip exact) and takes **1.0-1.8 ms:
+  70x one CPU core and 5.3x sixteen processes** at the fast clock. Four fixes took it from 10.8 ms
+  (a per-call table rebuild, an int64 division in the index math, the tile/warp choice, and folding
+  the negacyclic twiddles into the first and last passes -- `docs/benchmarks.md` §22.1). At the fast
+  clock it runs at 72% of copy bandwidth, i.e. essentially at the memory roofline.
 
   This is the answer to the question the project started with. Every ALU-bound primitive loses
   to sixteen cores (0.06-0.5x) and the sponge family wins by 1.6-4x only because x86 has no

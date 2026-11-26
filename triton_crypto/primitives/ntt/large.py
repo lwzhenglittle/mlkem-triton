@@ -35,7 +35,18 @@ STAGE_WARPS = 8
 
 @triton.jit
 def _stage_kernel(
-    X, Y, M, TOTAL, LOG_HALF, W, Q: tl.constexpr, FORWARD: tl.constexpr, BLK: tl.constexpr
+    X,
+    Y,
+    M,
+    TOTAL,
+    LOG_HALF,
+    W,
+    PRE,
+    Q: tl.constexpr,
+    FORWARD: tl.constexpr,
+    FUSE_PRE: tl.constexpr,
+    FUSE_POST: tl.constexpr,
+    BLK: tl.constexpr,
 ):
     """One Stockham pass over a flat butterfly grid.
 
@@ -54,14 +65,25 @@ def _stage_kernel(
     base = blk * M
     u = tl.load(X + base + j, mask=mask, other=0).to(tl.int64)
     v = tl.load(X + base + half + j, mask=mask, other=0).to(tl.int64)
+    if FUSE_PRE:
+        # the negacyclic pre-twiddle is index-dependent only, so the first pass can apply it on
+        # the way in -- saving a whole launch and 16 MB of the transform's 160 MB
+        u = u * tl.load(PRE + base + j, mask=mask, other=1).to(tl.int64) % Q
+        v = v * tl.load(PRE + base + half + j, mask=mask, other=1).to(tl.int64) % Q
     if FORWARD:
         w = tl.load(W + j, mask=mask, other=0).to(tl.int64)
         s = u + v
         s = tl.where(s >= Q, s - Q, s)
         d = u - v
         d = tl.where(d < 0, d + Q, d)  # Triton's `%` is C-truncated: negatives stay negative
+        if FUSE_POST:
+            s = s * tl.load(PRE + base + j, mask=mask, other=1).to(tl.int64) % Q
+            v = d * w % Q
+            v = v * tl.load(PRE + base + half + j, mask=mask, other=1).to(tl.int64) % Q
+        else:
+            v = d * w % Q
         tl.store(Y + base + j, s, mask=mask)
-        tl.store(Y + base + half + j, d * w % Q, mask=mask)
+        tl.store(Y + base + half + j, v, mask=mask)
     else:
         w = tl.load(W + j, mask=mask, other=0).to(tl.int64)
         vw = v * w % Q
@@ -69,6 +91,9 @@ def _stage_kernel(
         s = tl.where(s >= Q, s - Q, s)
         d = u - vw
         d = tl.where(d < 0, d + Q, d)
+        if FUSE_POST:
+            s = s * tl.load(PRE + base + j, mask=mask, other=1).to(tl.int64) % Q
+            d = d * tl.load(PRE + base + half + j, mask=mask, other=1).to(tl.int64) % Q
         tl.store(Y + base + j, s, mask=mask)
         tl.store(Y + base + half + j, d, mask=mask)
 
@@ -211,7 +236,8 @@ class LargeNTT:
         q = self.q
         buf = torch.empty_like(x)
         tables = self.fwd_tables() if direction == "fwd" else self.inv_tables()
-        for tw in tables:
+        pre = self._device_pre(dev)
+        for i, tw in enumerate(tables):
             half = tw.size
             log_half = half.bit_length() - 1
             w = torch.as_tensor(tw, dtype=torch.int32, device=dev)
@@ -222,8 +248,10 @@ class LargeNTT:
                 self.n // 2,
                 log_half,
                 w,
+                pre,
                 Q=q,
                 FORWARD=(direction == "fwd"),
+                FUSE_PRE=(i == 0 and direction == "fwd"),
                 BLK=STAGE_BLK,
                 num_warps=STAGE_WARPS,
             )
@@ -299,8 +327,11 @@ class LargeNTT:
                     self.n // 2,
                     log_half,
                     w,
+                    self._device_pre(dev),
                     Q=q,
                     FORWARD=True,
+                    FUSE_PRE=False,
+                    FUSE_POST=False,
                     BLK=STAGE_BLK,
                     num_warps=STAGE_WARPS,
                 )
@@ -312,9 +343,13 @@ class LargeNTT:
 
         q = self.q
         buf = torch.empty_like(x)
-        for w in self._device_tables(direction, dev):
+        tables = self._device_tables(direction, dev)
+        pre = self._device_pre(dev)
+        post = self._device_post(dev)
+        for i, w in enumerate(tables):
             half = w.numel()
             log_half = half.bit_length() - 1
+            fwd = direction == "fwd"
             _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
                 x,
                 buf,
@@ -322,13 +357,34 @@ class LargeNTT:
                 self.n // 2,
                 log_half,
                 w,
+                pre if fwd or i != len(tables) - 1 else post,
                 Q=q,
-                FORWARD=(direction == "fwd"),
+                FORWARD=fwd,
+                FUSE_PRE=(i == 0 and fwd),
+                FUSE_POST=(i == len(tables) - 1 and not fwd),
                 BLK=STAGE_BLK,
                 num_warps=STAGE_WARPS,
             )
             x, buf = buf, x
         return x
+
+    def _device_post(self, dev):
+        import torch
+
+        key = ("post_table", str(dev))
+        cache = self.__dict__.setdefault("_tbl_cache", {})
+        if key not in cache:
+            cache[key] = torch.as_tensor(self.post(), dtype=torch.int32, device=dev)
+        return cache[key]
+
+    def _device_pre(self, dev):
+        import torch
+
+        key = ("pre_table", str(dev))
+        cache = self.__dict__.setdefault("_tbl_cache", {})
+        if key not in cache:
+            cache[key] = torch.as_tensor(self.pre(), dtype=torch.int32, device=dev)
+        return cache[key]
 
     def _mul_dev(self, x, p_np, dev, q, role: str):
         import torch
@@ -360,8 +416,8 @@ class LargeNTT:
         two radix-2 passes each touch one adjacent pair. It is kept because the arithmetic is
         verified against the radix-2 result and another device may not have that problem.
         """
-        x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
         if self.radix == 4:
+            x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
             return self._run4(x, dev)
         return self._run_cached(x, "fwd", dev)
 
@@ -375,8 +431,7 @@ class LargeNTT:
         return self.inverse_tensor_torch(t, dev)
 
     def inverse_tensor_torch(self, t, dev):
-        y = self._run_cached(t, "inv", dev)
-        return self._mul_dev(y, self.post(), dev, self.q, "post")
+        return self._run_cached(t, "inv", dev)
 
     @staticmethod
     def _mul(x, p, dev, q):

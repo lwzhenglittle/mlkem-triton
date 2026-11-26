@@ -110,6 +110,25 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### The 2^20 NTT reaches the memory roofline: 10.8 -> 1.0 ms in four steps
+
+Folding the negacyclic pre- and post-twiddles into the first and last passes (they are
+index-dependent only, so the stage that already touches every element can apply them) removed one
+launch and 8 MB of traffic per direction, and removed the inverse's separate `x_j *= post_j` pass.
+
+**2^20 forward: 0.98 ms at the top clock, 1.8 ms at the bottom**, twelve alternating runs in one
+process. Against the CPU rival: **70x one core and 5.3x sixteen processes** at the fast end, 39x
+and 2.9x at the slow one. Traffic is 152 MB, so 0.98 ms is 155 GB/s -- **72% of copy bandwidth**,
+i.e. essentially the 0.71 ms memory roofline. The inverse is the same (0.99 ms).
+
+The full arc is 10.81 -> 1.0 ms in four changes, each recorded in `docs/benchmarks.md` §22.1: stop
+rebuilding the twiddle tables per call (-150x), replace an int64 division in the index math with a
+shift (-30%), pick tile 1024 / 8 warps (-2x), and fold the twiddles into the end passes (-2x).
+
+Note the regime change: at the low clock the transform is latency-bound and halving traffic
+(radix-4) buys 10-20%; at the high clock it is bandwidth-bound and at the roofline. A tuning
+decision made in one regime can be wrong in the other.
+
 ### Radix-4 for the 2^20 NTT: half the traffic, 10-20% of the time
 
 `LargeNTT(n, q, radix=4)` fuses two radix-2 stages per pass. Bit-identical to the radix-2 result
