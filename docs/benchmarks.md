@@ -895,3 +895,20 @@ Three things worth reading off it:
 What it does buy: the algorithm is `2^20` in a repository whose in-register kernel stops at 1024,
 it agrees exactly with the numpy reference and the in-register `NTTDomain` at sizes both can do,
 and the pass structure is the one BLAKE3's tree proved.
+
+### 15.2 A rival can silently degrade, and the table will believe it
+
+A full snapshot run once reported Poseidon2 at 1.25x the sixteen-process CPU where every earlier
+window said 0.19x. Nothing about the device had changed: `benchmarks/poseidon2_ref` had been
+rebuilt **without** `RUSTFLAGS="-C target-cpu=native"`, so Plonky3's `Packing::WIDTH` fell back
+to 1 and the binary measured the scalar path -- 736 ns/permutation against 105, a rival 7x too
+slow.
+
+The harness now reads the `lanes` field that binary prints and refuses anything below 4, with the
+rebuild command in the error message. The general form of the lesson: **a ratio is only as
+trustworthy as its denominator**, and a benchmark harness that cannot detect a degraded baseline
+will publish the wrong winner with complete confidence.
+
+The same trap exists for `benchmarks/blake3_ref` (the `blake3` crate picks its SIMD path at
+runtime, so it is safe) and for `benchmarks/ntt_cpu` (a plain `gcc -O3 -march=native` build, where
+`-march=native` is the thing to check).

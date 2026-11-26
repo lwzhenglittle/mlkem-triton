@@ -412,10 +412,23 @@ def _poseidon_exe() -> Path:
 
 
 def _poseidon_rate(exe: str, n: int) -> float:
+    """Packed monty-31 rate, refusing to report the scalar path.
+
+    Plonky3 picks `Packing::WIDTH` at *compile* time from the target features, so a build without
+    `RUSTFLAGS="-C target-cpu=native"` silently measures the scalar path: 736 ns per permutation
+    instead of 105, i.e. a 7x-too-slow rival that made the device row read 1.25x against 16
+    processes instead of 0.19x. The binary prints `lanes`, so this checks rather than trusts.
+    """
     best = 0.0
     for _ in range(3):
         out = subprocess.run([exe, "bench-packed", str(n)], capture_output=True, text=True)
-        best = max(best, json.loads(out.stdout)["mperm_per_s"] * 1e6)
+        data = json.loads(out.stdout)
+        if data["lanes"] < 4:
+            raise RuntimeError(
+                f"the Poseidon2 rival is running the scalar path (lanes={data['lanes']}): "
+                f"rebuild it with RUSTFLAGS='-C target-cpu=native' cargo build --release"
+            )
+        best = max(best, data["mperm_per_s"] * 1e6)
     return best
 
 

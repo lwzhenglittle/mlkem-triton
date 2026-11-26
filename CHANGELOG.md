@@ -94,6 +94,22 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### A 7x-wrong CPU rival, caught by the snapshot, and a guard so it cannot recur
+
+A full `benchmarks/snapshot.py` run reported Poseidon2 at **1.25x sixteen CPU processes** where
+every earlier window said 0.19x. The device had not changed; the *rival* had. `benchmarks/
+poseidon2_ref` had been rebuilt without `RUSTFLAGS="-C target-cpu=native"`, so Plonky3's
+`Packing::WIDTH` fell back to 1 and the binary measured the **scalar** path: 736 ns per
+permutation instead of 105, a rival 7x too slow, which the table then reported as a device win.
+
+`bench_cpu.py` now reads the `lanes` field that binary already prints and refuses to report a
+number below 4, with the rebuild command in the error. The corrected rival puts the row back at
+0.18x.
+
+Two lessons, both already in the docs and both worth repeating: a ratio is only as good as both
+of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
+publish the wrong winner.
+
 ### Radix-4 for the 2^20 NTT: half the traffic, 10-20% of the time
 
 `LargeNTT(n, q, radix=4)` fuses two radix-2 stages per pass. Bit-identical to the radix-2 result
