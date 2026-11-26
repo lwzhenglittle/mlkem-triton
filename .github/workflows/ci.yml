@@ -56,3 +56,26 @@ jobs:
               assert required in names, f"{required} missing from {wheel}"
           print("wheel layout OK")
           PY
+      - name: install the wheel and import it the way a user would
+        run: |
+          # A file can be present in the wheel and still fail to import: `gf2_8_matmul_torch` was
+          # added to gemm.py and documented as an export, but never imported into
+          # `primitives/__init__.py`, so `from triton_crypto.primitives import gf2_8_matmul_torch`
+          # raised ImportError from an installed wheel while passing from a source checkout, where
+          # sys.path hid it. Checking the archive layout cannot see this; importing can.
+          pip install --no-deps dist/*.whl
+          cd "$RUNNER_TEMP"
+          python - <<'PY'
+          import triton_crypto
+          import triton_crypto.primitives as package
+
+          print("version:", triton_crypto.__version__)
+          assert triton_crypto.__file__ and "site-packages" in triton_crypto.__file__, triton_crypto.__file__
+          missing = [n for n in package.__all__ if not hasattr(package, n)]
+          assert not missing, f"__all__ names that do not exist: {missing}"
+          # every documented export table name is exercised by the package's own test suite; here we
+          # only assert the namespace is coherent and the submodules resolve
+          for sub in ("falcon", "lms", "mldsa", "slhdsa", "primitives"):
+              __import__(f"triton_crypto.{sub}")
+          print("installed-wheel import OK:", len(package.__all__), "exports")
+          PY
