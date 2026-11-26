@@ -580,6 +580,24 @@ def main() -> int:
             f"{name:28s} {rival.unit:6s} {one:12.4g} {many:12.4g} {many / one:6.2f}x  {rival.note}"
         )
 
+    # A scale factor above NPROC is physically impossible: sixteen processes on sixteen cores
+    # cannot produce more than sixteen times one core's rate. Three rivals did (Falcon 18.1x,
+    # Falcon-padded 19.2x, BLAKE3 19.2x) because `_parallel_rate` sums per-child *minima*, and a
+    # child that finishes early lets the others' later reps run cheaper. The totals are therefore
+    # upper bounds; see docs/benchmarks.md §15 and benchmarks/probe_16p_method.py.
+    impossible = {
+        name: r["procs16"] / r["one_thread"]
+        for name, r in results["rivals"].items()
+        if r["one_thread"] and r["procs16"] / r["one_thread"] > NPROC
+    }
+    if impossible:
+        print(
+            "\n# WARNING: scale above NPROC is physically impossible -- these are upper bounds:",
+            file=sys.stderr,
+        )
+        for name, scale in sorted(impossible.items(), key=lambda kv: -kv[1]):
+            print(f"#   {name}: {scale:.1f}x of {NPROC} processes", file=sys.stderr)
+
     # A `--merge` used to bump one timestamp for the whole file, so a partial re-measure looked
     # like a complete one -- which is how a rival measured on the wrong code path (Poseidon2, see
     # docs/benchmarks.md §15.2) hid behind a fresh timestamp. `meta.timestamp` is now the OLDEST

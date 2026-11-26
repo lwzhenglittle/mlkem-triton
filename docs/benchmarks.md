@@ -672,6 +672,13 @@ The same probe on Falcon-512 (the other scheme with a liboqs rival, `benchmarks/
 direction, a factor of 1.6. So the bias is not an ML-DSA artefact: the upper bound is 1.6-2.6x
 depending on how many operations fit in one timed region.
 
+**And the bias is visible without any probe, in the baseline file itself**: the `scale` column is
+`16P / 1T`, and sixteen processes on sixteen cores cannot exceed 16x. Three rivals do -- BLAKE3
+19.2x, Falcon-512 18.1x, Falcon-padded 19.2x -- which is a proof that those 16P figures over-count.
+`bench_cpu.py` now prints a warning when a measured scale exceeds `NPROC`. The rows that stay at
+10.5-14x (SHA-3, SHA-2, AES, ChaCha20, Poly1305, the 2^20 NTT) are not provably wrong, but the same
+mechanism applies weakly to them too.
+
 Both harnesses are wrong in opposite directions. The first sums minima taken at different moments --
 when one child finishes, the others speed up, so their later reps are cheaper and the sum
 over-counts. The second times `LibOQS(...)` construction (a `ctypes.CDLL` load, ~1 ms) inside the
