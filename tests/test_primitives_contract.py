@@ -218,3 +218,28 @@ def test_the_bench_labels_do_not_contradict_the_cases():
         for size in ("256", "512", "1024", "2048"):
             if f"{size}x{size}x{size}" in label or f"{size}^3" in label:
                 assert size in doc, f"{name}: label says {size}^3, the case's docstring does not"
+
+
+def test_every_exported_primitive_is_in_the_doc():
+    """The namespace `triton_crypto.primitives` exports is the API a user can call, so every name
+    in it should have a contract in `docs/kernels.md`.
+
+    This is the gap the kernel scan above leaves: it matches `_..._kernel` only, so a *public*
+    function can be added and documented nowhere -- `gf2_8_matmul_torch` was, for four commits.
+    A first attempt at this test demanded an entry for every public `def` in the package, which is
+    wrong: the numpy references and helpers are internal, and the doc's contract is the exported
+    namespace.
+    """
+    import ast
+
+    doc = KERNELS_DOC.read_text()
+    src = (TESTS.parent / "triton_crypto" / "primitives" / "__init__.py").read_text()
+    exported = {
+        alias.asname or alias.name
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert len(exported) > 50, "the export scan is wrong, not the tree"
+    missing = sorted(name for name in exported if name not in doc)
+    assert not missing, f"exported from primitives but absent from docs/kernels.md: {missing}"

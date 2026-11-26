@@ -72,6 +72,35 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 
 ---
 
+## The exported surface of `triton_crypto.primitives`
+
+Everything the package exports, in one place. A test asserts that every name here appears in this
+document, so an export cannot be added without a contract; the sections below give the arguments
+and the traps for the ones with a kernel behind them.
+
+| export | what it is |
+|---|---|
+| `LargeNTT` / `NTTDomain` / `BABYBEAR_NTT` / `KYBER` / `DILITHIUM` / `BABYBEAR` | the multi-pass NTT class and the prime/NTT parameter sets it takes |
+| `PrimeField` / `MONT_R` | Montgomery arithmetic helpers used by the wide domains |
+| `Poseidon2` / `BABYBEAR_POSEIDON2_16` | the permutation class and its BabyBear width-16 parameters |
+| `SHA3_224` / `SHA3_256` / `SHA3_384` / `SHA3_512` / `SHAKE128` / `SHAKE256` | sponge configurations (rate/domain constants) |
+| `HASHES` / `HashFn` | the registry `hash_np` / `hash_np_batch` look names up in |
+| `DOMAIN_SHA3` / `DOMAIN_SHAKE` | the pad bytes those configurations use |
+| `IV256` / `K256` / `IV512` / `K512` | SHA-2 initial values and round constants |
+| `annotations` | a `__future__` re-export; harmless, not an API |
+| `keccak_f_ref` | scalar Keccak-f[1600], the oracle for the kernel |
+| `hash_np` / `hash_np_batch` / `pad_torch` / `pad_batch` / `pad10star1` / `padded_len` | the sponge reference and its padding helpers |
+| `ntt_np` / `intt_np` / `mul_np` / `negacyclic_conv_np` / `bitrev` | the NTT reference path (`ntt/ref.py`, `fields.py`) |
+| `large_ntt_np` / `large_ntt_torch` | the 2^k multi-pass path, numpy and device |
+| `poseidon2_permute_np` | the Plonky3-shaped reference permutation |
+| `gemm_int8_np` / `gemm_int8_torch` | exact int8 GEMM (the matrix-unit substrate) |
+| `gf2_8_matmul_torch` | **GF(2^8) product from 64 int8 GEMMs** — see its own entry below |
+| `aes128_expand_key_np` / `aes128_encrypt_block_np` / `aes128_ctr_np` / `aes128_ctr_torch` / `t_table` | AES reference and the T-table device path |
+| `chacha20_keystream_np` / `chacha20_keystream_torch` | ChaCha20 keystream, reference and device |
+| `poly1305_np_batch` / `poly1305_torch` / `chacha20_poly1305_torch` / `chacha20_poly1305_open_torch` | Poly1305 and the AEAD, reference and device |
+| `blake3_hash_np` / `blake3_hash_torch` | BLAKE3 reference and the tree-hash device path |
+| `compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on |
+
 ## Primitives
 
 ### `keccak_f_kernel(X, OUT, n, BLOCK)` — `primitives/keccak.py`
@@ -389,6 +418,26 @@ from the message digits), so a fixed 255-step loop would be ~2× the average wor
 rows are sorted by `START` on the host and the kernel exits per block once its rows are done. And
 the value starts at byte 23, i.e. three bytes into a word, so the block words are assembled with
 `(v[k] << 8) | (v[k+1] >> 24)` shifts — cheaper than loading the value as bytes.
+
+### `gf2_8_matmul_torch(a, b, device=None, planes=None)` — `primitives/gemm.py`
+
+A product in GF(2^8) with the AES polynomial `x^8 + x^4 + x^3 + x + 1`, assembled from int8 GEMMs.
+This is the construction `PLAN_ffgemm.md` rests on, exposed so the assumption has an end-to-end
+number (`benchmarks/../probes/gf2-8-matmul-probe.py`, `docs/benchmarks.md` §19.3).
+
+| argument | shape | dtype | meaning |
+|---|---|---|---|
+| `a` | `[M, K]` | anything `np.asarray` reads as `uint16` | byte values |
+| `b` | `[K, N]` | same | byte values |
+| `device` | -- | -- | resolved the same way as every launcher here |
+| `planes` | -- | -- | `8` (both operands full bytes) or `1` for binary operands |
+
+Returns an `int32` tensor on the device. It is *not* a `@triton.jit` kernel: it issues
+`64` (or `planes**2`) `gemm_int8_torch` calls and XORs the reduction-masked results together, so its
+cost is that many GEMMs -- measured at **1/55-1/61 of the int8 rate** depending on size, which is
+the number that decides whether the matrix unit is worth it for a finite field.
+
+Raises `ValueError` when the inner dimensions disagree.
 
 ## Generic (scheme-agnostic)
 
