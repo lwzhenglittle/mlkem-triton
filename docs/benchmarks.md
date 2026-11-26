@@ -1041,23 +1041,27 @@ identity is exactly the kind of bug that a same-shape random test will not find.
 `PLAN_ffgemm.md` rests on one assumption -- that the matrix unit can carry a finite-field product
 by splitting both operands into bit planes. `primitives/gemm.py` now exposes that construction
 (`gf2_8_matmul_torch`, 64 int8 GEMMs XOR-ed through the reduction masks), so the assumption has a
-number. `python probes/gf2-8-matmul-probe.py --n 512`:
+number. `python probes/gf2-8-matmul-probe.py --n 1024` (and `--n 512` for the small case):
 
-| | 512^3 | rate |
-|---|---:|---:|
-| one int8 GEMM (binary operands) | 0.16 ms | **843 GMAC/s** |
-| **GF(2^8) product, same size** | **8.76 ms** | **15.3 GMAC/s** |
-| numpy, the same 64-plane recipe | 5 572 ms | 0.024 GMAC/s |
+| size | one int8 GEMM | **GF(2^8) product** | ratio | numpy, same recipe |
+|---|---:|---:|---:|---:|
+| 512^3 | 805–843 GMAC/s | **13.7–15.3 GMAC/s** | 54–56x | 0.024 GMAC/s |
+| 1024^3 | **2 040 GMAC/s** | **33.5–33.8 GMAC/s** | 60–61x | not run (minutes) |
+
+**The rate is size-dependent by 2.2x, and the small size is the misleading one**: at 512^3 the int8
+GEMM itself only reaches 805 GMAC/s (it is launch-bound), while at 1024^3 it reaches 2 040 -- so
+the field product goes with it. Quote 1024^3, and say so, exactly as §19 does for the GEMM row
+(1.94 TMAC/s at 1024 against 3.96 at 2048).
 
 Three things follow.
 
-- **The 64-plane decomposition costs 55x, not 64x** -- the reduction masks fold some planes
-  together -- so a GF(2^8) multiply runs at about **1/55 of the int8 rate**.
+- **The 64-plane decomposition costs 54–61x, not 64x** -- the reduction masks fold some planes
+  together -- so a GF(2^8) multiply runs at about **1/57 of the int8 rate** at its best size.
 - **Against numpy the device is 636x faster**, but that number flatters the GPU: numpy has no int8
   GEMM (it loops), while a VNNI-tuned CPU library would be much closer. This is an upper bound on
   the GPU's advantage, not the advantage.
-- **The honest summary for the mainline**: a GF(2^8) product at 15 GMAC/s is the ceiling the matrix
-  unit offers here, and whether that beats a bit-sliced CPU implementation is the question FFGEMM
+- **The honest summary for the mainline**: a GF(2^8) product at **33 GMAC/s (1024^3)** is the
+  ceiling the matrix unit offers here, and whether that beats a bit-sliced CPU implementation is the question FFGEMM
   still has to answer with its own rival. What this rules out is the optimistic reading of the
   3.96 TMAC/s int8 figure -- the field product is 55x cheaper per multiply before any
   field-specific overhead.

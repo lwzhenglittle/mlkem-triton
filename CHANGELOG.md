@@ -353,8 +353,10 @@ assumption now has a measurement, because `primitives/gemm.py` exposes the const
 `gf2_8_matmul_torch` (64 int8 GEMMs XOR-ed through the reduction masks) and
 `probes/gf2-8-matmul-probe.py` times it end to end.
 
-At 512^3: one int8 GEMM 843 GMAC/s, the **GF(2^8) product 15.3 GMAC/s** (55x, not 64x -- the
-reduction masks fold some planes), and the same 64-plane recipe in numpy at 0.024 GMAC/s. The
+At 1024^3: one int8 GEMM **2 040 GMAC/s**, the **GF(2^8) product 33.5 GMAC/s** (60x, not 64x --
+the reduction masks fold some planes); at 512^3 the same code reads 15.3 GMAC/s, because the int8
+GEMM itself is launch-bound there (805 vs 2 040 GMAC/s). The first version of this entry quoted the
+small size only, which is the misleading one. The
 device is 636x faster than numpy there, which is an *upper bound* on its advantage rather than the
 advantage: numpy has no int8 GEMM at all, while a VNNI-tuned CPU library would be much closer.
 
