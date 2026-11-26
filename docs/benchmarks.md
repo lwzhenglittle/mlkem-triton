@@ -932,7 +932,12 @@ where one radix-2 pass is left over. Paired in one window, eight alternating rou
 
 So halving the traffic does **not** halve the time: the transform is limited by pass latency and
 by the modular multiplies, not by bytes. That also means the "0.74 ms roofline" is not the
-binding constraint at this size, and radix-8 would not be either.
+binding constraint at this size.
+
+**radix-8 is an inference from that, not a measurement** -- said plainly so nobody quotes it as
+one. Going from 10 passes to 7 would be a 30% cut in passes, and the observed elasticity here is
+11-19% for a 47% cut (19 -> 10 passes), so radix-8 projects to roughly **4-6%** at the same
+per-pass cost -- below the noise the clock alone produces on this iGPU. It was not implemented.
 
 **A correction worth keeping**: an earlier reading of the same numbers, taken across two windows,
 concluded radix-4 was *slower* (2.63 against 2.13 ms). The paired measurement above says the
