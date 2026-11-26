@@ -160,12 +160,14 @@ Representative device-side numbers; the baseline is measured on the same machine
 | ML-DSA-44 verify | 4096 | **1.8 µs/op** (B390) | 10.9× vs liboqs 1T |
 | ML-DSA-44 sign | 1024 | **43 µs/sig** (B390) | 2.3× vs liboqs 1T |
 | SLH-DSA-SHAKE-128f verify | 4096 | **47.8 µs/op** (B390) | 27.9× vs liboqs 1T |
-| Falcon-512 verify | 4096 | **0.61 µs/op** (B390) dev core, 24.5 µs e2e | 3.4× vs liboqs 16P, 62× vs 1T |
-| BabyBear NTT, 2^20 points | 1 | **2.2 ms** (B390) | **2.4× faster** than 16 CPU processes, 31× vs 1T |
-| BLAKE3, 1 KiB messages | 65536 | **10.2 GB/s** (B390) | 3.5× vs 1T, 0.19× vs 16 processes |
+| Falcon-512 verify | 4096 | **0.61 µs/op** (B390) dev core, 16.7 µs e2e | 3.7× vs liboqs 16P, 66.8× vs 1T |
+| BabyBear NTT, 2^20 points | 1 | **0.85–1.2 ms** (B390) | **2.9–4.1× faster** than 16 CPU processes, 40–57× vs 1T |
+| BLAKE3, 1 KiB messages | 65536 | **10.0 GB/s** (B390) | 3.5× vs 1T, 0.18× vs 16 processes |
 | LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.
+Every B390 row is from `benchmarks/snapshot-20261126T171639Z.md` (one window); the clock moves
+these by up to 2x between sessions, so treat the ratios as the durable part, not the absolutes.
 GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted; the
 `vs 1T` / `vs 16P` columns come from `benchmarks/bench_cpu.py` measured in the same window, and
 `benchmarks/snapshot.py` runs the whole set at once. The one row that beats sixteen CPU
