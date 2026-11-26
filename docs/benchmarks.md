@@ -906,6 +906,14 @@ not, and only the paired run can tell.
 Radix-4 stays opt-in (`radix=2` is the default): it is 10-20% faster for twice the code and one
 extra kernel, and the win is smaller than the run-to-run spread.
 
+**What that rules out.** Radix-8 is not the next step either: it would cut the traffic another
+30% for even more arithmetic per pass, and the radix-4 experiment already showed that traffic is
+not what binds. The remaining 3x to the traffic roofline is per-pass latency and the two modular
+multiplies per butterfly. The directions with signal are: fold the negacyclic pre-twiddle into the
+first pass (one launch and 8 MB less), replace `%` with a Barrett reduction on int32
+intermediates, and collapse the tail stages (`m <= 64`) into a single register-resident pass that
+does one whole block per program.
+
 The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
 `gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one
 process with 16 OpenMP threads lands in between at 14.8 ms).
