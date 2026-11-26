@@ -11,31 +11,54 @@ window, list at the top of each section below); every CPU number is from
 `benchmarks/cpu_baseline.json` (OpenSSL / liboqs / Plonky3, same machine, 16 concurrent
 processes). Sections in `docs/benchmarks.md` are cited where the detail lives.
 
-## 0. The one rule that survives everything else
+## 0. The rule, corrected: it is three factors, not one
 
-**Whether a pattern is worth porting is decided by whether the CPU has hardware support for
-it, far more than by anything about the GPU.** Same iGPU, same measurement method:
+The first version of this table said **"whether a pattern is worth porting is decided by whether
+the CPU has hardware support for it"**. That is wrong, and this project's own numbers refute it in
+both directions:
 
-| primitive | device | CPU 1T | CPU 16P | vs 16P | why |
-|---|---:|---:|---:|---:|---|
-| SHA3-256 | 31.5 GB/s | 0.72 GB/s | 7.9 GB/s | **4.00x** | x86 has no Keccak instruction |
-| SHA-256 | 78.0 GB/s | 4.17 GB/s | 49.4 GB/s | 1.58x | SHA-NI exists but is 2-3x slower than the device |
-| ChaCha20 | 14.1 GB/s | 4.73 GB/s | 29.1 GB/s | 0.49x | AVX-512 is enough |
-| AES-128-CTR (T-table) | 10.6 GB/s | 13.8 GB/s | 166 GB/s | 0.06x | AES-NI/VAES is unbeatable |
-| Poly1305 | 11.6 GB/s | 7.54 GB/s | 75.8 GB/s | 0.15x | AVX-512 vectorises the 26-bit limbs |
+- **SHA-256 has SHA-NI and the device still wins 1.55x.** A dedicated instruction does not by
+  itself beat 96 EUs of width.
+- **BLAKE3 has no CPU instruction at all and the device loses 0.18x.** No instruction does not
+  mean the CPU is slow -- its AVX-512 implementation does 16 blocks at once.
 
-The absolute device throughput barely varies across those rows (10-31 GB/s for everything that
-is ALU-bound). The 100x spread in the last column comes entirely from the CPU side.
+The rule that does describe all nine measured rows: **the CPU's best implementation decides it, and
+that is set by three factors together.**
 
-Two corollaries this project ran into:
+1. **A dedicated instruction** (AES-NI, PCLMUL, SHA-NI). Necessary to lose, not sufficient.
+2. **How wide a SIMD the shape admits** -- BLAKE3 16 ways, ChaCha20 8-16, Poly1305's 26-bit limbs
+   vectorise cleanly, versus Keccak's 4 usable lanes.
+3. **How long the serial dependency chain is** -- Keccak's 24 rounds and SHA-2's chain leave a core
+   latency-bound, so the CPU can only scale by adding cores; the GPU hides the latency with threads.
 
-- **A single iGPU core-equivalent is not the competition.** Comparing against one CPU thread
-  flatters every port by 3-10x. `eval-next-steps-1.0.0.md` §2 has the numbers: a CPU baseline
-  taken during a build (or on a `powersave` governor at 400 MHz) is 3x slower than the same
-  code measured idle, which is how "5.6x vs CPU" became "1.0-1.8x" without touching the device
-  code (`docs/benchmarks.md` §11 now warns about it).
-- **The interesting GPU shapes are the ones the CPU cannot vectorise**: batched independent
-  small objects (signature verification), hot small tables, and the matrix unit.
+| primitive | device | CPU 1T | CPU 16P | vs 16P | instruction | SIMD width | chain |
+|---|---:|---:|---:|---:|---|---|---|
+| SHA3-256 | 31.6 GB/s | 0.72 GB/s | 7.64 GB/s | **4.11x** | none | 4 lanes | 24 rounds |
+| SHA-256 | 78.0 GB/s | 4.27 GB/s | 50.5 GB/s | 1.55x | **SHA-NI** | serial | 64 rounds |
+| SHA-512 | 47.6 GB/s | 1.12 GB/s | 13.2 GB/s | **3.52x** | none here | serial | 80 rounds |
+| ChaCha20 | 14.3 GB/s | 4.76 GB/s | 31.7 GB/s | 0.41x | none | 8-16 lanes | short |
+| Poly1305 | 11.7 GB/s | 7.55 GB/s | 87.2 GB/s | 0.12x | **PCLMUL** | 26-bit limbs | short |
+| AES-128-CTR | 10.7 GB/s | 14.1 GB/s | 165 GB/s | 0.06x | **AES-NI** | VAES 8-16 | short |
+| BLAKE3 | 10.0 GB/s | 2.91 GB/s | 56.0 GB/s | 0.18x | none | **16 lanes** | short |
+| Poseidon2 | 3.3 GB/s | 9.6M/s | 147M/s | 0.19x | none | Plonky3 asm | long |
+| 2^20 NTT | 190 GB/s | 21/s | 290/s | **5.92x** | none | memory-bound | n/a |
+
+(Device and CPU columns are from one window: `benchmarks/snapshot-20261126T171639Z.md` and the
+`cpu_baseline.json` written in the same run. Poseidon2 and the NTT are counted in permutations and
+transforms, not bytes.)
+
+**The device's ALU-bound throughput barely varies** (10-31 GB/s across every row). The 100x spread
+in the last column is entirely the CPU side -- which is why "can the GPU do this pattern" and "is
+the GPU worth it" have different answers.
+
+Two corollaries that still hold:
+
+- **A single iGPU core-equivalent is not the competition.** Against one CPU thread every port looks
+  3-10x better. `eval-next-steps-1.0.0.md` §2 has the numbers: a baseline taken during a build (or
+  on a `powersave` governor at 400 MHz) is 3x slower than the same code measured idle, which is how
+  "5.6x vs CPU" became "1.0-1.8x" without touching the device code (`docs/benchmarks.md` §11).
+- **The interesting GPU shapes are the ones the CPU cannot vectorise**: batched independent small
+  objects (signature verification), hot small tables, and the matrix unit.
 
 ## 1. The patterns
 
