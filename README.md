@@ -28,7 +28,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.96 TMAC/s at n = 2048), the GF(2^k) GEMM substrate |
 
-**1043 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
+**1125 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.
@@ -158,11 +158,18 @@ Representative device-side numbers; the baseline is measured on the same machine
 | ML-DSA-44 verify | 4096 | **1.8 µs/op** (B390) | 10.9× vs liboqs 1T |
 | ML-DSA-44 sign | 1024 | **43 µs/sig** (B390) | 2.3× vs liboqs 1T |
 | SLH-DSA-SHAKE-128f verify | 4096 | **47.8 µs/op** (B390) | 27.9× vs liboqs 1T |
-| Falcon-512 verify | 4096 | **0.65 µs/op** (B390) | 3.2× vs liboqs 16P, 35× vs 1T |
+| Falcon-512 verify | 4096 | **0.61 µs/op** (B390) dev core, 24.5 µs e2e | 3.4× vs liboqs 16P, 62× vs 1T |
+| BabyBear NTT, 2^20 points | 1 | **2.2 ms** (B390) | **2.4× faster** than 16 CPU processes, 31× vs 1T |
+| BLAKE3, 1 KiB messages | 65536 | **10.2 GB/s** (B390) | 3.5× vs 1T, 0.19× vs 16 processes |
 | LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.
-GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted. Full tables,
+GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted; the
+`vs 1T` / `vs 16P` columns come from `benchmarks/bench_cpu.py` measured in the same window, and
+`benchmarks/snapshot.py` runs the whole set at once. The one row that beats sixteen CPU
+processes is the one whose working set cannot fit in registers (the 2^20 NTT, 160 MB of traffic
+per transform); the ALU-bound primitives are 0.06–0.5× and the sponge family wins 1.5–4× because
+x86 has no Keccak instruction. Full tables,
 per-kernel breakdowns and measurement conventions: [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Why ML-KEM is fast
@@ -175,11 +182,13 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**891 tests**, five layers:
+**1125 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;
 - **ACVP** — ML-KEM, ML-DSA sigVer/keyGen/sigGen, SLH-DSA keyGen/sigVer, LMS sigVer;
+- **independent oracles** — OpenSSL's `EVP_MAC` for Poly1305, `openssl enc` for AES,
+  Plonky3 for Poseidon2, the official Rust BLAKE3, liboqs for Falcon;
 - **cross-implementation** — byte-exact ML-KEM keygen against kyber-py, ML-DSA against liboqs;
 - **packaging/API** — version, README imports, `find_packages()`, public exports, input handling.
 
