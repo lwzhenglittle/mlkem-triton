@@ -193,3 +193,28 @@ def test_the_acvp_directories_are_populated():
             else:
                 total += sum(len(data[k]) for k in ("testGroups", "groups") if k in data)
         assert total >= floor, f"data/{name}: {total} groups, expected >= {floor}"
+
+
+def test_the_bench_labels_do_not_contradict_the_cases():
+    """`--list` prints these labels, so a label is the first thing a reader sees.
+
+    One said `gemm-int8 ... 256x256x256` while the case had moved to 1024^3 -- the same
+    size-drift that made a headline number quotable at the wrong scale. Cheap to pin: the label
+    must mention the size the case's own docstring states.
+    """
+    import ast
+    import re
+
+    src = (Path(__file__).resolve().parent.parent / "benchmarks" / "bench_primitive.py").read_text()
+    labels = dict(re.findall(r'^    "([a-z0-9\-\^]+)": "([^"]+)",$', src, re.M))
+    docs = {
+        node.name: ast.get_docstring(node) or ""
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.FunctionDef) and node.name.startswith("bench_")
+    }
+    case_for = {"gemm-int8": "bench_gemm_int8", "ntt-2^20": "bench_ntt_large"}
+    for name, fn in case_for.items():
+        label, doc = labels[name], docs[fn]
+        for size in ("256", "512", "1024", "2048"):
+            if f"{size}x{size}x{size}" in label or f"{size}^3" in label:
+                assert size in doc, f"{name}: label says {size}^3, the case's docstring does not"

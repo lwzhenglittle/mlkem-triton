@@ -359,9 +359,9 @@ WHAT = {
     "poly1305": "Poly1305 over --size-byte messages (multiple of 16)",
     "chacha20-poly1305": "ChaCha20-Poly1305 seal (encrypt + tag), no AAD",
     "aes128-ctr": "AES-128-CTR through a T-table (the gather counter-example)",
-    "gemm-int8": "exact int8 GEMM, 256x256x256 (the GF(2^k) GEMM substrate)",
+    "gemm-int8": "exact int8 GEMM at 1024^3 (the GF(2^8) product substrate; §19 has the scaling)",
     "blake3": "BLAKE3 (tree hash), --size-byte messages",
-    "ntt-2^20": "BabyBear negacyclic NTT, 2^20 points (multi-pass)",
+    "ntt-2^20": "BabyBear negacyclic NTT, 2^20 points (multi-pass, radix from LargeNTT)",
 }
 
 
