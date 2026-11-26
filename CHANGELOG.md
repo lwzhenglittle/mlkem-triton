@@ -346,6 +346,26 @@ with a fresh keypair and nonce per run, and this build offers no way to freeze i
 -1). The module docstring now says so, points at the hunting probe, and records what it found. A
 test that cannot reproduce its own failure should say so out loud rather than look green.
 
+### The NTT's CPU rival was 1.5x too slow, and the ratio moved
+
+`docs/benchmarks.md` §6.5 of the overnight report named "the CPU rival is the fastest available,
+not the fastest possible" as the one limitation that could overturn a headline. It was worth
+checking, and it was partly true.
+
+Two attempts at a better rival:
+
+- **division-free reduction: 123x slower.** `% Q` compiles to a multiply-shift because `Q` is a
+  constant, so replacing it with the BabyBear fold (2^31 = 2^27 - 1) made the C code *worse* -- the
+  fold needs four rounds and a subtraction loop from a 62-bit product. The GPU version of the same
+  experiment measured 1.02x; here the compiler was already optimal.
+- **radix-4: 1.48x faster.** Fusing two stages per pass halves the traffic: 48.7 ms against 71.9
+  on one thread, 3.45 ms against 5.25 per transform over sixteen processes.
+
+The rival is now the radix-4 build, and the device's ratios are recomputed against it: **40-57x one
+core and 2.9-4.1x sixteen processes**, where the report had said 70x and 5.9x. The conclusion holds
+(the device still wins against sixteen processes) but by less than the first number claimed -- which
+is the point of writing §6.5 down.
+
 ### The GF(2^8) product gets a number: 15.3 GMAC/s, 1/55 of the int8 rate
 
 `PLAN_ffgemm.md` assumes the matrix unit can carry a finite-field product via bit planes. That

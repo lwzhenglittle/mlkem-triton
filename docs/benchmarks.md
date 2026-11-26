@@ -880,7 +880,7 @@ per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **0.88–1.2 ms** | 69.9 ms | 5.25 ms | **57–79x** | **4.3–5.9x** |
+| 2^20 forward NTT | **0.85–1.2 ms** | **48.3 ms** | **3.45 ms** | **40–57x** | **2.9–4.1x** |
 | traffic (10 passes x 8 MB, radix-4) | 84 MB | | | | |
 | last window measured | 1.36 ms -> 38.9x / 2.92x | | | | |
 | achieved (fast clock) | 95 GB/s (**44%** of copy) | 2.4 GB/s | 30 GB/s | | |
@@ -974,9 +974,22 @@ an alternating A/B on a 2^20 multiplies kernel -- inside the noise -- and needed
 round to be correct at all, which would have made it slower. Recorded so the next attempt starts
 from the measurement.
 
-The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
-`gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one
-process with 16 OpenMP threads lands in between at 14.8 ms).
+The CPU rival is **`benchmarks/ntt_large_cpu_rival_r4.c`** -- the same Stockham algorithm at
+**radix-4**, `gcc -O3 -march=native -fopenmp`, with 16P being sixteen *processes* at
+`OMP_NUM_THREADS=1`.
+
+**The rival got stronger during this work, and the ratios moved with it.** Two attempts:
+
+- *division-free reduction*: `% Q` compiles to a multiply-shift because `Q` is a compile-time
+  constant, so hand-rolling the BabyBear fold (2^31 = 2^27 - 1) made the C code **123x slower** --
+  the fold converges too slowly from a 62-bit product and needed a subtraction loop. Same lesson as
+  the GPU Barrett probe (§22.2), much more sharply.
+- *radix-4*: fusing two stages per pass halves the traffic and is **1.48x faster on one thread**
+  (48.7 ms against 71.9), which moves the device's `vs 16P` from 2.9-6.2x to **2.9-4.1x**.
+
+So the earlier "70x one core, 5.9x sixteen processes" was computed against a rival that was 1.5x
+too slow. The conclusion survives -- the device still wins against sixteen processes -- but by less
+than the first number claimed, and that is exactly what §6.5 of the overnight report warned about.
 
 Three things worth reading off it:
 

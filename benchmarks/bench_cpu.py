@@ -361,7 +361,7 @@ def blake3_pair(nbytes: int = 1 << 20) -> tuple[float, float]:
 
 
 def _ntt_cpu_pair(logn: int = 20) -> tuple[float, float]:
-    """2^logn BabyBear NTT: one thread, and sixteen concurrent single-thread processes.
+    """2^logn BabyBear NTT (radix-4 build): one thread, and sixteen concurrent single-thread processes.
 
     OpenMP inside one process is *not* the convention here (see `docs/benchmarks.md` §1: threads
     do not scale on this hybrid part), so the 16-way figure is sixteen processes. For reference,
