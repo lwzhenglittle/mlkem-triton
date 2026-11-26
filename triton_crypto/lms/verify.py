@@ -17,6 +17,7 @@ import struct
 import numpy as np
 import torch
 
+from .._inputs import as_bytes_list
 from ..devices import resolve_device
 from ..primitives import sha2 as _sha2
 from . import kernels as _kernels
@@ -187,17 +188,68 @@ class Verifier:
 
     # ---------------- HSS ----------------
     def verify(self, messages, signatures) -> np.ndarray:
-        msgs = [bytes(m) for m in messages]
-        sigs = [bytes(s) for s in signatures]
-        out = np.zeros(len(msgs), dtype=bool)
-        if not msgs:
+        msgs = as_bytes_list(messages, "message")
+        sigs = as_bytes_list(signatures, "signature")
+        n = len(msgs)
+        out = np.zeros(n, dtype=bool)
+        if n == 0:
             return out
-        buckets: dict[int, list[int]] = {}
-        for i, m in enumerate(msgs):
-            buckets.setdefault(len(m), []).append(i)
-        for length, idxs in buckets.items():
-            out[idxs] = self._verify_group([msgs[i] for i in idxs], [sigs[i] for i in idxs], length)
+        if len(sigs) != n:
+            raise ValueError(f"got {n} messages but {len(sigs)} signatures")
+        # A malformed signature is invalid, not an exception: reject short/absurd level
+        # counts here and let the kernel path handle the rest. Previously a single `bytes`
+        # message became a list of integer items and raised IndexError.
+        valid: list[int] = []
+        for i, sig in enumerate(sigs):
+            if len(sig) < 4:
+                continue
+            # RFC 8554 §6: the HSS signature starts with N_spk = N - 1, not with N.
+            nspk = struct.unpack(">I", sig[:4])[0]
+            if nspk + 1 != self.levels or self._sig_size(sig) != len(sig):
+                continue
+            valid.append(i)
+        if not valid:
+            return out
+        buckets: dict[tuple[int, int], list[int]] = {}
+        for i in valid:
+            buckets.setdefault((len(msgs[i]), len(sigs[i])), []).append(i)
+        for (length, _sig_len), idxs in buckets.items():
+            try:
+                out[idxs] = self._verify_group(
+                    [msgs[i] for i in idxs], [sigs[i] for i in idxs], length
+                )
+            except (ValueError, IndexError, RuntimeError, struct.error):
+                # invalid embedded type codes / truncated structures: nothing verifies
+                out[idxs] = False
         return out
+
+    def _sig_size(self, sig: bytes) -> int | None:
+        """Expected signature length, read from the embedded public-key/type words.
+
+        HSS level i's signature contains the level-(i+1) public key, whose size depends on
+        the *next* set (levels may mix, e.g. RFC 8554 case 2), so the walk needs the actual
+        headers. Returns ``None`` for an unsupported or truncated chain.
+        """
+        cur = self.pk
+        off = 4  # N_spk
+        for level in range(self.levels):
+            if len(cur) < 8:
+                return None
+            try:
+                s = get(*struct.unpack(">II", cur[:8]))
+            except ValueError:
+                return None
+            off += s.sig_size
+            if level + 1 < self.levels:
+                if len(sig) < off + 8:
+                    return None
+                try:
+                    ns = get(*struct.unpack(">II", sig[off : off + 8]))
+                except ValueError:
+                    return None
+                off += ns.pk_size
+                cur = sig[off - ns.pk_size : off]
+        return off
 
     def _verify_group(self, msgs: list[bytes], sigs: list[bytes], length: int) -> np.ndarray:
         dev = self.device
@@ -219,14 +271,14 @@ class Verifier:
 
         ok = torch.ones(rows, dtype=torch.bool, device=dev)
         sig_off = 4
-        for level in range(self.levels - 1):
+        for _ in range(self.levels - 1):
             s = get(*struct.unpack(">II", cur_pub[0, :8].cpu().numpy().tobytes()))
-            if level > 0:
-                # each row now has its own public key; the parameter set must agree across the batch
-                pass
             sig_t = all_sigs[:, sig_off : sig_off + s.sig_size]
-            # the signed public key follows the LMS signature in the HSS blob
-            next_pub = all_sigs[:, sig_off + s.sig_size : sig_off + s.sig_size + s.pk_size]
+            # The signed public key follows the LMS signature; its size comes from its own
+            # header (the next level may use a different parameter set).
+            nxt = sig_off + s.sig_size
+            ns = get(*struct.unpack(">II", all_sigs[0, nxt : nxt + 8].cpu().numpy().tobytes()))
+            next_pub = all_sigs[:, nxt : nxt + ns.pk_size]
             ok &= self._header_ok(sig_t, s)
             root = self._lms(cur_pub, next_pub, sig_t, s)
             ok &= (root == cur_pub[:, 24 : 24 + s.m]).all(dim=1)
@@ -241,3 +293,8 @@ class Verifier:
         root = self._lms(cur_pub, msg_t, sig_t, s)
         ok &= (root == cur_pub[:, 24 : 24 + s.m]).all(dim=1)
         return ok.cpu().numpy()
+
+
+def verify_batch(pub: bytes, messages, signatures, device=None) -> np.ndarray:
+    """One-shot batched verification under one HSS public key."""
+    return Verifier(pub, device=device).verify(messages, signatures)

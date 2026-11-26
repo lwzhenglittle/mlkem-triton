@@ -1,15 +1,65 @@
 # Changelog
 
+## [0.7.2] — API, packaging and input-contract hardening
+
+Fixes the P0/P1 findings of the internal primitives-quality review (`eval-primitives-quality.md`).
+No algorithm changed; the device math is the same code, now with the contracts it claimed.
+
+**Packaging and API**
+
+- Version metadata (0.3.0) finally matches the changelog; `pyproject.toml` and
+  `triton_crypto.__version__` are both 0.7.2.
+- `triton_crypto/lms/` now has an `__init__.py` — without it `setuptools.find_packages()` silently
+  omitted the whole subpackage from wheels. Exports `Verifier`, `LMSSet`, `get`, `from_name`,
+  `ALL_SETS`, `verify_batch`.
+- `triton_crypto.mldsa` exports `Signer` / `sign_batch`; `triton_crypto.slhdsa` exports `Verifier` /
+  `verify_batch`. The README examples that were broken now run, and a test executes every README
+  import line.
+- SHA3-224 and SHA3-384 added (`HashFn.hash` and 1-D `HashFn.hash_torch` too).
+
+**ML-KEM**
+
+- `decaps_torch` / `encapsulate_torch` copy non-contiguous inputs and validate dtype, shape,
+  device and `B`. A transposed view used to return a wrong key without an error.
+- Empty batches return empty arrays instead of raising `RuntimeError: stride(-1)`.
+- FIPS 203 §7.2: `Encapsulator` rejects a non-canonical `ek` (any 12-bit coefficient ≥ q);
+  `validate=False` is the explicit escape hatch for formally-invalid vectors.
+- `KeyGenerator.generate` uses `secrets.token_bytes` (not NumPy PCG64) and accepts `rng=` /
+  `seeds=` for deterministic tests.
+
+**Input normalisation**
+
+- One shared `_inputs.as_bytes_list` / `as_batch_bytes`: one `bytes` is one item, 1-D arrays are one
+  item, lists are length-checked per item. This fixes SLH-DSA's single-`bytes` messages (they
+  returned 1952 `False` values), 1-D signature arrays, LMS single-`bytes` messages (`IndexError`),
+  and ML-KEM's `[31, 33]` list being accepted as two 32-byte messages.
+
+**Safety / robustness**
+
+- Generated-source cache is per-user `0700` with `0600` files and `O_EXCL` writes instead of
+  predictable names in `/tmp`.
+- GEMM column loads are masked (B is not padded); the `_zero_ch.expand` out-of-bounds read in
+  signing is gone (`mac_kernel(..., ZERO_CH)` constexpr branch).
+- `NTTDomain` validates q (prime, odd, int64-safe), N, layers and ζ; `ntt_torch` refuses values
+  that do not fit int32 instead of truncating; `intt_torch` exposes `mont`.
+- SHA-2's block count is a runtime kernel argument (one compile per word size) and `compress_np`
+  validates `bits` / block length.
+- Public `assert`s became `ValueError`/`TypeError`; LMS/SLH malformed signatures return `False`,
+  batch-size mismatches raise, and HSS's `N_spk` and embedded public-key lengths are validated.
+
+812 tests, ruff clean. The full suite and `ruff check .` were run on the Arc B390; the wheel now
+contains `triton_crypto/lms/` (checked by the `package` CI job).
+
 ## [0.7.1] — signing to 43 µs (2.3× one core), and mixed-length batches
 
 Building on the speculation work: ML-DSA-44 signing at B=1024 went 56.3 µs → **43.0 µs** (liboqs one
 core: 97-100 µs), B=4096 → **33.6 µs**, B=256 → 60.4 µs.
 
-- **Mixed-length messages are signed in one batch.** μ hashes `H(pk) ‖ M′` per row, and a shorter M′
-  only moves its pad10*1 earlier inside the last block, so all rows pad to the same block count and
-  go through one launch. Previously the batch was split by length; a batch of differing sizes paid
-  ~1.4× (and the earlier benchmarks, which used `b"message %d"`, were all silently in that mode
-  until this change made the penalty disappear).
+- **Mixed-length messages are signed in one batch when their padding lands in the same number of
+  SHAKE blocks.** μ hashes `H(pk) ‖ M′` per row; rows that cross a block boundary need a second
+  launch. *(Corrected in 0.7.2: the original version padded every row to the longest block count,
+  which absorbed extra all-zero blocks for the shorter rows and produced a wrong μ. Lengths within
+  one block — e.g. 10 and 20 — happened to pass, which is why the tests missed it.)*
 - **`pointwise_kernel` no longer materialises its operands.** The host repeated `ĉ` and ŝ into full
   `[n·M, 256]` arrays — at 4096 rows that is ~150 MB of traffic per attempt. The kernel now
   broadcasts inside: `i = row // M`, `j = row % M`.
