@@ -347,6 +347,9 @@ CPU_RIVAL = {
     "poseidon2": "poseidon2",
     "chacha20-poly1305": "chacha20-poly1305",
     "aes128-ctr": "aes-128-ctr",
+    "poly1305": "poly1305",
+    "shake128": "shake128",
+    "shake256": "shake256",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"

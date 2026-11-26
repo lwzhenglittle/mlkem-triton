@@ -195,6 +195,108 @@ class LibOQS:
         return ok
 
 
+class OpenSSLMAC:
+    """`openssl mac ... POLY1305` has no `speed` entry, so it is timed through EVP_MAC.
+
+    OpenSSL 3's one-shot MAC API is four calls; ctypes keeps this dependency-free (no compiler,
+    no extra wheel) and measures the same C implementation the CLI uses.
+    """
+
+    def __init__(self, name: str = "POLY1305"):
+        lib = ctypes.CDLL("libcrypto.so.3")
+        lib.EVP_MAC_fetch.restype = ctypes.c_void_p
+        lib.EVP_MAC_fetch.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+        lib.EVP_MAC_CTX_new.restype = ctypes.c_void_p
+        lib.EVP_MAC_CTX_new.argtypes = [ctypes.c_void_p]
+        for fn in ("EVP_MAC_init", "EVP_MAC_update"):
+            f = getattr(lib, fn)
+            f.restype = ctypes.c_int
+        lib.EVP_MAC_init.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+        ]
+        lib.EVP_MAC_update.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
+        lib.EVP_MAC_final.restype = ctypes.c_int
+        lib.EVP_MAC_final.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_size_t),
+            ctypes.c_size_t,
+        ]
+        lib.EVP_MAC_CTX_free.argtypes = [ctypes.c_void_p]
+        lib.EVP_MAC_free.argtypes = [ctypes.c_void_p]
+        self.lib = lib
+        self.mac = lib.EVP_MAC_fetch(None, name.encode(), None)
+        if not self.mac:
+            raise RuntimeError(f"EVP_MAC_fetch({name}) failed")
+        self.ctx = lib.EVP_MAC_CTX_new(self.mac)
+        if not self.ctx:
+            raise RuntimeError("EVP_MAC_CTX_new failed")
+
+    def mac_of(self, key: bytes, msg: bytes) -> bytes:
+        lib = self.lib
+        kbuf = (ctypes.c_ubyte * len(key)).from_buffer_copy(key)
+        mbuf = (ctypes.c_ubyte * len(msg)).from_buffer_copy(msg)
+        out = (ctypes.c_ubyte * 32)()
+        outlen = ctypes.c_size_t(32)
+        if lib.EVP_MAC_init(self.ctx, kbuf, len(key), None) != 1:
+            raise RuntimeError("EVP_MAC_init failed")
+        if lib.EVP_MAC_update(self.ctx, mbuf, len(msg)) != 1:
+            raise RuntimeError("EVP_MAC_update failed")
+        if lib.EVP_MAC_final(self.ctx, out, ctypes.byref(outlen), 32) != 1:
+            raise RuntimeError("EVP_MAC_final failed")
+        return bytes(out[: outlen.value])
+
+
+def poly1305_pair(nbytes: int = 1 << 20, n: int = 1) -> tuple[float, float]:
+    """Bytes/s for 1 thread and for 16 processes.
+
+    One megabyte per MAC on purpose: OpenSSL's one-shot EVP_MAC costs ~2.5 us of init/final per
+    call, so timing 1 KiB messages measures the API, not the cipher (it reads 0.39 GB/s against
+    the ~9.6 GB/s the AEAD's two halves imply).
+    """
+    rng = __import__("random").Random(1234)
+    keys = [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(n)]
+    msgs = [bytes(rng.getrandbits(8) for _ in range(nbytes)) for _ in range(n)]
+
+    def rate() -> float:
+        m = OpenSSLMAC()
+        # correctness before speed: the RFC 8439 §2.5.2 vector
+        assert m.mac_of(
+            bytes.fromhex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"),
+            b"Cryptographic Forum Research Group",
+        ) == bytes.fromhex("a8061dc1305136c6c22b8baf0c0127a9"), "EVP POLY1305 disagrees"
+        ts = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            for k, msg in zip(keys, msgs, strict=True):
+                m.mac_of(k, msg)
+            ts.append(time.perf_counter() - t0)
+        return n * nbytes / min(ts)
+
+    one = rate()
+    many = _parallel_rate(_poly_child, [(nbytes, n)] * NPROC)
+    return one, many
+
+
+def _poly_child(args) -> float:
+    nbytes, n = args
+    # same corpus construction as `poly1305_pair`, in a fresh process
+    rng = __import__("random").Random(1234)
+    keys = [bytes(rng.getrandbits(8) for _ in range(32)) for _ in range(n)]
+    msgs = [bytes(rng.getrandbits(8) for _ in range(nbytes)) for _ in range(n)]
+    m = OpenSSLMAC()
+    ts = []
+    for _ in range(2):
+        t0 = time.perf_counter()
+        for k, msg in zip(keys, msgs, strict=True):
+            m.mac_of(k, msg)
+        ts.append(time.perf_counter() - t0)
+    return n * nbytes / min(ts)
+
+
 def _lib_child(args) -> float:
     so, tag, n = args
     o = LibOQS(Path(so), tag)
@@ -290,6 +392,13 @@ CASES: dict[str, Rival] = {
     "sha3-512": Rival(
         "B/s", _openssl_evp("sha3-512"), "openssl speed -evp sha3-512", ("sha3-512",)
     ),
+    "shake128": Rival(
+        "B/s", _openssl_evp("shake128"), "openssl speed -evp shake128", ("shake128",)
+    ),
+    "shake256": Rival(
+        "B/s", _openssl_evp("shake256"), "openssl speed -evp shake256", ("shake256",)
+    ),
+    "poly1305": Rival("B/s", poly1305_pair, "OpenSSL 3.5 EVP_MAC POLY1305", ("poly1305",)),
     "poseidon2": Rival(
         "op/s", poseidon2_pair, "Plonky3 0.8 packed monty-31x8 (cargo ref)", ("poseidon2",)
     ),

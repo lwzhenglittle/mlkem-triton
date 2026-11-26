@@ -5,11 +5,11 @@
     "nproc": 16,
     "scaling": {
       "scaling_governor": "powersave",
-      "scaling_cur_freq": "400339",
+      "scaling_cur_freq": "2188476",
       "cpuinfo_max_freq": "4700000",
       "cpuinfo_min_freq": "400000"
     },
-    "timestamp": "2026-11-26T12:24:52+00:00",
+    "timestamp": "2026-11-26T14:04:22+00:00",
     "python": "3.14.10",
     "openssl": "OpenSSL 3.5.9 29 Sep 2026 (Library: OpenSSL 3.5.9 29 Sep 2026)",
     "liboqs_builds": [
@@ -92,6 +92,24 @@
       "one_thread": 1044.5887951965087,
       "procs16": 14388.770171822358,
       "note": "liboqs 0.16.0 SLH-DSA-SHA2-128f verify"
+    },
+    "poly1305": {
+      "unit": "B/s",
+      "one_thread": 7542138004.583413,
+      "procs16": 75825335540.54857,
+      "note": "OpenSSL 3.5 EVP_MAC POLY1305"
+    },
+    "shake128": {
+      "unit": "B/s",
+      "one_thread": 915816450.0,
+      "procs16": 9781869680.0,
+      "note": "openssl speed -evp shake128"
+    },
+    "shake256": {
+      "unit": "B/s",
+      "one_thread": 740130820.0,
+      "procs16": 7701352370.0,
+      "note": "openssl speed -evp shake256"
     }
   }
 }

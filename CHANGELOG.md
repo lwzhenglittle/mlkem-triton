@@ -94,6 +94,21 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### The CPU rival table is complete: Poly1305 and SHAKE
+
+`benchmarks/bench_cpu.py` grew three rivals, so the primitive table now has a `vs 1T` / `vs 16P`
+column for every row except the bare Keccak permutation and the NTTs (no OpenSSL equivalent;
+numpy would be 10-100x off, and a wrong rival is worse than a missing one).
+
+- **Poly1305** through OpenSSL's `EVP_MAC` (the CLI has no `speed` entry for a MAC):
+  **7.54 GB/s one thread, 75.8 GB/s over 16 processes**. It is timed on **1 MiB per MAC** on
+  purpose -- the one-shot API costs ~2.5 us of init/final per call, so a 1 KiB corpus measured
+  0.39 GB/s, i.e. the API and not the cipher. Against 75.8 GB/s the device's 11.55 GB/s is
+  **0.15x**, which is the honest number the docs quote.
+- **SHAKE128 / SHAKE256**: 0.92 / 0.74 GB/s one thread. The device's 37.8 / 31.5 GB/s is
+  **3.9x** sixteen processes -- the sponge family keeps winning, for the same reason SHA-3
+  does: x86 has no Keccak instruction.
+
 ### Poly1305 and ChaCha20-Poly1305
 
 The primitive layer's last cheap pattern: a 130-bit modular MAC, and the AEAD that composes it

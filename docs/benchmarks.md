@@ -562,8 +562,13 @@ Without that column a table says "this is 7% of copy bandwidth", which reads lik
 headroom when the honest answer is "0.4x of sixteen x86 cores".
 
 Three sources, each the fastest implementation that exists for its family: **OpenSSL 3.5**
-(AES-NI, SHA-NI, vectorised Keccak), **liboqs 0.16.0** (the same C the GPU code is
-cross-checked against) and **Plonky3 0.8** packed monty-31x8 for Poseidon2.
+(AES-NI, SHA-NI, vectorised Keccak, `EVP_MAC` for Poly1305), **liboqs 0.16.0** (the same C the
+GPU code is cross-checked against) and **Plonky3 0.8** packed monty-31x8 for Poseidon2.
+
+Poly1305 needs one footnote: it is timed on **1 MiB per MAC**, not 1 KiB. OpenSSL's one-shot
+`EVP_MAC` costs ~2.5 µs of init/final per call, so a 1 KiB corpus measures the API rather than
+the cipher and reads 0.39 GB/s instead of 7.5. The GPU row is a batched kernel and has no such
+per-call cost, which is exactly the kind of asymmetry that makes a naive comparison wrong.
 
 Arc B390 / Core Ultra X7 358H (4P+8E+4LP), governor `powersave` at 400 MHz idle, 16P = sixteen
 concurrent **processes** (threads do not scale on this hybrid part), min-of-5:
@@ -577,10 +582,13 @@ concurrent **processes** (threads do not scale on this hybrid part), min-of-5:
 | SHA-512 | 1.10 GB/s | 13.4 GB/s | 12.2x | openssl |
 | SHA3-256 | 0.72 GB/s | **7.90 GB/s** | 11.0x | openssl |
 | SHA3-512 | 0.38 GB/s | 4.27 GB/s | 11.2x | openssl |
+| SHAKE128 | 0.92 GB/s | 9.78 GB/s | 10.7x | openssl |
+| SHAKE256 | 0.74 GB/s | 7.70 GB/s | 10.4x | openssl |
 | Poseidon2-BabyBear/16 | 9.53 M/s | **134 M/s** | 14.1x | Plonky3 packed |
 | ML-DSA-44 verify | 61.5 k/s (16.3 µs) | 946 k/s (1.06 µs) | 15.4x | liboqs |
 | Falcon-512 verify | 42.2 k/s (23.7 µs) | 459 k/s (2.18 µs) | 10.9x | liboqs |
 | Falcon-padded-512 verify | 24.7 k/s (40.5 µs) | 436 k/s (2.29 µs) | 17.7x | liboqs |
+| Poly1305 (1 MiB per MAC) | 7.54 GB/s | **75.8 GB/s** | 10.1x | OpenSSL EVP_MAC |
 | SLH-DSA-SHA2-128f verify | 1 045 /s (957 µs) | 14.4 k/s (69 µs) | 13.8x | liboqs |
 
 Read the two orders of magnitude: **whether a GPU port can win is decided by whether the CPU
