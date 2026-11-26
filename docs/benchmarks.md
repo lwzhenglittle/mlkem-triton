@@ -415,16 +415,34 @@ is 64-bit lane arithmetic).
 
 | set | B=64 | B=256 | B=1024 | Python reference |
 |---|---:|---:|---:|---:|
-| ML-DSA-44 | 1 075 µs | 500 µs | **245 µs** | 5 402 µs |
-| ML-DSA-65 | 1 021 µs | 536 µs | **279 µs** | — |
-| ML-DSA-87 | 1 273 µs | 552 µs | **321 µs** | — |
+| ML-DSA-44 | 1 075 µs | 462 µs | **191 µs** | 5 402 µs |
+| ML-DSA-65 | 1 021 µs | 490 µs | **199 µs** | — |
+| ML-DSA-87 | 1 273 µs | 487 µs | **209 µs** | — |
 
-Two things make this different from verification. First, the work is data-dependent: each
-signature retries the rejection loop until `z`, `r0` and `c·t0` are small enough, so the number of
-attempts (usually 1–5) varies per message; the batch is compacted after every attempt so a late
-accepter does not hold up the rest. Second, the two encoders (`z` into γ1-bounded fields, and the
-sparse hint) run on the host, one signature at a time, and they are now the tail of the profile —
-the arithmetic (NTT, `Â·ŷ`, `c·s1`) is the same machinery that makes verification fast.
+Two things make this different from verification.
 
-At B = 64 the batch is launch-bound (18 launches per attempt, `k·l` work), which is why per-signature
-cost falls ~4× from B=64 to B=1024.
+**The work is data-dependent.** Each signature retries the rejection loop until `z`, `r0` and `c·t0`
+are small enough; the acceptance rate is ~22 %, so a batch of 1024 runs ~4.5 attempts per message
+on average — but the slowest message in the batch needed **84** attempts, and the loop cannot finish
+before it does. That is why the per-signature cost is set by the *worst* message, not the mean.
+
+**Each attempt is a ~18-launch pipeline** (SHAKE for `y`, NTT, MAC, INTT, `c̃`, SampleInBall, three
+pointwise+INTT stages, packing). At ~0.1 ms per dispatch that is ~2 ms per attempt regardless of how
+many rows are left, so the 84 attempts of a batch of 1024 cost ~170 ms of mostly-dispatch time. The
+profile of one full-batch attempt is flat: NTT 14 %, hint 12 %, the three pointwise/INTT stages 29 %,
+decompose 9 %, ExpandMask 8 %, everything else the rest.
+
+### What moved the number, and what did not
+
+| change | effect |
+|---|---|
+| BitPack of `z` moved to the device (`pack_z_kernel`) — it was ~19 % of the run, 6 000 Python bit-packs per batch | **245 → 191 µs** |
+| `pointwise_kernel` instead of a broadcast int64 product on the host, plus `amax` instead of two chained `max` | **191 → 177 µs** |
+| a slot/queue model (keep the batch full while the queue lasts) | 196–320 µs — **worse**; the cost tracks rows processed, not attempts |
+| fusing the three pointwise products into one launch | 186 µs — **no gain** |
+
+A/B in one session (ML-DSA-44, B=1024, best of 3): **236.0 µs → 176.8 µs, 1.33×**.
+
+The next real step would be fusing an attempt into fewer, larger kernels (the three INTTs and the
+three decompose passes are the obvious candidates); micro-level tuning of the current pipeline is
+out of headroom, because it is dispatch-bound rather than compute-bound.

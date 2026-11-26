@@ -218,11 +218,14 @@ sigs = s.sign_mu(mus)  # external-μ interface
 | fresh keys, all three sets, byte-exact against the reference | pass |
 | batches large enough to exercise the rejection compaction, then verified by `Verifier` | pass |
 
-Throughput at B = 1024 (Arc B390): **245 µs** (ML-DSA-44), **279 µs** (65), **321 µs** (87) per
-signature, against 5 402 µs for this repository's Python reference (≈22×). Writing a signature is
-*not* the same kind of problem as verifying one — the rejection loop leaves the number of attempts
-data-dependent, and the two host-side packers (`z`, hint) are serial per signature, which is where
-the remaining time goes. **No liboqs baseline is quoted here**: the liboqs build was not present in
+Throughput at B = 1024 (Arc B390): **191 µs** (ML-DSA-44), **199 µs** (65), **209 µs** (87) per
+signature, against 5 402 µs for this repository's Python reference (≈28×). Writing a signature is
+*not* the same kind of problem as verifying one: the rejection loop leaves the number of attempts
+data-dependent, so a batch of 1024 runs ~4.5 attempts per message on average and up to ~80 for the
+slowest, and each attempt is a ~18-launch pipeline that costs ~2 ms to dispatch no matter how many
+rows are left. That dispatch is the current ceiling: see `docs/benchmarks.md` §14 for the profile
+and for the two optimisations that paid (device-side `z` packing, a pointwise kernel) and the two
+that did not (a slot/queue model, fusing the three pointwise products). **No liboqs baseline is quoted here**: the liboqs build was not present in
 the workspace for this session, so the only measured comparison is against our own reference.
 
 ### Why there is no Toeplitz GEMM here

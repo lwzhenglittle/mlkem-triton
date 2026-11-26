@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.6.1] — signing is 1.33× faster, and the ceiling is dispatch, not arithmetic
+
+Optimising the signing path, measured A/B in one session (ML-DSA-44, B=1024, best of 3):
+**236.0 µs → 176.8 µs per signature**.
+
+Kept:
+
+- `pack_z_kernel` — BitPack of `z` on the device. It was ~19 % of the run: the numpy bit-packer
+  extracted 18–20 bits coefficient-by-coefficient, ~6 000 times per batch. Now one launch, and the
+  accepted rows are copied to the host once per attempt instead of once per signature.
+- `pointwise_kernel` — `ĉ ∘ ŝ` in the NTT domain, replacing a broadcast int64 product that
+  materialised three 64-bit arrays of the whole batch per attempt.
+- `amax(dim=(1, 2))` instead of two chained `max` for the three norm checks.
+
+Tried and reverted, with numbers:
+
+- a slot/queue model that keeps the batch full while the queue lasts (so stragglers do not shrink
+  it): **196–320 µs, worse**. The cost tracks rows processed, not attempts.
+- fusing the three pointwise products into one launch: **186 µs, no gain**.
+
+The profile says why there is little left at this level: one attempt is ~18 launches and ~2 ms of
+dispatch, a batch of 1024 needs ~4.5 attempts per message on average but up to 84 for the slowest,
+and the per-attempt stage costs are flat (NTT 14 %, hint 12 %, pointwise/INTT 29 %, decompose 9 %,
+ExpandMask 8 %). Further gains need fewer, larger kernels, not tighter host code.
+
 ## [0.6.0] — ML-DSA signing on the device, and the ACVP LMS vectors
 
 ### Added — ML-DSA signing (FIPS 204 Alg. 7)

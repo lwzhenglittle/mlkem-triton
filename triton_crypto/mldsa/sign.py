@@ -22,7 +22,14 @@ import triton
 from ..devices import resolve_device
 from ..primitives.ntt import DILITHIUM, intt_torch, ntt_torch
 from ..primitives.sponge import DOMAIN_SHAKE, SHAKE256, padded_len, sponge_padded
-from .kernels import mac_kernel, sample_in_ball_kernel, unpack_z_kernel, w1_pack_kernel
+from .kernels import (
+    mac_kernel,
+    pack_z_kernel,
+    pointwise_kernel,
+    sample_in_ball_kernel,
+    unpack_z_kernel,
+    w1_pack_kernel,
+)
 from .params import PARAMS, DSAParams
 from .params import Q as Q_VALUE
 from .ref import MLDSA
@@ -210,19 +217,19 @@ class Signer:
             ).reshape(n, p.l, 256)
             z = y + cs1
             z = _center(z)
-            z_ok = z.abs().max(dim=2).values.max(dim=1).values < p.norm_bound
+            z_ok = z.abs().amax(dim=(1, 2)) < p.norm_bound
             cs2 = intt_torch(
                 (_pointwise(c_hat, self.s2_hat)).reshape(n * p.k, 256), DILITHIUM
             ).reshape(n, p.k, 256)
             w_minus = (w - cs2) % Q_VALUE
             _, r0 = _decompose(w_minus, p)
-            r0_ok = r0.abs().max(dim=2).values.max(dim=1).values < p.gamma2 - p.beta
+            r0_ok = r0.abs().amax(dim=(1, 2)) < p.gamma2 - p.beta
             ct0 = _center(
                 intt_torch(
                     (_pointwise(c_hat, self.t0_hat)).reshape(n * p.k, 256), DILITHIUM
                 ).reshape(n, p.k, 256)
             )
-            ct0_ok = ct0.abs().max(dim=2).values.max(dim=1).values < p.gamma2
+            ct0_ok = ct0.abs().amax(dim=(1, 2)) < p.gamma2
             h = (self._high_bits(w_minus + ct0, p)[0] != self._high_bits(w_minus, p)[0]).to(
                 torch.int32
             )
@@ -230,11 +237,14 @@ class Signer:
             accept = z_ok & r0_ok & ct0_ok & h_ok
             if accept.any():
                 idx = remaining[accept]
-                z_np = z[accept].cpu().numpy().astype(np.int64)
+                z_bytes = self._pack_z(z[accept].contiguous())  # on device, one launch
                 h_np = h[accept].cpu().numpy().astype(np.int64)
                 ct_np = c_tilde[accept].cpu().numpy()
-                for r, (zi, hi, ci) in enumerate(zip(z_np, h_np, ct_np, strict=True)):
-                    sigs[int(idx[r])] = self._pack(ci.tobytes(), zi, hi)
+                z_np = z_bytes.cpu().numpy()
+                for r in range(idx.numel()):
+                    sigs[int(idx[r])] = b"".join(
+                        [ct_np[r].tobytes(), z_np[r].tobytes(), self.ref.pack_h(h_np[r])]
+                    )
             keep = ~accept
             remaining = remaining[keep]
             kappa[remaining] = kappa[remaining] + p.l
@@ -301,18 +311,36 @@ class Signer:
     def _high_bits(self, r: torch.Tensor, p: DSAParams):
         return _decompose(r, p)
 
-    def _pack(self, c_tilde: bytes, z: np.ndarray, h: np.ndarray) -> bytes:
+    def _pack_z(self, z: torch.Tensor) -> torch.Tensor:
+        """BitPack of z for a batch of accepted rows: [n, l, polyz_bytes] uint8 on device."""
         p = self.p
-        parts = [c_tilde]
-        parts += [self.ref.pack_z(z[i]) for i in range(p.l)]
-        parts.append(self.ref.pack_h(h))
-        return b"".join(parts)
+        n = z.shape[0]
+        out = torch.empty((n, p.l, p.polyz_bytes), dtype=torch.uint8, device=self.device)
+        pack_z_kernel[(n * p.l, triton.cdiv(p.polyz_bytes, BC))](
+            z.reshape(n * p.l, 256),
+            out,
+            n * p.l,
+            p.polyz_bytes,
+            p.z_bits,
+            p.gamma1,
+            256,
+            BC,
+        )
+        return out
 
 
 def _pointwise(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Pointwise product in the NTT domain, broadcast over the batch: [n,1,256]·[*,256]."""
-    out = (a.unsqueeze(1).to(torch.int64) * b.unsqueeze(0).to(torch.int64)) % Q_VALUE
-    return out.to(torch.int32)
+    """ĉ ∘ ŝ mod q for [n, 256] × [m, 256] -> [n, m, 256], in one kernel.
+
+    The host version broadcast an int64 product and then reduced, materialising a 64-bit array
+    of the whole batch three times per attempt; this keeps the product in registers.
+    """
+    n, m = a.shape[0], b.shape[0]
+    a_rep = a.repeat_interleave(m, dim=0).contiguous()
+    b_rep = b.repeat(n, 1).contiguous()
+    out = torch.empty((n * m, 256), dtype=torch.int32, device=a.device)
+    pointwise_kernel[(triton.cdiv(n * m, 16),)](a_rep, b_rep, out, n * m, 256, Q_VALUE, 16)
+    return out.view(n, m, 256)
 
 
 def ntt_np_int32_cols(x: np.ndarray, signer: Signer) -> np.ndarray:

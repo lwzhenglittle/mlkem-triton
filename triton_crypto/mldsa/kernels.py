@@ -24,6 +24,8 @@ import triton.language as tl
 __all__ = [
     "hint_kernel",
     "mac_kernel",
+    "pack_z_kernel",
+    "pointwise_kernel",
     "sample_in_ball_kernel",
     "unpack_z_kernel",
     "w1_pack_kernel",
@@ -242,3 +244,64 @@ def w1_pack_kernel(
     r1 = _use_hint(w1, h1, Q, TWO_G2, G2, M)
     byte = ((r0 >> sh) | (r1 << (MB - sh))) & 0xFF
     tl.store(OUT + (pid * K + i) * POLYB + j, byte.to(tl.uint8), mask=live)
+
+
+@triton.jit
+def pack_z_kernel(
+    Z,
+    OUT,
+    B,
+    POLYB: tl.constexpr,
+    D: tl.constexpr,
+    GAMMA1: tl.constexpr,
+    N: tl.constexpr,
+    BC: tl.constexpr,
+):
+    """BitPack of z as γ1 − z in `D`-bit little-endian fields (FIPS 204 Alg. 22).
+
+    One program per (signature, polynomial) and one program id per block of output bytes.
+    A `D`-bit field spans at most two bytes (D ∈ {18, 20}), so two coefficient loads
+    suffice — the same shape as `w1_pack_kernel`, but this one is on the signing path,
+    where it replaces a numpy bit-pack that cost ~19 % of the total time.
+    """
+    pid = tl.program_id(0)
+    j = tl.program_id(1) * BC + tl.arange(0, BC)
+    live = (j < POLYB) & (pid < B)
+    bitpos = j * 8
+    c0 = bitpos // D
+    sh = (bitpos % D).to(tl.int32)
+    c1 = tl.minimum(c0 + 1, N - 1)
+    base = pid * N
+    v0 = tl.load(Z + base + c0, mask=live, other=0).to(tl.int64)
+    v1 = tl.load(Z + base + c1, mask=live, other=0).to(tl.int64)
+    a0 = (GAMMA1 - v0) & (2 * GAMMA1 - 1)
+    a1 = (GAMMA1 - v1) & (2 * GAMMA1 - 1)
+    byte = ((a0 >> sh) | (a1 << (D - sh))) & 0xFF
+    tl.store(OUT + pid * POLYB + j, byte.to(tl.uint8), mask=live)
+
+
+@triton.jit
+def pointwise_kernel(
+    A,
+    B,
+    OUT,
+    ROWS,
+    N: tl.constexpr,
+    Q: tl.constexpr,
+    BN: tl.constexpr,
+):
+    """ĉ ∘ ŝ mod q, one program over `BN` rows of 256 coefficients.
+
+    The host version broadcasts an int64 product and then reduces — fine, but it
+    materialises a 64-bit array of the whole batch three times per signing attempt.
+    This keeps the product in registers and writes int32 back.
+    """
+    pid = tl.program_id(0)
+    row = pid * BN + tl.arange(0, BN)
+    col = tl.arange(0, N)
+    m = row < ROWS
+    a = tl.load(A + row[:, None] * N + col[None, :], mask=m[:, None], other=0)
+    b = tl.load(B + row[:, None] * N + col[None, :], mask=m[:, None], other=0)
+    v = (a.to(tl.int64) * b.to(tl.int64)) % Q
+    v = tl.where(v < 0, v + Q, v)
+    tl.store(OUT + row[:, None] * N + col[None, :], v.to(tl.int32), mask=m[:, None])
