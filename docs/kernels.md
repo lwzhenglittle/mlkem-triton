@@ -388,10 +388,10 @@ Two things it has to get right, and both are the same two that bit other kernels
   The first version rebuilt them per call with a million-iteration Python loop, which cost more
   than the transform it fed (1686 ms against 10.8 ms).
 
-Memory traffic is 8 MB per pass: **84 MB** at the default radix-4 (ten passes), 160 MB at
-radix-2. This is the only primitive here whose cost is dominated by traffic -- 84 MB in 0.85 ms is
-about 98 GB/s, 45% of the 217 GB/s copy bandwidth. It is *not*
-bandwidth-saturated -- `_stage4_kernel` halves the traffic and buys 10-20% -- so the remaining
+Memory traffic is 8 MB per pass: **84 MB** per transform at the default radix-4 (ten passes),
+160 MB at radix-2. The transform as a whole is the only primitive here whose cost is dominated by
+traffic -- 84 MB in 0.85 ms is about 98 GB/s, 45% of the 217 GB/s copy bandwidth -- and it is
+*not* bandwidth-saturated: `_stage4_kernel` halves the traffic and buys 10-20%, so the remaining
 limit is pass latency plus the modular multiplies (`docs/benchmarks.md` §22.1-§22.2).
 
 ### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q, BLK)` — `primitives/ntt/large.py`
@@ -402,8 +402,9 @@ where one radix-2 pass is left over), which also means the output ordering -- an
 pointwise compatibility with the in-register kernel -- is unchanged. It needs the first stage's
 twiddles at positions `j` and `j + M/4` plus the second stage's at `j`, hence three tables.
 
-Opt-in (`LargeNTT(..., radix=4)`): faster by 10-20% when both are measured in the same window, and
-*slower* by 20% if the two are compared across windows -- the clock-drift trap in
+**This is the default** (`LargeNTT(n, q, radix=4)`; pass `radix=2` to get the old path). It was
+opt-in for one round because a cross-window comparison made it look neutral: measured correctly, in
+the same window, it is 11-19% faster and much steadier at the median -- that cross-window trap is
 `docs/benchmarks.md` §22.2.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
