@@ -994,8 +994,8 @@ extra kernel, and the win is smaller than the run-to-run spread.
 
 **What that rules out.** Radix-8 is not the next step either: it would cut the traffic another
 30% for even more arithmetic per pass, and the radix-4 experiment already showed that traffic is
-not what binds *at the low clock*. At the high clock the picture is different -- 0.98 ms at
-155 GB/s is 72% of copy bandwidth -- so the transform changes regime with the clock, and a tuning
+not what binds *at the low clock*. At the high clock the picture is different -- 0.85 ms at
+98 GB/s is 45% of copy bandwidth -- so the transform changes regime with the clock, and a tuning
 decision made in one regime can be wrong in the other. That is the same trap as §22.2, one level
 deeper.
 

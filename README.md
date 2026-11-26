@@ -170,10 +170,11 @@ Every B390 row is from `benchmarks/snapshot-20261126T171639Z.md` (one window); t
 these by up to 2x between sessions, so treat the ratios as the durable part, not the absolutes.
 GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted; the
 `vs 1T` / `vs 16P` columns come from `benchmarks/bench_cpu.py` measured in the same window, and
-`benchmarks/snapshot.py` runs the whole set at once. The one row that beats sixteen CPU
-processes is the one whose working set cannot fit in registers (the 2^20 NTT, 160 MB of traffic
-per transform); the ALU-bound primitives are 0.06–0.5× and the sponge family wins 1.5–4× because
-x86 has no Keccak instruction. Full tables,
+`benchmarks/snapshot.py` runs the whole set at once. **Seven rows beat sixteen CPU processes** --
+the sponge/SHA-2 family at 1.55–4.11× and the 2^20 NTT at 4.1×. The sponge family wins because
+Keccak is bad on all three CPU-side factors (no instruction, four usable lanes, 24 dependent
+rounds), not because of the instruction alone; the NTT is the one row that wins for a memory
+reason (84 MB of traffic per transform, radix-4). The ALU-bound primitives are 0.06–0.5×. Full tables,
 per-kernel breakdowns and measurement conventions: [docs/benchmarks.md](docs/benchmarks.md).
 
 ### Why ML-KEM is fast

@@ -115,13 +115,17 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   70x one CPU core and 5.3x sixteen processes** at the fast clock. Four fixes took it from 10.8 ms
   (a per-call table rebuild, an int64 division in the index math, the tile/warp choice, and folding
   the negacyclic twiddles into the first and last passes -- `docs/benchmarks.md` §22.1). At the fast
-  clock it runs at 72% of copy bandwidth, i.e. essentially at the memory roofline.
+  clock it runs at **45%** of copy bandwidth (98 GB/s of 217), not at the memory roofline -- the
+  roofline is 0.39 ms and the transform takes 0.85 ms, and §22.2 shows the remaining gap is pass
+  latency plus the modular multiplies.
 
   This is the answer to the question the project started with. Every ALU-bound primitive loses
-  to sixteen cores (0.06-0.5x) and the sponge family wins by 1.6-4x only because x86 has no
-  Keccak instruction. The operators that win by more are the ones whose **working set cannot fit
-  in registers**: 160 MB of traffic per useful call is something sixteen cores cannot match,
-  because each of them has to move the same bytes through the same memory system.
+  to sixteen cores (0.06-0.5x); the sponge family wins by 1.6-4x because **Keccak is bad on all
+  three CPU-side factors** (no instruction, four usable lanes, 24 dependent rounds) -- not because
+  of the instruction alone (SHA-256 has SHA-NI and still wins 1.55x). The operator that wins by
+  more is the one whose **working set cannot fit in registers**: 84 MB of traffic per useful call
+  is something sixteen cores cannot match, because each of them has to move the same bytes through
+  the same memory system.
 
 ## 3. Five Triton traps found the hard way
 
