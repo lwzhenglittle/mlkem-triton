@@ -197,6 +197,19 @@ bounded by 2047, so the narrowing is exact by construction. Half the bytes per n
 another 9% -- 16.8 -> **15.6 µs per signature**, 69.9 -> 63.9 ms per 4096-signature batch,
 bit-identical output. End to end: 20.8 -> **18.9 µs**.
 
+### The CPU-only contract, checked by pretending
+
+`docs/support.md` claims a machine without an accelerator "can still smoke-test the maths and
+reference paths", and `devices.resolve_device` documents that it raises with a message naming the
+two numpy modules to use instead. Neither claim can be exercised on a machine with a GPU, which is
+the only machine this suite has run on.
+
+`tests/test_cpu_only.py` monkeypatches both availability probes to False and asserts the
+consequences: no devices reported, `resolve_device()` raising with the documented advice, both
+modules it names still existing (a rename would send a CPU-only reader somewhere that is not
+there), `resolve_device("cpu")` refusing rather than handing back a device the kernels cannot use,
+and two numpy paths still producing their known answers.
+
 ### Falcon's host decoder: one 32-bit window per coefficient, 21.4 -> 16.8 µs
 
 The decoder is 81% of Falcon's end-to-end cost, so it was worth another look. Each coefficient

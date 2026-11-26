@@ -250,7 +250,6 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
     for i in range(4):
         w32[:, : width - i] |= buf[:, i:].astype(np.int32) << (24 - 8 * i)
 
-
     # Leading-zero count of a 16-bit window, as a table: one gather instead of 16 `where`s.
     lead = np.zeros(1 << 16, dtype=np.int32)
     for v in range(1, 1 << 16):
