@@ -48,6 +48,12 @@ dependencies = [
     "triton>=3.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/lwzhenglittle/triton-crypto-kernels"
+Repository = "https://github.com/lwzhenglittle/triton-crypto-kernels"
+Issues = "https://github.com/lwzhenglittle/triton-crypto-kernels/issues"
+Changelog = "https://github.com/lwzhenglittle/triton-crypto-kernels/blob/main/CHANGELOG.md"
+
 [project.optional-dependencies]
 # kyber-py is only used for random key-pair round-trip tests; the primary correctness
 # gate is the NIST ACVP vectors, which do not need it.

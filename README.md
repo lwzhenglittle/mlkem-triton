@@ -36,14 +36,14 @@ backwards compatibility.
 Not on PyPI yet. From GitHub:
 
 ```bash
-pip install "triton-crypto-kernels @ git+https://github.com/lwzhenglittle/mlkem-triton.git"
+pip install "triton-crypto-kernels @ git+https://github.com/lwzhenglittle/triton-crypto-kernels.git"
 ```
 
 Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. The wheel is pure Python; nothing compiles.
 For the test suite (ACVP vectors are not shipped in the wheel):
 
 ```bash
-git clone https://github.com/lwzhenglittle/mlkem-triton && cd mlkem-triton
+git clone https://github.com/lwzhenglittle/triton-crypto-kernels && cd triton-crypto-kernels
 pip install -e ".[test,ref]" && pytest
 ```
 

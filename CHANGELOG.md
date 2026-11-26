@@ -33,8 +33,13 @@ removed (18 module paths, the `sha_thash` attribute, and that `find_packages()` 
 `mlkem_triton`), and the CI wheel check fails if any of them reappears in a wheel. The removal
 tests replace `tests/test_compat.py`, which used to assert the opposite.
 
-`pyproject.toml` now ships only `triton_crypto*`. **891 tests** (the 4 compat assertions were
-replaced by 36), `ruff check .` and `ruff format --check .` clean.
+`pyproject.toml` now ships only `triton_crypto*`, and gained the `[project.urls]` block it had
+never had. **891 tests** (the 4 compat assertions were replaced by 36), `ruff check .` and
+`ruff format --check .` clean.
+
+The GitHub repository was renamed `mlkem-triton` → `triton-crypto-kernels` to match the
+distribution, so every name in the project now agrees: distribution, repository, README title and
+package root. GitHub redirects the old URLs, but clone/fetch URLs should be updated.
 
 ## [0.9.0] — the primitive layer gets a floor, and the library stops being PQC-only
 
