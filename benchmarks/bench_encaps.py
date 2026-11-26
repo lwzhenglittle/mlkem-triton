@@ -17,9 +17,10 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from triton_crypto import acvp, describe, resolve_device
+from triton_crypto import describe, resolve_device
 from triton_crypto.devices import sync
-from triton_crypto.encaps import Encapsulator
+from triton_crypto.mlkem import acvp
+from triton_crypto.mlkem.encaps import Encapsulator
 
 # cuPQC on GB10, same machine (BD=32 / SDK default BD=128), pure kernel
 CUPQC_ENCAPS_NS = {"tuned": 199.7, "default": 243.5}

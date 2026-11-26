@@ -11,7 +11,7 @@ ML-KEM stops one layer early on purpose: its 128 CRT slots are the quadratic ext
 Z_q[X]/(X²−γ), which is why FIPS 203 Alg. 12 needs a base-case multiply. ML-DSA splits
 all the way into 256 linear slots, so its pointwise product is a plain Hadamard. The
 butterfly is identical; what the products *mean* afterwards is the scheme's business, and
-stays in the scheme's module (`triton_crypto.ntt_ref.multiply_ntts`).
+stays in the scheme's module (`triton_crypto.mlkem.ntt_ref.multiply_ntts`).
 
 Everything here works in the **standard domain**: no Montgomery representation leaks into
 the twiddle tables, so the output is directly comparable with the coefficients in

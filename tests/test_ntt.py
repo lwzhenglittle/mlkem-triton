@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from triton_crypto.ntt_ref import (
+from triton_crypto.mlkem.ntt_ref import (
     GAMMAS,
     ZETAS,
     N,

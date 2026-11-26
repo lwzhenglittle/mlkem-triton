@@ -12,10 +12,10 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from triton_crypto.kernels.ntt import byte_encode12, forward_ntt, pow_mac
-from triton_crypto.keygen import KeyGenerator
-from triton_crypto.ntt_ref import byte_encode, multiply_ntts, ntt
-from triton_crypto.params import Q
+from triton_crypto.mlkem.kernels.ntt import byte_encode12, forward_ntt, pow_mac
+from triton_crypto.mlkem.keygen import KeyGenerator
+from triton_crypto.mlkem.ntt_ref import byte_encode, multiply_ntts, ntt
+from triton_crypto.mlkem.params import Q
 
 pytest.importorskip("triton")
 
@@ -62,7 +62,7 @@ def test_keygen_bit_exact_vs_kyberpy(ps):
     `‖ k` domain separation).
     """
     pytest.importorskip("kyber_py", reason="requires kyber-py for the byte-for-byte check")
-    from triton_crypto import refimpl
+    from triton_crypto.mlkem.reference import refimpl
 
     d = bytes(range(32))
     z = bytes(range(32, 64))
@@ -80,9 +80,9 @@ def test_keygen_bit_exact_vs_kyberpy(ps):
 def test_keygen_batch_then_encaps_decaps(ps):
     """Batch generate → encaps with the first key → get the same K back with our own decaps."""
     pytest.importorskip("kyber_py", reason="requires kyber-py for cross-validation")
-    from triton_crypto import refimpl
-    from triton_crypto.encaps import Encapsulator
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.encaps import Encapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
+    from triton_crypto.mlkem.reference import refimpl
 
     eks, dks = KeyGenerator(ps, device=DEV).generate(5)
     ek, dk = eks[0].tobytes(), dks[0].tobytes()

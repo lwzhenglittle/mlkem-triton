@@ -29,7 +29,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ..devices import warps
+from ...devices import warps
 from .fused_gemm import _gemm_tile, _pick_cfg, _tile_id
 
 Q = 3329

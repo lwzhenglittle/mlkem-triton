@@ -22,8 +22,9 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from triton_crypto import acvp, describe, resolve_device
-from triton_crypto.pipeline import Decapsulator
+from triton_crypto import describe, resolve_device
+from triton_crypto.mlkem import acvp
+from triton_crypto.mlkem.pipeline import Decapsulator
 
 
 def main() -> int:

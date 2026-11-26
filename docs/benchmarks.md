@@ -265,7 +265,7 @@ crosses at about B ≈ 700 on Intel. Full tables in [docs/compare.md](compare.md
 | resident VRAM (`W_dec`+`W_enc`, fp16) | 4.2 MB | **7.9 MB** | 12.6 MB |
 | `dk` size in a standard implementation | 1632 B | 2400 B | 3168 B |
 
-On-GPU rebuild (`kernels/rebuild.py`) is 0.158 ms, i.e. 19.3 ns/op at B=8192 — the resident
+On-GPU rebuild (`mlkem/kernels/rebuild.py`) is 0.158 ms, i.e. 19.3 ns/op at B=8192 — the resident
 VRAM, not the build time, is the real constraint. See [docs/design.md](design.md) §7.
 
 ---

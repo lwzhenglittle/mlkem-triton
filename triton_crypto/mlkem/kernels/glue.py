@@ -40,7 +40,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ..devices import warps
+from ...devices import warps
 
 Q = 3329
 QL = tl.constexpr(Q)

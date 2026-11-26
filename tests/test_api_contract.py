@@ -22,7 +22,14 @@ def test_lms_is_a_package():
     """Without lms/__init__.py, setuptools.find_packages() drops the subpackage from wheels."""
     import setuptools
 
-    assert "triton_crypto.lms" in setuptools.find_packages(where=str(ROOT))
+    packages = set(setuptools.find_packages(where=str(ROOT)))
+    assert "triton_crypto.lms" in packages
+    assert {
+        "triton_crypto.mlkem",
+        "triton_crypto.mlkem.kernels",
+        "triton_crypto.mlkem.reference",
+        "triton_crypto.primitives",
+    } <= packages
 
     from triton_crypto.lms import ALL_SETS, LMSSet, Verifier, from_name, get, verify_batch
 
@@ -92,3 +99,20 @@ def test_generated_source_cache_permissions(tmp_path):
     assert not (d.stat().st_mode & 0o077), oct(d.stat().st_mode)
     for f in d.glob("*.py"):
         assert not (f.stat().st_mode & 0o077), (f, oct(f.stat().st_mode))
+
+
+def test_deprecated_module_paths_point_at_the_new_ones():
+    """Old root paths stay valid for one release, but must be the same objects."""
+    from triton_crypto.mlkem.kernels.ntt import byte_encode12 as new_be
+    from triton_crypto.mlkem.pipeline import Decapsulator as NewDec
+    from triton_crypto.mlkem.reference.sampling_cpu import cbd as new_cbd
+
+    with pytest.warns(DeprecationWarning):
+        import triton_crypto.kernels.ntt as old_kernels
+
+        import triton_crypto.pipeline as old_pipeline
+        import triton_crypto.sampling_cpu as old_sampling
+
+    assert old_pipeline.Decapsulator is NewDec
+    assert old_kernels.byte_encode12 is new_be
+    assert old_sampling.cbd is new_cbd

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from triton_crypto import acvp, refimpl
-from triton_crypto.params import PARAMS
+from triton_crypto.mlkem import acvp
+from triton_crypto.mlkem.params import PARAMS
+from triton_crypto.mlkem.reference import refimpl
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 

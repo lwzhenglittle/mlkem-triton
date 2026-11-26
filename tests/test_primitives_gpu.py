@@ -108,7 +108,7 @@ def test_gpu_ntt_ring_identities():
 
 
 def test_mlkem_gpu_ntt_feeds_basecase_product():
-    from triton_crypto import ntt_ref as kem_ref
+    from triton_crypto.mlkem import ntt_ref as kem_ref
 
     rng = np.random.default_rng(4)
     a = rng.integers(0, KYBER.q, 256, dtype=np.int64)

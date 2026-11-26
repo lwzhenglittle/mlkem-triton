@@ -26,11 +26,12 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from triton_crypto import acvp, describe, resolve_device
+from triton_crypto import describe, resolve_device
 from triton_crypto.devices import sync
+from triton_crypto.mlkem import acvp
 
 dev_override = None
-from triton_crypto.pipeline import Decapsulator
+from triton_crypto.mlkem.pipeline import Decapsulator
 
 
 def _h2b(v):
@@ -158,7 +159,7 @@ def _selfcheck(dec, ct1, dev):
     to the slow path, and the numbers look normal while being meaningless. So the
     benchmark script runs the fallback path itself as a control.
     """
-    import triton_crypto.pipeline as pl
+    import triton_crypto.mlkem.pipeline as pl
 
     # Must patch the names in the `pipeline` module: `pipeline.py` does
     # `from .kernels.fused_gemm import fused_dec_gemm, fused_enc_gemm`,

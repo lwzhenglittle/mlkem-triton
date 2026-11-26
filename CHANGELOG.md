@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.0] — package layout: one subpackage per scheme
+
+No algorithm changed. This is the structural cleanup the four-scheme package needed:
+ML-KEM finally has the same shape as ML-DSA, SLH-DSA and LMS/HSS.
+
+- **`triton_crypto/mlkem/`** now holds `params`, `keygen`, `encaps`, `pipeline`, `keyprep`,
+  `ops`, `gpu_hash`, `acvp`, `ntt_ref`, the scheme's `kernels/`, and a `reference/` subpackage
+  for the kyber-py wrapper, the CPU sampling reference and the host-hashing baseline.
+  `triton_crypto.mlkem` exposes `Decapsulator`, `Encapsulator`, `KeyGenerator`,
+  `generate_keypairs`, `encapsulate` and `decaps_batch`.
+- **Old root modules keep working for one release** (`triton_crypto.pipeline`,
+  `.kernels.*`, `.refimpl`, ...) as `DeprecationWarning` aliases pointing at the new modules;
+  they will be removed in 1.0. `from triton_crypto import Decapsulator` is unchanged.
+- **`sha_thash` moved out of `primitives/sha2.py`** into `slhdsa/thash_sha2.py`: FIPS 205's
+  construction is not a generic SHA-2 primitive. `primitives.sha2.sha_thash` remains as a
+  deprecated alias.
+- `kernels/` is now explicitly ML-KEM's; the scheme-agnostic layer is `primitives/`.
+- Dropped `docs/support.md`'s hand-maintained project tree (it had already drifted), and fixed
+  the root `__init__` / `mlkem_triton` / `kernels` docstrings.
+
+813 tests, `ruff check .` and `ruff format --check .` clean.
+
 ## [0.7.2] — API, packaging and input-contract hardening
 
 Fixes the P0/P1 findings of the internal primitives-quality review (`eval-primitives-quality.md`).

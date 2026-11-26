@@ -40,7 +40,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ..devices import resolve_device, warps
+from ...devices import resolve_device, warps
 from ..ntt_ref import intt
 from ..params import PARAMS, N, Q
 
@@ -172,7 +172,7 @@ class GpuKeyRebuilder:
     # -- SHAKE-128 kernel (compiled on first call) --
     def _shake(self):
         if self._sha is None:
-            from ..primitives.sponge import get_sponge
+            from ...primitives.sponge import get_sponge
 
             self._sha = get_sponge(RATE_SHAKE128, 5 * RATE_SHAKE128)
         return self._sha

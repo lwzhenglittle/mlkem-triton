@@ -7,8 +7,9 @@ import pytest
 import torch
 from _common import DEV
 
-from triton_crypto import acvp, refimpl
-from triton_crypto.pipeline import Decapsulator
+from triton_crypto.mlkem import acvp
+from triton_crypto.mlkem.pipeline import Decapsulator
+from triton_crypto.mlkem.reference import refimpl
 
 pytest.importorskip("kyber_py", reason="refimpl needs the optional kyber-py")
 
@@ -21,7 +22,7 @@ PARAM_SETS = ["ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"]
 
 @pytest.mark.parametrize("ps", PARAM_SETS)
 def test_gpu_roundtrip(ps):
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
 
     ek, dk = refimpl.ref_keygen(ps)
     dec = Decapsulator(ps, dk)
@@ -36,7 +37,7 @@ def test_gpu_roundtrip(ps):
 
 @pytest.mark.parametrize("ps", PARAM_SETS)
 def test_gpu_official_acvp(ps):
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
 
     cases = [c for c in acvp.load() if c["function"] == "decapsulation" and c["parameterSet"] == ps]
     assert cases
@@ -48,7 +49,7 @@ def test_gpu_official_acvp(ps):
 
 
 def test_gpu_implicit_rejection():
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
 
     ps = "ML-KEM-768"
     ek, dk = refimpl.ref_keygen(ps)
@@ -67,7 +68,7 @@ def test_gpu_implicit_rejection():
 
 
 def test_gpu_batch_one():
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
 
     ps = "ML-KEM-768"
     ek, dk = refimpl.ref_keygen(ps)
@@ -77,8 +78,8 @@ def test_gpu_batch_one():
 
 
 def test_unpack_matches_numpy():
-    from triton_crypto.kernels.elementwise import _unpack_bits
-    from triton_crypto.pipeline import unpack_bits_gpu
+    from triton_crypto.mlkem.kernels.elementwise import _unpack_bits
+    from triton_crypto.mlkem.pipeline import unpack_bits_gpu
 
     rng = np.random.default_rng(0)
     for d, count in [(10, 768), (4, 256), (11, 1024), (12, 256)]:
@@ -90,8 +91,8 @@ def test_unpack_matches_numpy():
 
 
 def test_cbd_matches_reference():
-    from triton_crypto.pipeline import cbd_gpu
-    from triton_crypto.sampling_cpu import cbd as cbd_ref
+    from triton_crypto.mlkem.pipeline import cbd_gpu
+    from triton_crypto.mlkem.reference.sampling_cpu import cbd as cbd_ref
 
     rng = np.random.default_rng(1)
     for eta in (2, 3):
@@ -107,7 +108,7 @@ def test_all_input_forms_agree(ps):
     """The four input forms must give the same outputs (bytes / ndarray / list /
     device tensor).
     """
-    from triton_crypto import refimpl
+    from triton_crypto.mlkem.reference import refimpl
 
     ek, dk = refimpl.ref_keygen(ps)
     dec = Decapsulator(ps, dk)
@@ -135,7 +136,7 @@ def test_all_input_forms_agree(ps):
 
 
 def test_bad_input_forms_raise():
-    from triton_crypto import refimpl
+    from triton_crypto.mlkem.reference import refimpl
 
     ek, dk = refimpl.ref_keygen("ML-KEM-768")
     dec = Decapsulator("ML-KEM-768", dk)
@@ -154,7 +155,7 @@ def test_pinned_staging_reuse_is_safe():
     """The staging buffer is reused: call twice with different inputs; the second
     result must be the second call's.
     """
-    from triton_crypto import refimpl
+    from triton_crypto.mlkem.reference import refimpl
 
     ek, dk = refimpl.ref_keygen("ML-KEM-768")
     dec = Decapsulator("ML-KEM-768", dk)
@@ -174,8 +175,8 @@ def test_eta2_fast_path_only_for_ukem768_1024():
     It is functionally correct (the ACVP vectors pass), just ~3x slower. This test exists
     to make the limitation surface immediately if someone ever implements η=3 too.
     """
-    from triton_crypto import refimpl
-    from triton_crypto.kernels import glue
+    from triton_crypto.mlkem.kernels import glue
+    from triton_crypto.mlkem.reference import refimpl
 
     for ps, expect_fast in (("ML-KEM-512", False), ("ML-KEM-768", True), ("ML-KEM-1024", True)):
         _ek, dk = refimpl.ref_keygen(ps)

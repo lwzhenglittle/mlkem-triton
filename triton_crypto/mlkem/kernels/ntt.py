@@ -21,9 +21,9 @@ import torch
 import triton
 import triton.language as tl
 
-from ..devices import warps
+from ...devices import warps
+from ...primitives.ntt import KYBER, ntt_torch
 from ..ntt_ref import GAMMAS
-from ..primitives.ntt import KYBER, ntt_torch
 
 Q = 3329
 QL = tl.constexpr(Q)

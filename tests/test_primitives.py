@@ -21,7 +21,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from triton_crypto import ntt_ref as kem_ref
+from triton_crypto.mlkem import ntt_ref as kem_ref
 from triton_crypto.primitives import (
     DILITHIUM,
     HASHES,

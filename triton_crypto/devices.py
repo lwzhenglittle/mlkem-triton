@@ -78,7 +78,7 @@ def resolve_device(name: str | torch.device | None = None) -> torch.device:
             "No usable GPU found. This package only supports devices that Triton has "
             "a backend for (NVIDIA CUDA / AMD ROCm / Intel XPU) and does not support "
             "pure CPU execution. To use the CPU only for algorithm validation, use the "
-            "numpy implementations in triton_crypto.ntt_ref / keyprep."
+            "numpy implementations in triton_crypto.mlkem.ntt_ref / keyprep."
         )
     return devs[0]
 

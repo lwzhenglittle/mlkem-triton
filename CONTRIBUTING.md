@@ -32,7 +32,7 @@ Hardware:
   centrally. GPU CI is self-hosted rather than on hosted runners — please also state in your PR
   which hardware you ran.
 - **Just reading the code or running the reference implementation**: CPU is enough;
-  `triton_crypto.ntt_ref` and `keyprep` are pure numpy.
+  `triton_crypto.mlkem.ntt_ref` and `triton_crypto.mlkem.keyprep` are pure numpy.
 
 ## Tests
 

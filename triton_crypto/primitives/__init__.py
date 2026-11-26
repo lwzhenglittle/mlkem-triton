@@ -1,7 +1,8 @@
 """Scheme-independent GPU primitives.
 
-Two blocks of mathematics are needed by *every* lattice scheme in the NIST PQC family,
-and both were originally written for ML-KEM alone inside `triton_crypto.kernels`:
+Two blocks of mathematics are needed by every scheme in this package, and both were
+originally written for ML-KEM alone inside the old `triton_crypto.kernels` package (now
+`triton_crypto.mlkem.kernels`):
 
     primitives.keccak   Keccak-f[1600] permutation — the permutation itself, plus a
                         pure-Python reference
@@ -10,10 +11,10 @@ and both were originally written for ML-KEM alone inside `triton_crypto.kernels`
     primitives.ntt      negacyclic NTT over Z_q[X]/(X^N+1), parameterised by the modulus
                         and the 2N-th root of unity, forward *and* inverse
 
-ML-KEM (`triton_crypto.kernels.*`, `triton_crypto.pipeline`) and ML-DSA
-(`triton_crypto.mldsa`) are both thin layers on top of these; they keep only what is
-scheme-specific — ML-KEM's base-case multiply in the quadratic extension, ML-DSA's
-SampleInBall / Decompose / hint encoding.
+ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
+(`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
+these; they keep only what is scheme-specific — ML-KEM's base-case multiply and Toeplitz
+GEMMs, ML-DSA's SampleInBall / Decompose, FIPS 205's thash, LMS's Winternitz chains.
 
 The two domains in use:
 

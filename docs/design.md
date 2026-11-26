@@ -267,7 +267,7 @@ Keygen needs no explanation beyond one sentence: **`ek` must contain `t̂` in th
 and `s`/`e` are fresh for every key so there is no reusable matrix to expand. Nothing about the
 Toeplitz trick survives here.
 
-`kernels/ntt.py` implements the forward NTT with the standard 7 stages over `idx ^ L` and a flat
+`mlkem/kernels/ntt.py` implements the forward NTT with the standard 7 stages over `idx ^ L` and a flat
 `[7*256]` zeta table, plus `pow_mac` for the pointwise multiply in the quadratic extension.
 
 `pow_mac` deliberately contains **no gathers**: the even/odd channels of the quadratic extension
@@ -281,7 +281,7 @@ measured ceiling of 81 ns/key (1.21×) — not enough to change the conclusion.
 
 ## 7. Rebuilding key material on the GPU
 
-`kernels/rebuild.py` is a **measurement tool, not a production path**. It exists to answer one
+`mlkem/kernels/rebuild.py` is a **measurement tool, not a production path**. It exists to answer one
 question: cuPQC's API is stateless and re-runs k² SampleNTT calls (SHAKE-128, 840 B each) per
 ciphertext to obtain `Â`, while we expand `Â` once. So how much of the 1.61× comes from skipping
 `Â` generation?

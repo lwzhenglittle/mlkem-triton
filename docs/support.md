@@ -6,7 +6,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | notes |
 |---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **812 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **813 tests green** |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -78,60 +78,7 @@ usable CPU target, so with no accelerator present `resolve_device` raises.
 
 ---
 
-## 3. Project structure
-
-```
-triton_crypto/
-├── devices.py             backend detection, per-backend tile config, num_warps override
-├── params.py              FIPS 203 parameter sets
-├── _inputs.py             uniform bytes/list/array/tensor normalization
-├── _codegen.py            safe write/import of generated Triton source
-├── keyprep.py             private key -> W_dec / W_enc (numpy, host side)
-├── ntt_ref.py             numpy reference for NTT / INTT / Toeplitz
-├── pipeline.py            the main pipeline (fully device-resident)
-├── pipeline_host_hash.py  comparison implementation (hashing on CPU), for baselines
-├── ops.py                 Triton kernels wrapped as torch.library custom ops
-├── gpu_hash.py            thin numpy wrapper over the batch sponge
-├── refimpl.py             kyber-py reference wrapper (optional dependency)
-├── acvp.py                NIST ACVP vector parsing
-├── primitives/            scheme-independent: shared by FIPS 203 and FIPS 204
-│   ├── keccak.py          Keccak-f[1600]: constants, generated kernel, numpy reference
-│   ├── sponge.py          sponge kernel, pad10*1, SHA3/SHAKE registry, torch helpers
-│   └── ntt.py             NTT over Z_q[X]/(X^N+1), parameterised by (q, N, ζ, layers),
-│                          forward + inverse, numpy + Triton, KYBER / DILITHIUM
-├── mldsa/                 FIPS 204 signing + verification (+ a full numpy reference)
-│   ├── params.py          ML-DSA-44/65/87 parameter sets and derived sizes
-│   ├── ref.py             numpy FIPS 204: keygen, sign, verify, packing, sampling, rounding
-│   ├── kernels.py         BitUnpack z, MAC, SampleInBall, hint decode, UseHint+BitPack w1
-│   ├── sign.py            the batched Signer (rejection loop + speculation)
-│   ├── verify.py          the batched Verifier (public-key preprocessing, message formatting)
-│   └── acvp.py            ACVP keyGen / sigGen / sigVer parsing
-├── slhdsa/                FIPS 205 verification (+ a full numpy reference)
-│   ├── params.py          12 parameter sets (SHAKE and SHA-2)
-│   ├── ref.py             numpy FIPS 205: keygen, sign, verify, formatting
-│   ├── kernels.py         fused thash (SHAKE); SHA-2 lives in primitives/sha2.py
-│   └── verify.py          the batched Verifier
-├── lms/                   SP 800-208 LMS/HSS verification (+ RFC 8554 reference)
-│   ├── params.py          LMS / LM-OTS type codes and derived sizes
-│   ├── ref.py             numpy keygen/sign/verify
-│   ├── kernels.py         parallel Winternitz chains
-│   └── verify.py          the batched Verifier
-└── kernels/               ML-KEM-specific kernels
-    ├── glue.py            compress/pack, Y/E assembly, CBD direct write
-    ├── padcat.py          pad10*1 + segment concatenation (one launch)
-    ├── fused_gemm.py      the two fused GEMM passes (ENC / DEC)
-    ├── gemm_modq.py       generic Triton GEMM (comparison path)
-    ├── ntt.py             pow_mac (base-case multiply), ByteEncode12, forward_ntt delegation
-    ├── rebuild.py         on-GPU key-material rebuild (measurement tool)
-    ├── encaps.py          encaps-specific kernels and packing
-    └── elementwise.py     elementwise operators
-```
-
-The decapsulation dataflow is diagrammed in [docs/design.md](design.md) §3.
-
----
-
-## 4. Adding a backend
+## 3. Adding a backend
 
 1. Add a row to `_GEMM_CFG` in `devices.py`, or rely on `_FALLBACK_CFG` first to see whether the
    thing runs at all.

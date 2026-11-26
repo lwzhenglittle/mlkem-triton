@@ -1,18 +1,20 @@
 """Portable post-quantum crypto kernels in pure Triton.
 
-Two layers, deliberately separable:
+Layout:
 
-`triton_crypto.primitives` — the mathematics, useful on its own
-    keccak      Keccak-f[1600] permutation, plus a pure-Python reference
-    sponge      pad10*1 and the named SHA3/SHAKE instances, batched
-    ntt         negacyclic NTT over Z_q[X]/(X^n+1) for any q and 2N-th root of unity,
-                forward and inverse, in the standard and the Montgomery domain
+    primitives/   scheme-agnostic mathematics: Keccak-f[1600], the sponge
+                  (SHA3/SHAKE, any rate/output, batched), SHA-2 compression and a
+                  parameterised negacyclic NTT over Z_q[X]/(X^n+1)
+    mlkem/        ML-KEM (FIPS 203): keygen, encapsulate, decapsulate
+    mldsa/        ML-DSA (FIPS 204): sign, verify, plus a numpy reference
+    slhdsa/       SLH-DSA (FIPS 205): verify, plus a numpy reference
+    lms/          LMS/HSS (SP 800-208): verify, plus a numpy reference
 
-`triton_crypto` (ML-KEM, FIPS 203) and `triton_crypto.mldsa` (ML-DSA, FIPS 204) are thin
-schemes on top; they keep only what is scheme-specific (ML-KEM's base-case multiply in the
-quadratic extension, ML-DSA's SampleInBall / Decompose / hint encoding).
+Every scheme is a thin layer over `primitives`; it keeps only what is
+scheme-specific (ML-KEM's Toeplitz GEMMs, ML-DSA's SampleInBall/Decompose,
+FIPS 205's thash, LMS Winternitz chains).
 
-ML-KEM, all three operations:
+ML-KEM, all three operations (also available from `triton_crypto.mlkem`):
 
     from triton_crypto import Decapsulator, Encapsulator, generate_keypairs
     dec = Decapsulator("ML-KEM-768", dk)
@@ -21,12 +23,11 @@ ML-KEM, all three operations:
     ct, keys = enc.encapsulate(list_of_32B_msgs)
     eks, dks = generate_keypairs("ML-KEM-768", 4096)
 
-ML-DSA verification:
+    from triton_crypto.mldsa import Signer, Verifier
+    from triton_crypto.slhdsa import Verifier
+    from triton_crypto.lms import Verifier
 
-    from triton_crypto.mldsa import Verifier
-    ok = Verifier("ML-DSA-65", pk).verify(messages, signatures)
-
-The `mlkem_triton` name still imports this same package (see that module's docstring).
+The `mlkem_triton` name still imports this same package (deprecated until 1.0).
 
 Kernel contracts: docs/kernels.md. Design notes: README.md, docs/design.md.
 Measurements, and how they were taken: docs/benchmarks.md.
@@ -35,9 +36,9 @@ Measurements, and how they were taken: docs/benchmarks.md.
 from __future__ import annotations
 
 from .devices import available_devices, backend_of, describe, gemm_cfg, resolve_device
-from .params import PARAMS, N, Params, Q
+from .mlkem.params import PARAMS, N, Params, Q
 
-__version__ = "0.7.2"
+__version__ = "0.8.0"
 
 __all__ = [
     "PARAMS",
@@ -60,12 +61,12 @@ __all__ = [
 
 
 _LAZY_MODULE = {
-    "Decapsulator": "pipeline",
-    "decaps_batch": "pipeline",
-    "Encapsulator": "encaps",
-    "encapsulate": "encaps",
-    "KeyGenerator": "keygen",
-    "generate_keypairs": "keygen",
+    "Decapsulator": "mlkem.pipeline",
+    "decaps_batch": "mlkem.pipeline",
+    "Encapsulator": "mlkem.encaps",
+    "encapsulate": "mlkem.encaps",
+    "KeyGenerator": "mlkem.keygen",
+    "generate_keypairs": "mlkem.keygen",
 }
 
 
@@ -75,9 +76,6 @@ def __getattr__(name):
     # implementation), so don't blow up just because torch has no CUDA.
     import importlib
 
-    # Only these three entry points — do **not** write it as "iterate over every
-    # possible module"; that would trigger a recursive import on `pipeline.py`'s
-    # own `from . import keyprep, ops`.
     mod = _LAZY_MODULE.get(name)
     if mod is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

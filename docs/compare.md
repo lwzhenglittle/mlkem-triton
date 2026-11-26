@@ -39,7 +39,7 @@ compiled separately. Hence two honest ratios: **1.86× out of the box**, **1.60�
 ### 0.2 Decomposing the 1.61×: 86% kernel, 14% pre-expansion
 
 cuPQC's API is stateless, so **every ciphertext** re-runs k² SampleNTT calls (SHAKE-128, 840 B
-each) to obtain `Â`; we expand `Â` into a resident Toeplitz matrix once. `kernels/rebuild.py`
+each) to obtain `Â`; we expand `Â` into a resident Toeplitz matrix once. `mlkem/kernels/rebuild.py`
 closes the gap by rebuilding `W_dec`/`W_enc` from `dk` on the GPU: 0.158 ms, **19.3 ns/op at
 B=8192**, taking us from 125 to 144 ns/op — **still 1.39× cuPQC**. So ~86% of the advantage is the
 kernel and 14% is not re-expanding `Â`.

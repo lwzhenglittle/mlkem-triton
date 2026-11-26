@@ -15,7 +15,7 @@ Conventions used below:
 - "grid" is written the way the launcher writes it, so it can be copied.
 
 Several kernels are emitted as **source strings** and compiled at import time
-(`primitives/keccak.py`, `primitives/sponge.py`, `primitives/sha2.py`, `kernels/padcat.py`,
+(`primitives/keccak.py`, `primitives/sponge.py`, `primitives/sha2.py`, `mlkem/kernels/padcat.py`,
 `slhdsa/kernels.py`, `lms/kernels.py`). Triton needs a real file to import, and these are
 specialised per shape (round count, `rate`/`outlen`, message segment lengths, SHA-2 word size),
 so generating their source is cheaper than carrying a `tl.static_range` over every variant.
@@ -30,25 +30,25 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `ntt_kernel` | `primitives/ntt.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
 | `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
-| `_gemm_modq_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
-| `_gemm_modq_i8_kernel` | `kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
-| `padcat2_kernel` | `kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
-| `padcat_sfx_kernel` | `kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat_sfx` |
-| `encaps_kernel` | `kernels/encaps.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_encaps` |
-| `pack_seg_kernel` | `kernels/encaps.py` | ML-KEM | 2-D, `(nseg, cdiv(B,BLK))` | `pack_ciphertext` |
-| `fused_enc_kernel` | `kernels/fused_gemm.py` | ML-KEM | `(npm*cdiv(B,BN),)` | `fused_enc_gemm` |
-| `fused_dec_kernel` | `kernels/fused_gemm.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_dec_gemm` |
-| `compress_pack_kernel` | `kernels/glue.py` | ML-KEM | `(cdiv(B,BN), 32)` | `compress_pack` |
-| `build_ye_kernel` | `kernels/glue.py` | ML-KEM | `(cdiv(B,BN), K+1)` | `build_ye` |
-| `cbd_ye_kernel` | `kernels/glue.py` | ML-KEM | `(cdiv(B,BN), K)` / `(…, K+1)` | `cbd_y`, `cbd_e` |
-| `pow_mac_kernel` | `kernels/ntt.py` | ML-KEM | `(cdiv(P, br),)` | `pow_mac` |
-| `encode12_kernel` | `kernels/ntt.py` | ML-KEM | `(P, 3)` | `byte_encode12` |
-| `_sample_ntt_kernel` | `kernels/rebuild.py` | ML-KEM | `(n,)` | `rebuild`, `keygen` |
-| `_toeplitz_kernel` | `kernels/rebuild.py` | ML-KEM | `(n_blocks*(N/BR),)` | `rebuild` |
-| `_unpack_kernel` | `pipeline.py` | ML-KEM | `(cdiv(B,BR), cdiv(count,BC))` | `ops.unpack_ck` |
-| `_pre_kernel` | `pipeline.py` | ML-KEM | `(cdiv(B,BC),)` | `ops.pre_ck` |
-| `_cmp_kernel` | `pipeline.py` | ML-KEM | `(ROWS/BM, cdiv(B,BN))` | `ops.cmp_ck` |
-| `_cbd2_kernel` | `pipeline.py` | ML-KEM | `(cdiv(n,BLOCK),)` | `ops.cbd2_ck` |
+| `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
+| `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
+| `padcat2_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
+| `padcat_sfx_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat_sfx` |
+| `encaps_kernel` | `mlkem/kernels/encaps.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_encaps` |
+| `pack_seg_kernel` | `mlkem/kernels/encaps.py` | ML-KEM | 2-D, `(nseg, cdiv(B,BLK))` | `pack_ciphertext` |
+| `fused_enc_kernel` | `mlkem/kernels/fused_gemm.py` | ML-KEM | `(npm*cdiv(B,BN),)` | `fused_enc_gemm` |
+| `fused_dec_kernel` | `mlkem/kernels/fused_gemm.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_dec_gemm` |
+| `compress_pack_kernel` | `mlkem/kernels/glue.py` | ML-KEM | `(cdiv(B,BN), 32)` | `compress_pack` |
+| `build_ye_kernel` | `mlkem/kernels/glue.py` | ML-KEM | `(cdiv(B,BN), K+1)` | `build_ye` |
+| `cbd_ye_kernel` | `mlkem/kernels/glue.py` | ML-KEM | `(cdiv(B,BN), K)` / `(…, K+1)` | `cbd_y`, `cbd_e` |
+| `pow_mac_kernel` | `mlkem/kernels/ntt.py` | ML-KEM | `(cdiv(P, br),)` | `pow_mac` |
+| `encode12_kernel` | `mlkem/kernels/ntt.py` | ML-KEM | `(P, 3)` | `byte_encode12` |
+| `_sample_ntt_kernel` | `mlkem/kernels/rebuild.py` | ML-KEM | `(n,)` | `rebuild`, `keygen` |
+| `_toeplitz_kernel` | `mlkem/kernels/rebuild.py` | ML-KEM | `(n_blocks*(N/BR),)` | `rebuild` |
+| `_unpack_kernel` | `mlkem/pipeline.py` | ML-KEM | `(cdiv(B,BR), cdiv(count,BC))` | `ops.unpack_ck` |
+| `_pre_kernel` | `mlkem/pipeline.py` | ML-KEM | `(cdiv(B,BC),)` | `ops.pre_ck` |
+| `_cmp_kernel` | `mlkem/pipeline.py` | ML-KEM | `(ROWS/BM, cdiv(B,BN))` | `ops.cmp_ck` |
+| `_cbd2_kernel` | `mlkem/pipeline.py` | ML-KEM | `(cdiv(n,BLOCK),)` | `ops.cbd2_ck` |
 | `unpack_z_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, l)` | `Verifier._verify_device` |
 | `mac_kernel` | `mldsa/kernels.py` | ML-DSA | `(cdiv(b,MAC_BN), k)` | `Verifier._verify_device` |
 | `sample_in_ball_kernel` | `mldsa/kernels.py` | ML-DSA | `(b,)` | `Verifier._verify_device` |
@@ -134,7 +134,8 @@ The point of "start from a state" is that the first block of every SLH-DSA SHA-2
 (`sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
 different hash function.
 
-`sha_thash` is the same idea specialised to SLH-DSA's shape: one block whose first 22 bytes are the
+`sha_thash` (now `slhdsa/thash_sha2.py`; `primitives.sha2.sha_thash` remains as a deprecated
+alias) is the same idea specialised to SLH-DSA's shape: one block whose first 22 bytes are the
 compressed ADRS, built in registers, with the input value copied through for rows whose WOTS chain
 has finished. Both are used by the SHA-2 parameter sets (`slhdsa/verify.py`), and both are checked
 against numpy for every `(n, dn)` the scheme can produce (`tests/test_sha2.py`).
@@ -161,7 +162,7 @@ the value starts at byte 23, i.e. three bytes into a word, so the block words ar
 
 ## Generic (scheme-agnostic)
 
-### `_gemm_modq_kernel(W, X, E, OUT, M, N, K, sw_m, sw_k, sx_k, sx_n, se_m, se_n, so_m, so_n, MODE, BM, BN, BK)` — `kernels/gemm_modq.py`
+### `_gemm_modq_kernel(W, X, E, OUT, M, N, K, sw_m, sw_k, sx_k, sx_n, se_m, se_n, so_m, so_n, MODE, BM, BN, BK)` — `mlkem/kernels/gemm_modq.py`
 
 `OUT = mod_q(±W·X + E)` with fp16 tensor cores and fp32 accumulation.
 
@@ -180,20 +181,20 @@ bounded so that every partial sum is `< 2²⁴` and therefore exactly representa
 accumulator. `docs/design.md` §2 proves the bound for ML-KEM's use; any new user of this kernel
 must reproduce that argument.
 
-### `_gemm_modq_i8_kernel(HI, LO, X, E, OUT, …)` — `kernels/gemm_modq.py`
+### `_gemm_modq_i8_kernel(HI, LO, X, E, OUT, …)` — `mlkem/kernels/gemm_modq.py`
 
 Same contract, but `W = 64*HI + LO` is split into two `int8` matrices so the int8 tensor cores can
 be used, and the two accumulators are recombined as `64*acc_hi + acc_lo`. Used when the fp16
 exactness bound does not hold for a given tile.
 
-### `padcat2_kernel(A, B, OUT, n, BR)` — `kernels/padcat.py`
+### `padcat2_kernel(A, B, OUT, n, BR)` — `mlkem/kernels/padcat.py`
 
 `OUT[row] = pad10*1(A[row] ‖ B[row], domain)`, one launch. `A`, `B`, `OUT` are byte views of
 `int64` words; the segment lengths, `domain` and the two broadcast flags are baked into the
 generated source, so each distinct message shape is a separate compilation. Used by ML-KEM where
 two byte strings must be absorbed as one sponge input (e.g. `G(m ‖ H(ek))`).
 
-### `padcat_sfx_kernel(A, OUT, n, MOD, OFF, BR)` — `kernels/padcat.py`
+### `padcat_sfx_kernel(A, OUT, n, MOD, OFF, BR)` — `mlkem/kernels/padcat.py`
 
 `OUT[row] = pad10*1(A[row // MOD] ‖ bytes[row % MOD + OFF], domain)` — a prefix shared by `MOD`
 rows plus a per-row suffix. This is the ML-KEM rejection-sampling pattern (`rho ‖ j ‖ i`), where
@@ -204,7 +205,7 @@ rows plus a per-row suffix. This is the ML-KEM rejection-sampling pattern (`rho 
 These kernels hard-code `q = 3329` and the ML-KEM block sizes; for another negacyclic ring use
 `primitives/ntt.py`, which is parameterised by `(q, N, ζ, layers)`.
 
-### `encaps_kernel(W, Y, E, OUT, M, K, N, PIVOT, DU, DV, BM, BN, BK, GM, MASK_N)` — `kernels/encaps.py`
+### `encaps_kernel(W, Y, E, OUT, M, K, N, PIVOT, DU, DV, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/encaps.py`
 
 `[u; v] = W @ Y + E`, then `Compress_du`/`Compress_dv` in the epilogue; writes `comp [M, B] int16`.
 `W` is the Toeplitz-expanded re-encryption matrix (`[M, K]` fp16), `Y [K, B]` fp16, `E [M, B] int16`.
@@ -212,83 +213,83 @@ These kernels hard-code `q = 3329` and the ML-KEM block sizes; for another negac
 a `BN` tile from reading past `B`. Bit packing is deliberately **not** fused here (a byte can span
 three coefficients at `dv=5`, which needs a reorder across tile rows) — see `pack_seg_kernel`.
 
-### `pack_seg_kernel(COMP, OUT, B, CTLEN, OUTOFF, NSEG, D, BLK, OBLK)` — `kernels/encaps.py`
+### `pack_seg_kernel(COMP, OUT, B, CTLEN, OUTOFF, NSEG, D, BLK, OBLK)` — `mlkem/kernels/encaps.py`
 
 `COMP [NSEG*256, B] int16` → `OUT [B, CTLEN]` uint8, `D*32` bytes per polynomial. A byte may span
 **three** coefficients (`D=5`); the kernel always unrolls three terms and masks by the shift.
 
-### `fused_enc_kernel(…)` — `kernels/fused_gemm.py`
+### `fused_enc_kernel(…)` — `mlkem/kernels/fused_gemm.py`
 
 The decapsulation re-encryption pass with its epilogue fused: GEMM → `mod q` → `Compress` →
 compare against the reference ciphertext → column-reduce into `parts [npm, B] int32`. The
 `[1024, B]` fp32 intermediate never reaches memory; `_combine_parts` (an inline helper) atomically
 sums the partials afterwards. `npm = M/BM`.
 
-### `fused_dec_kernel(W, U, V, MB, M, K, N, BM, BN, BK, GM, MASK_N)` — `kernels/fused_gemm.py`
+### `fused_dec_kernel(W, U, V, MB, M, K, N, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/fused_gemm.py`
 
 `mod q (V − W·U)` → `Compress_1` → pack 8 rows into a byte → `MB [B, 32] uint8`. Same skeleton as
 `fused_enc_kernel`, different epilogue.
 
-### `compress_pack_kernel(acc, V, mbytes, B, BN)` — `kernels/glue.py`
+### `compress_pack_kernel(acc, V, mbytes, B, BN)` — `mlkem/kernels/glue.py`
 
 Fallback for the DEC epilogue when the fused kernel's constraints are not met: `acc [256, B] fp32`,
 `V [256, B] int16` → `mbytes [B, 32] uint8`, with eight rows bit-OR'ed into one byte per column
 (no `m_bits` intermediate, no transpose).
 
-### `build_ye_kernel(y, e, mbytes, Y, E, B, K, BN, CHUNK)` — `kernels/glue.py`
+### `build_ye_kernel(y, e, mbytes, Y, E, B, K, BN, CHUNK)` — `mlkem/kernels/glue.py`
 
 The `Y`/`E` layout conversion for the next GEMM: `y [B,K,256]`, `e [B,K+1,256]`, `mbytes [B,32]` →
 `Y [K*256, B] fp16`, `E [(K+1)*256, B] int16`, with `E2 += 1665 * bit` folded in. Replaces a
 `permute + reshape + cat` chain that cost more than the GEMM.
 
-### `cbd_ye_kernel(bufs, mbytes, OUT, B, K, RSTRIDE, BN, ETA, F16, E2)` — `kernels/glue.py`
+### `cbd_ye_kernel(bufs, mbytes, OUT, B, K, RSTRIDE, BN, ETA, F16, E2)` — `mlkem/kernels/glue.py`
 
 Centred binomial distribution, straight from bytes into the fp16/int16 GEMM operand layout. Two
 personalities: `F16=True` produces `Y [K*256, B] fp16` from `y_buf`; `F16=False, E2=True` produces
 `E [(K+1)*256, B] int16` from `e_buf`, with the `1665·bit` term added on the `pid_r == K` segment.
 For `eta=2` one byte holds exactly two coefficients, so it is a single read and a single write.
 
-### `pow_mac_kernel(A, S, E, OUT, GAM, P, K, N, HALF, BR)` — `kernels/ntt.py`
+### `pow_mac_kernel(A, S, E, OUT, GAM, P, K, N, HALF, BR)` — `mlkem/kernels/ntt.py`
 
 `t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]` (FIPS 203 Alg. 11/12). `∘` is the **base-case** multiply in
 `Z_q[X]/(X²−γ)`, so even and odd coefficients form two independent channels; the kernel loads them
 with `stride=2` instead of gathering, which is why there is no `tl.gather` here at all. `GAM` is the
 128-entry `γ` table. Rows are independent; `BR` rows per program.
 
-### `encode12_kernel(V, OUT, N, BYTES, OBLK)` — `kernels/ntt.py`
+### `encode12_kernel(V, OUT, N, BYTES, OBLK)` — `mlkem/kernels/ntt.py`
 
 `ByteEncode_12`: `[P, 256] int32` in `[0, 4096)` → `[P, 384] uint8`. `D=12` means a byte spans at
 most two coefficients, so two loads suffice (contrast `pack_seg_kernel`, where `D=5` spans three).
 
-### `_sample_ntt_kernel(BUF, OUT, NB, N, QL, NCAND)` — `kernels/rebuild.py`
+### `_sample_ntt_kernel(BUF, OUT, NB, N, QL, NCAND)` — `mlkem/kernels/rebuild.py`
 
 FIPS 203 Alg. 7 (rejection sampling of `Â`) from a sponge output: one program per message,
 `tl.cumsum` over the acceptance mask to find prefix positions, then a scatter that keeps the first
 256 legal values. 840-byte input → 256 NTT-domain coefficients.
 
-### `_toeplitz_kernel(A, META, OUT, K, N, BR)` — `kernels/rebuild.py`
+### `_toeplitz_kernel(A, META, OUT, K, N, BR)` — `mlkem/kernels/rebuild.py`
 
 Expands a centred polynomial `a` into a 256×256 negacyclic Toeplitz block
 (`T(a)[i][j] = a[(i-j) mod N] · (±1)`), writing into the fp16 GEMM operand `W`. `META [n_blocks, 3]`
 holds `(source row of the coefficient, W row block, W column block)`. Triton's `%` truncates toward
 zero, so the index is normalised explicitly.
 
-### `_unpack_kernel(buf, out, B, STRIDE, COUNT, D, BR, BC)` — `pipeline.py`
+### `_unpack_kernel(buf, out, B, STRIDE, COUNT, D, BR, BC)` — `mlkem/pipeline.py`
 
 Ciphertext bytes → `int16` coefficients for one `D`-bit segment, `COUNT` values per row.
 
-### `_pre_kernel(ct, out, ref, B, CTLEN, BYTE0, COUNT, D, CENTER, BC, JT)` — `pipeline.py`
+### `_pre_kernel(ct, out, ref, B, CTLEN, BYTE0, COUNT, D, CENTER, BC, JT)` — `mlkem/pipeline.py`
 
 Unpack + decompress (+ centre) + transpose in one pass, while keeping an `int16` reference copy for
 the compare kernel. `COUNT ∈ {256, 512, 768, 1024}` is not a power of two, so it is tiled by
 `JT=256`.
 
-### `_cmp_kernel(acc2, E, ref, cnt, B, ROW0, ROWS, D, BM, BN)` — `pipeline.py`
+### `_cmp_kernel(acc2, E, ref, cnt, B, ROW0, ROWS, D, BM, BN)` — `mlkem/pipeline.py`
 
 `mod q` → compress → compare against the reference → accumulate per-column equality counts. This is
 the fallback path for `fused_enc_kernel` (used when the fused kernel's tiling does not apply).
 
-### `_cbd2_kernel(buf, out, n, BLOCK)` — `pipeline.py`
+### `_cbd2_kernel(buf, out, n, BLOCK)` — `mlkem/pipeline.py`
 
 CBD for `eta=2` over `[n, 128]` bytes; replaces six chained PyTorch ops.
 
@@ -371,10 +372,10 @@ epilogues readable and are inlined by the compiler. They have no grid and no con
 
 | helper | file | used by |
 |---|---|---|
-| `_gemm_tile`, `_tile_id` | `kernels/fused_gemm.py` | `fused_enc_kernel`, `fused_dec_kernel` |
-| `_epi_enc`, `_epi_dec`, `_combine_parts` | `kernels/fused_gemm.py` | the two fused kernels' epilogues |
-| `_compress_epi` | `kernels/encaps.py` | `encaps_kernel` |
-| `_modq` | `kernels/ntt.py` | `pow_mac_kernel` |
+| `_gemm_tile`, `_tile_id` | `mlkem/kernels/fused_gemm.py` | `fused_enc_kernel`, `fused_dec_kernel` |
+| `_epi_enc`, `_epi_dec`, `_combine_parts` | `mlkem/kernels/fused_gemm.py` | the two fused kernels' epilogues |
+| `_compress_epi` | `mlkem/kernels/encaps.py` | `encaps_kernel` |
+| `_modq` | `mlkem/kernels/ntt.py` | `pow_mac_kernel` |
 | `_mod`, `_norm` | `primitives/ntt.py` | `ntt_kernel` |
 | `_use_hint` | `mldsa/kernels.py` | `w1_pack_kernel` |
 

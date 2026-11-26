@@ -40,7 +40,7 @@ import torch
 import triton
 import triton.language as tl
 
-from ..devices import gemm_cfg
+from ...devices import gemm_cfg
 
 Q = 3329
 QL = tl.constexpr(Q)

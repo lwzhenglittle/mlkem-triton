@@ -48,9 +48,10 @@ sys.path.insert(0, str(_ROOT))
 import numpy as np
 import torch
 
-from triton_crypto import acvp, describe, resolve_device
+from triton_crypto import describe, resolve_device
 from triton_crypto.devices import sync
-from triton_crypto.pipeline import Decapsulator
+from triton_crypto.mlkem import acvp
+from triton_crypto.mlkem.pipeline import Decapsulator
 
 
 def _bench(fn, dev, n=25, warmup=5, warm_seconds=0.0):

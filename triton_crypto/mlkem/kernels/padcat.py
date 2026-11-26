@@ -44,8 +44,8 @@ from __future__ import annotations
 import torch
 import triton
 
-from .._codegen import compile_generated
-from ..devices import warps
+from ..._codegen import compile_generated
+from ...devices import warps
 
 BR_DEFAULT = 32
 WARPS_DEFAULT = 4

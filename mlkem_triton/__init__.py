@@ -5,8 +5,8 @@ from "ML-KEM plus a bit of ML-DSA" into a kernel library with two schemes and a 
 primitive layer. Both names import the *same* module objects, so `isinstance` checks and
 `torch`/`triton` caches behave identically; nothing is re-executed under the old name.
 
-This shim exists only so that older code keeps working unchanged. It will be removed in
-0.4.0 — migrate to `triton_crypto`.
+This shim exists only so that older code keeps working unchanged. It is deprecated and
+will be removed in 1.0 — migrate to `triton_crypto`.
 """
 
 from __future__ import annotations
@@ -14,15 +14,20 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import sys
+import warnings
 
 import triton_crypto as _new
 
 # Register every submodule under both names up front. Importing it lazily would also work,
 # but then `mlkem_triton.foo.bar` and `triton_crypto.foo.bar` could end up as two distinct
 # module objects with their own globals — a subtle source of "this class is not that class".
-for _info in pkgutil.walk_packages(_new.__path__, prefix=_new.__name__ + "."):
-    _module = importlib.import_module(_info.name)
-    sys.modules.setdefault(__name__ + _info.name[len(_new.__name__) :], _module)
+with warnings.catch_warnings():
+    # The compatibility shims for the pre-0.8 module paths warn on import; the old package
+    # name must keep working without turning `import mlkem_triton` into a warning storm.
+    warnings.simplefilter("ignore", DeprecationWarning)
+    for _info in pkgutil.walk_packages(_new.__path__, prefix=_new.__name__ + "."):
+        _module = importlib.import_module(_info.name)
+        sys.modules.setdefault(__name__ + _info.name[len(_new.__name__) :], _module)
 
 # Make `import mlkem_triton` hand back the real package, attributes and all.
 sys.modules[__name__] = _new

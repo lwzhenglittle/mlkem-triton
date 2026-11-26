@@ -7,8 +7,9 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from triton_crypto import acvp, keyprep, refimpl
-from triton_crypto.encaps import Encapsulator
+from triton_crypto.mlkem import acvp, keyprep
+from triton_crypto.mlkem.encaps import Encapsulator
+from triton_crypto.mlkem.reference import refimpl
 
 pytest.importorskip("triton")
 
@@ -78,8 +79,8 @@ def test_roundtrip_with_our_own_decaps(ps):
     but that uses the same batch of vectors; here we switch to random keys).
     """
     pytest.importorskip("kyber_py", reason="requires kyber-py to generate random key pairs")
-    from triton_crypto import refimpl
-    from triton_crypto.pipeline import Decapsulator
+    from triton_crypto.mlkem.pipeline import Decapsulator
+    from triton_crypto.mlkem.reference import refimpl
 
     ek, dk = refimpl.ref_keygen(ps)
     rng = np.random.default_rng(7)
@@ -97,7 +98,7 @@ def test_roundtrip_with_our_own_decaps(ps):
 
 def test_pack_handles_odd_bit_widths():
     """With du/dv = 11/5 one byte spans 3 coefficients; bit packing must be right (regression)."""
-    from triton_crypto.kernels.encaps import pack_ciphertext
+    from triton_crypto.mlkem.kernels.encaps import pack_ciphertext
 
     for du, dv, k in ((10, 4, 3), (11, 5, 4)):
         ct = 32 * (du * k + dv)
