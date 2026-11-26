@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.6.0] — ML-DSA signing on the device, and the ACVP LMS vectors
+
+### Added — ML-DSA signing (FIPS 204 Alg. 7)
+
+The repository was verification-only for ML-DSA; it now signs too, batched, with one long-lived
+private key:
+
+- `triton_crypto/mldsa/sign.py` — `Signer`: ExpandMask (one SHAKE per polynomial, 19-bit fields),
+  `Â·ŷ` through the verifier's `mac_kernel`, `c̃ = H(μ ‖ w1Encode(w))`, SampleInBall, `c·s1`,
+  `w − c·s2`, `c·t0`, MakeHint, and the acceptance checks. The rejection loop compacts the batch
+  after every attempt, and messages of different lengths are signed in groups (the μ hash needs a
+  rectangular buffer).
+- Three entry points, mirroring the standard: `sign` (external interface with context and
+  pre-hash), `sign_mprime` (internal, M′ given), `sign_mu` (external μ).
+- The two encoders (`pack_z`, `pack_h`) run on the host with the ACVP-checked reference bit packers.
+
+**360/360 ACVP sigGen cases byte-exact on device** (all three sets × internal / external pure /
+pre-hash / external-μ × deterministic and hedged), plus fresh-key byte-exactness and batches large
+enough to exercise the compaction. Throughput at B = 1024: 245 / 279 / 321 µs per signature
+(44/65/87) versus 5.4 ms for the Python reference. No liboqs baseline: the build was not present in
+the workspace for this session, and a number is not quoted rather than guessed.
+
+### Added — the SHA-256/192 LMS family and the ACVP LMS vectors
+
+Covered in the previous entry; the ACVP `LMS-sigVer` vectors pass 16/16 on device and in the
+reference.
+
 ## [0.5.0] — LMS/HSS verification, and a measured "no" to fusing the WOTS chains
 
 ### Added — LMS / HSS (NIST SP 800-208, RFC 8554)

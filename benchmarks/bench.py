@@ -34,6 +34,7 @@ SCRIPTS = {
     },
     "mldsa": {
         None: "bench_mldsa_verify.py",
+        "sign": "bench_mldsa_sign.py",
     },
     "slhdsa": {
         None: "bench_slhdsa_verify.py",

@@ -406,3 +406,25 @@ The shape of the work explains why the batch helps so much: one LM-OTS chain is 
 thousands turns the same chain steps into a full-grid launch. The device figure is ~1 Ghash/s of
 32-bit SHA-256 compression, which is ~3× the Keccak permutation rate measured for SLH-DSA (that one
 is 64-bit lane arithmetic).
+
+---
+
+## 14. ML-DSA signing
+
+`benchmarks/bench_mldsa_sign.py`, Arc B390, one private key, batch of independent messages:
+
+| set | B=64 | B=256 | B=1024 | Python reference |
+|---|---:|---:|---:|---:|
+| ML-DSA-44 | 1 075 µs | 500 µs | **245 µs** | 5 402 µs |
+| ML-DSA-65 | 1 021 µs | 536 µs | **279 µs** | — |
+| ML-DSA-87 | 1 273 µs | 552 µs | **321 µs** | — |
+
+Two things make this different from verification. First, the work is data-dependent: each
+signature retries the rejection loop until `z`, `r0` and `c·t0` are small enough, so the number of
+attempts (usually 1–5) varies per message; the batch is compacted after every attempt so a late
+accepter does not hold up the rest. Second, the two encoders (`z` into γ1-bounded fields, and the
+sparse hint) run on the host, one signature at a time, and they are now the tail of the profile —
+the arithmetic (NTT, `Â·ŷ`, `c·s1`) is the same machinery that makes verification fast.
+
+At B = 64 the batch is launch-bound (18 launches per attempt, `k·l` work), which is why per-signature
+cost falls ~4× from B=64 to B=1024.

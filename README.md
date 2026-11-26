@@ -6,7 +6,7 @@ intrinsics: one code base that runs on Intel, NVIDIA and AMD GPUs.
 | layer | contents | contracts |
 |---|---|---|
 | `triton_crypto.primitives` | Keccak-f[1600]; the sponge (SHA3 / SHAKE, any rate and output length, batched); a parameterised negacyclic NTT over `Z_q[X]/(X^n+1)` for any `q` and 2N-th root of unity, forward and inverse | [docs/kernels.md](docs/kernels.md) |
-| schemes | ML-KEM (FIPS 203) — keygen, encapsulate, decapsulate · ML-DSA (FIPS 204) — signature verification | below |
+| schemes | ML-KEM (FIPS 203) — keygen, encapsulate, decapsulate · ML-DSA (FIPS 204) — verify and sign · SLH-DSA (FIPS 205) — verify · LMS/HSS (SP 800-208) — verify | below |
 
 Every kernel the library launches is documented with its shape / dtype / grid contract in
 [docs/kernels.md](docs/kernels.md). That catalogue, not the list of schemes, is the part meant to
@@ -160,11 +160,14 @@ tables, and the comparison against cuPQC: [docs/benchmarks.md](docs/benchmarks.m
 
 ---
 
-## ML-DSA (FIPS 204) signature verification
+## ML-DSA (FIPS 204) verification and signing
 
-Verification is the batchable half of ML-DSA — signing needs the rejection loop and secret
-material — and it has exactly the shape this project optimises for: **one long-lived public
-key, very many signatures**. `Â = ExpandA(ρ)` and `t̂1` are expanded once when the `Verifier`
+Verification is the batchable half of ML-DSA and has exactly the shape this project optimises for:
+**one long-lived public key, very many signatures**. Signing is the other half, and it is here too
+(one long-lived *private* key, many messages): the rejection loop is compacted across the batch —
+accepted signatures leave, the rest keep trying — while the heavy stages are the verifier's own
+kernels (`ntt_torch`, `mac_kernel`, `sample_in_ball_kernel`, `unpack_z_kernel`, `w1_pack_kernel`).
+ `Â = ExpandA(ρ)` and `t̂1` are expanded once when the `Verifier`
 is built; a signature then costs one BitUnpack, `l + k + 1` transforms, `k·l` pointwise
 products and three SHAKE calls.
 
@@ -197,6 +200,30 @@ data. `liboqs 16P` = aggregate over 16 concurrent processes, min-of-15:
 | numpy reference | byte-exact ACVP **keyGen** (75) and **sigGen** (360, deterministic *and* hedged), 180/180 sigVer |
 | kernels | BitUnpack(z), HintBitUnpack, SampleInBall, Decompose/UseHint/BitPack, NTT-domain MAC each compared with `mldsa/ref.py` |
 | cross-implementation | signatures produced by liboqs verify here; both reject the same corrupted ones |
+
+### Signing (FIPS 204 Alg. 7)
+
+```python
+from triton_crypto.mldsa import Signer
+
+s = Signer("ML-DSA-65", sk)  # expanded secret key, preprocessing once
+sigs = s.sign(messages)  # deterministic (rnd = 0), any batch size
+sigs = s.sign(messages, ctx=b"", prehash="SHA2-256", rnd=os.urandom(32))  # hedged
+sigs = s.sign_mu(mus)  # external-μ interface
+```
+
+| gate | result |
+|---|---|
+| NIST ACVP **sigGen** on device, all 360 cases (44/65/87 × internal / external pure / pre-hash / external-μ × deterministic and hedged) | **360/360 byte-exact** |
+| fresh keys, all three sets, byte-exact against the reference | pass |
+| batches large enough to exercise the rejection compaction, then verified by `Verifier` | pass |
+
+Throughput at B = 1024 (Arc B390): **245 µs** (ML-DSA-44), **279 µs** (65), **321 µs** (87) per
+signature, against 5 402 µs for this repository's Python reference (≈22×). Writing a signature is
+*not* the same kind of problem as verifying one — the rejection loop leaves the number of attempts
+data-dependent, and the two host-side packers (`z`, hint) are serial per signature, which is where
+the remaining time goes. **No liboqs baseline is quoted here**: the liboqs build was not present in
+the workspace for this session, so the only measured comparison is against our own reference.
 
 ### Why there is no Toeplitz GEMM here
 
