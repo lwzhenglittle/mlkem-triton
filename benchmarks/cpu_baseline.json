@@ -5,11 +5,11 @@
     "nproc": 16,
     "scaling": {
       "scaling_governor": "powersave",
-      "scaling_cur_freq": "4657806",
+      "scaling_cur_freq": "3979113",
       "cpuinfo_max_freq": "4700000",
       "cpuinfo_min_freq": "400000"
     },
-    "timestamp": "2026-11-26T16:11:46+00:00",
+    "timestamp": "2026-11-26T16:13:40+00:00",
     "python": "3.14.10",
     "openssl": "OpenSSL 3.5.9 29 Sep 2026 (Library: OpenSSL 3.5.9 29 Sep 2026)",
     "liboqs_builds": [
@@ -19,127 +19,127 @@
       "third_party/liboqs/build-multi/lib/liboqs.so"
     ],
     "poseidon2_ref": "benchmarks/poseidon2_ref/target/release/poseidon2-ref",
-    "newest_rival": "2026-11-26T16:11:46+00:00"
+    "newest_rival": "2026-11-26T16:13:40+00:00"
   },
   "rivals": {
     "chacha20": {
       "unit": "B/s",
-      "one_thread": 4809867260.0,
-      "procs16": 28974311830.0,
+      "one_thread": 4820418560.0,
+      "procs16": 34550098620.0,
       "note": "openssl speed -evp chacha20",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "chacha20-poly1305": {
       "unit": "B/s",
-      "one_thread": 3287678980.0,
-      "procs16": 22471079860.0,
+      "one_thread": 3283877890.0,
+      "procs16": 22398779390.0,
       "note": "openssl speed -evp chacha20-poly1305",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "aes-128-ctr": {
       "unit": "B/s",
-      "one_thread": 14078705660.0,
-      "procs16": 166007037510.0,
+      "one_thread": 14097317890.0,
+      "procs16": 166004927720.0,
       "note": "openssl speed -evp aes-128-ctr",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "sha256": {
       "unit": "B/s",
-      "one_thread": 4291772420.0,
-      "procs16": 50195305970.0,
+      "one_thread": 4288397309.9999995,
+      "procs16": 50426428270.0,
       "note": "openssl speed -evp sha256",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "sha512": {
       "unit": "B/s",
-      "one_thread": 1127055360.0,
-      "procs16": 13234185330.0,
+      "one_thread": 1131380740.0,
+      "procs16": 13512490550.0,
       "note": "openssl speed -evp sha512",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "sha3-256": {
       "unit": "B/s",
-      "one_thread": 726990850.0,
-      "procs16": 7815714790.0,
+      "one_thread": 734068740.0,
+      "procs16": 7688975160.0,
       "note": "openssl speed -evp sha3-256",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "sha3-512": {
       "unit": "B/s",
-      "one_thread": 391266300.0,
-      "procs16": 4485401110.0,
+      "one_thread": 398163970.0,
+      "procs16": 4304908750.0,
       "note": "openssl speed -evp sha3-512",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "shake128": {
       "unit": "B/s",
-      "one_thread": 895025150.0,
-      "procs16": 9730488230.0,
+      "one_thread": 913342460.0,
+      "procs16": 9461270960.0,
       "note": "openssl speed -evp shake128",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "shake256": {
       "unit": "B/s",
-      "one_thread": 739885060.0,
-      "procs16": 8015328930.0,
+      "one_thread": 744833020.0,
+      "procs16": 7821780680.0,
       "note": "openssl speed -evp shake256",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "poly1305": {
       "unit": "B/s",
-      "one_thread": 7693203878.837488,
-      "procs16": 90399006319.28883,
+      "one_thread": 3616839436.226428,
+      "procs16": 93744266197.76433,
       "note": "OpenSSL 3.5 EVP_MAC POLY1305",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "blake3": {
       "unit": "B/s",
-      "one_thread": 2927600000.0,
-      "procs16": 55187700000.0,
+      "one_thread": 2871900000.0,
+      "procs16": 56748700000.0,
       "note": "official BLAKE3 (cargo ref)",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "ntt-2^20": {
       "unit": "op/s",
-      "one_thread": 14.062126474765515,
-      "procs16": 191.25554086939914,
+      "one_thread": 14.302468606081408,
+      "procs16": 191.84482356974334,
       "note": "gcc -O3 Stockham NTT, 2^20 BabyBear",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "poseidon2": {
       "unit": "op/s",
-      "one_thread": 9550000.0,
-      "procs16": 144020000.0,
+      "one_thread": 9630000.0,
+      "procs16": 134050000.0,
       "note": "Plonky3 0.8 packed monty-31x8 (cargo ref)",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "mldsa-44-verify": {
       "unit": "op/s",
-      "one_thread": 61783.99346858221,
-      "procs16": 844024.1986466078,
+      "one_thread": 62151.73161105707,
+      "procs16": 950792.7268688389,
       "note": "liboqs 0.16.0 ML-DSA-44 verify",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "falcon-512-verify": {
       "unit": "op/s",
-      "one_thread": 41971.94710903473,
-      "procs16": 448347.8447350319,
+      "one_thread": 24678.352450572078,
+      "procs16": 443217.4088135181,
       "note": "liboqs 0.16.0 Falcon-512 verify",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "falcon-padded-512-verify": {
       "unit": "op/s",
-      "one_thread": 42595.56034311591,
-      "procs16": 448281.82504706905,
+      "one_thread": 40522.33297875285,
+      "procs16": 447299.4173348808,
       "note": "liboqs 0.16.0 Falcon-padded-512 verify",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     },
     "slhdsa-128f-verify": {
       "unit": "op/s",
-      "one_thread": 1034.34249804842,
-      "procs16": 15524.783903905287,
+      "one_thread": 1059.492628998382,
+      "procs16": 15288.697368290756,
       "note": "liboqs 0.16.0 SLH-DSA-SHA2-128f verify",
-      "measured_at": "2026-11-26T16:11:46+00:00"
+      "measured_at": "2026-11-26T16:13:40+00:00"
     }
   }
 }
