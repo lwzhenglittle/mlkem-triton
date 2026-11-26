@@ -32,13 +32,14 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
+| `_gemm_int8_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN))` | `gemm_int8_torch` |
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
-| `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
-| `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
+| `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
+| `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
 | `padcat2_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
 | `padcat_sfx_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat_sfx` |
 | `encaps_kernel` | `mlkem/kernels/encaps.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_encaps` |
@@ -273,6 +274,20 @@ Two conventions this kernel is a trap for, both caught only by a known-answer ve
 The host key schedule is *not* in the kernel: expanding 4096 keys with numpy costs ~340 ms,
 which is 50x the kernel for a 4 MiB batch. `aes128_ctr_torch` therefore takes a precomputed
 `rk` and `bench_primitive.py` hoists it out of the timing.
+
+### `_gemm_int8_kernel(A, B, OUT, M, N, K, sa_m, sa_k, sb_k, sb_n, so_m, so_n, BM, BN, BK)` — `primitives/gemm.py`
+
+Exact `int8 x int8 -> int32` matrix multiply, and nothing else: no modulus, no epilogue. It is
+the generic half of `mlkem/kernels/gemm_modq.py` (which is ML-KEM's, with `Q = 3329`, two
+epilogues and a float-assisted reduction). The 0.8.0 review pointed out that the docs called
+that one "generic" while it lived in ML-KEM's package; the generic piece now lives here, and
+`gemm_modq` stays where its semantics belong.
+
+Why a bare int8 dot is a primitive: XMX int8 accumulators are int32 and exact, which is what
+lets a GF(2^8) matrix product be assembled from per-bit-plane integer products XOR-ed through
+the polynomial's reduction masks (`tests/test_gemm_int8.py` does exactly that and checks it
+against a schoolbook GF(2^8) product). Whether that beats a bitsliced CUDA-core version is the
+question `PLAN_ffgemm.md` exists to answer; this kernel only guarantees the arithmetic.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

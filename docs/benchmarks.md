@@ -691,3 +691,30 @@ table size and the access pattern pinned down first.
 What survives from the original argument: **the port is still not worth doing**. 0.77x of a
 single AES-NI core and 0.06x of sixteen processes, for 2-3 weeks of bitslicing work predicted at
 20-40 GB/s (0.12-0.23x of 16P). And the same 12x uncertainty applies to that prediction.
+
+## 19. Exact int8 GEMM: the substrate for a finite-field GEMM
+
+`python benchmarks/bench_primitive.py --only gemm-int8`. One number being measured: `int8 x
+int8 -> int32` is **exact** on the matrix unit (no rounding), which is what lets a GF(2^8)
+product be assembled from per-bit-plane GEMMs.
+
+| n (square) | ms | GMAC/s | TMAC/s | equivalent int8 TOPS |
+|---:|---:|---:|---:|---:|
+| 256 | 0.093 | 180 | 0.18 | 0.36 |
+| 512 | 0.161 | 834 | 0.83 | 1.7 |
+| 1024 | 0.554 | **1 938** | **1.94** | 3.9 |
+| 2048 | 2.167 | **3 965** | **3.96** | 7.9 |
+
+The eval's int8 estimate was ~50 TOPS (2x the measured 26-29 TFLOPS fp16), i.e. ~25 TMAC/s.
+The basic Triton matmul here reaches **16% of that at n = 2048** with ML-KEM's tile table
+(128x128x32) -- no autotuning, no swizzling, one configuration.
+
+That gap matters for `PLAN_ffgemm.md` rather than for this repository: the bit-plane strategy
+pays 8x (one GEMM per plane), so ~4 TMAC/s of int8 becomes **~0.5 TMAC/s of GF(2^8) MACs**. The
+"6 T GF-MAC/s" in `eval-triton-crypto-primitives.md` §4.9 assumed near-peak int8; the honest
+figure is 8-12x lower until the matmul itself is tuned. Measure the GF(2^8) product end to
+end before assuming the matrix unit wins.
+
+The bit-plane *arithmetic* is checked in `tests/test_gemm_int8.py`: 64 tiny int8 GEMMs,
+XOR-ed through the AES polynomial's reduction masks, are compared against a schoolbook
+GF(2^8) matrix product.

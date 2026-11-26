@@ -25,8 +25,9 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |
 | `primitives.poly1305` | Poly1305 (RFC 8439) and the ChaCha20-Poly1305 AEAD |
 | `primitives.aes` | AES-128-CTR through a T-table — a gather measurement, not a fast path |
+| `primitives.gemm` | exact int8 GEMM (3.96 TMAC/s at n = 2048), the GF(2^k) GEMM substrate |
 
-**1031 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
+**1043 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.

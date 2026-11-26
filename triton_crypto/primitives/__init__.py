@@ -18,6 +18,7 @@ originally written for ML-KEM alone inside the old `triton_crypto.kernels` packa
     primitives.poseidon2 Poseidon2-BabyBear/16, the algebraic hash ZK systems use (Plonky3)
     primitives.poly1305 Poly1305 (RFC 8439) and the ChaCha20-Poly1305 AEAD
     primitives.aes      AES-128-CTR through a T-table: a gather measurement, not a fast path
+    primitives.gemm     exact int8 matrix multiply: the substrate for a GF(2^k) GEMM
 
 ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
 (`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
@@ -37,7 +38,7 @@ Three domains in use:
 
 from __future__ import annotations
 
-from . import aes, chacha20, fields, keccak, ntt, poly1305, poseidon2, sha2, sponge
+from . import aes, chacha20, fields, gemm, keccak, ntt, poly1305, poseidon2, sha2, sponge
 from .aes import (
     aes128_ctr_np,
     aes128_ctr_torch,
@@ -51,6 +52,7 @@ from .chacha20 import (
     chacha20_xor,
 )
 from .fields import BABYBEAR, MONT_R, PrimeField, mont_mul
+from .gemm import gemm_int8_np, gemm_int8_torch
 from .ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -143,6 +145,9 @@ __all__ = [
     "chacha20_xor",
     "compress_np",
     "fields",
+    "gemm",
+    "gemm_int8_np",
+    "gemm_int8_torch",
     "get_sponge",
     "hash_np",
     "hash_np_batch",

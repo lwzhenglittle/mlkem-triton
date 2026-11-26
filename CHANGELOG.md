@@ -58,6 +58,20 @@ and Gaussian sampler that §5.3 of the eval explicitly rules out for a cross-bac
   against `pqclean`'s own decoder, including a mixed batch where one bad row must not disturb
   its neighbours.
 
+### `primitives/gemm.py`: the generic half of the GEMM, and 16% of peak
+
+The 0.8.0 review (P1-2) pointed out that `docs/kernels.md` called `_gemm_modq_kernel` "generic"
+while it lived in ML-KEM's package. The generic piece is now extracted rather than moved:
+`primitives/gemm.py` is a bare exact `int8 x int8 -> int32` matmul (no modulus, no epilogue),
+and `mlkem/kernels/gemm_modq.py` stays where its `Q = 3329` semantics belong.
+
+Measured 1.94 TMAC/s at n = 1024 and **3.96 TMAC/s at n = 2048** (256 is launch-bound at 0.18).
+That is **16% of the ~25 TMAC/s int8 peak** with ML-KEM's untuned tile table, which matters for
+`PLAN_ffgemm.md`: the bit-plane strategy pays 8x, so ~4 TMAC/s of int8 becomes ~0.5 TMAC/s of
+GF(2^8) MACs, not the 6 T MAC/s the eval assumed. `tests/test_gemm_int8.py` checks the
+arithmetic end to end -- 64 tiny int8 GEMMs XOR-ed through the AES reduction masks against a
+schoolbook GF(2^8) product.
+
 ### AES-128-CTR through a T-table, and a prediction that came out 12x wrong
 
 `primitives/aes.py` is the repository's measurement of what a table-driven cipher costs on a

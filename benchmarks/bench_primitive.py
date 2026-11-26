@@ -42,6 +42,7 @@ from triton_crypto import devices
 from triton_crypto.primitives import (
     aes,
     chacha20,
+    gemm,
     keccak,
     poly1305,
     poseidon2,
@@ -189,6 +190,27 @@ def bench_poseidon2(batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_gemm_int8(batch: int, size: int, dev) -> Bench:
+    """Exact int8 GEMM at 1024x1024x1024 (batch/size do not apply; MACs are the unit).
+
+    256 is launch-bound (0.18 TMAC/s) and 2048 reaches 3.96; 1024 is a fair single number, and
+    `docs/benchmarks.md` §19 has the scaling table.
+    """
+    import torch
+
+    m = k = n = 1024
+    rng = np.random.default_rng(0)
+    a = torch.as_tensor(rng.integers(-128, 128, (m, k), dtype=np.int8), device=dev)
+    b = torch.as_tensor(rng.integers(-128, 128, (k, n), dtype=np.int8), device=dev)
+    return Bench(
+        lambda: gemm.gemm_int8_torch(a, b, device=dev),
+        units=m * n * k,
+        unit="MAC",
+        nbytes=(m * k + k * n + m * n * 4),
+        note="int8 x int8 -> int32, exact",
+    )
+
+
 def bench_aes(batch: int, size: int, dev) -> Bench:
     """T-table AES-128-CTR. The host key schedule is hoisted out of the timing: it is ~80 us
     per key, i.e. 0.3 s for 4096 streams, which would swamp the kernel (see §18)."""
@@ -271,6 +293,7 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "poly1305": bench_poly1305,
     "chacha20-poly1305": bench_aead,
     "aes128-ctr": bench_aes,
+    "gemm-int8": bench_gemm_int8,
 }
 
 ORDER = list(CASES)
@@ -292,6 +315,7 @@ WHAT = {
     "poly1305": "Poly1305 over --size-byte messages (multiple of 16)",
     "chacha20-poly1305": "ChaCha20-Poly1305 seal (encrypt + tag), no AAD",
     "aes128-ctr": "AES-128-CTR through a T-table (the gather counter-example)",
+    "gemm-int8": "exact int8 GEMM, 256x256x256 (the GF(2^k) GEMM substrate)",
 }
 
 
