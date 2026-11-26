@@ -123,7 +123,6 @@ class Signer:
 
     def sign_mprime(self, mprimes, rnd=None) -> np.ndarray:
         """The internal interface: each message is already M′ (FIPS 204 Alg. 7's input)."""
-        p = self.p
         mprime = [bytes(m) for m in mprimes]
         if not mprime:
             return np.empty((0, 0), dtype=np.uint8)
