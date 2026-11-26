@@ -53,6 +53,29 @@ and Gaussian sampler that §5.3 of the eval explicitly rules out for a cross-bac
   against `pqclean`'s own decoder, including a mixed batch where one bad row must not disturb
   its neighbours.
 
+### Poly1305 and ChaCha20-Poly1305
+
+The primitive layer's last cheap pattern: a 130-bit modular MAC, and the AEAD that composes it
+with ChaCha20.
+
+- **`primitives/poly1305.py`** — Poly1305 in the canonical 5 x 26-bit limb layout (int64
+  carries every product; no Montgomery form, no `umulhi` pairs), a Python-integer reference
+  that handles any length, and `chacha20_poly1305_torch` / `_open_torch` for the AEAD with AAD
+  and arbitrary message lengths.
+- **RFC 8439 both ways**: the §2.5.2 MAC vector and the §2.8.2 AEAD vector (114-byte
+  plaintext, 12-byte AAD) are reproduced byte for byte, and `openssl mac ... POLY1305` was
+  used to confirm the reference before the vector was trusted.
+- **Measured**: Poly1305 **11.37 GB/s** and the AEAD **4.50 GB/s** at B = 65536 (1 KiB
+  messages) — 2.8x one core, **0.44x of sixteen processes**. Coverage, not a speed story, and
+  the docs say so.
+- **Three bugs the vectors caught**, all recorded in `docs/kernels.md`: `2^128` added twice for
+  messages whose length is not a multiple of 16; `h + limb & MASK` masking the whole
+  accumulator because Python binds `+` tighter than `&`; and a key stride of 16 instead of 32,
+  which works for lane 0 and for a batch of one.
+- **One host round trip cost half the throughput**: the first AEAD version handed the MAC host
+  buffers (4 MB per call at B = 4096), 2.10 GB/s against 4.04 GB/s with the tensors left on the
+  device.
+
 ### The CPU rival, as a script and as two columns
 
 `benchmarks/bench_cpu.py` measures the work the primitive table is compared against, on the

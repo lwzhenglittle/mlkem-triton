@@ -16,6 +16,7 @@ originally written for ML-KEM alone inside the old `triton_crypto.kernels` packa
                         modular primitive shares (`PrimeField`, `mont_mul`)
     primitives.chacha20 the ARX stream cipher (RFC 8439), the first non-PQC primitive
     primitives.poseidon2 Poseidon2-BabyBear/16, the algebraic hash ZK systems use (Plonky3)
+    primitives.poly1305 Poly1305 (RFC 8439) and the ChaCha20-Poly1305 AEAD
 
 ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
 (`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
@@ -35,7 +36,7 @@ Three domains in use:
 
 from __future__ import annotations
 
-from . import chacha20, fields, keccak, ntt, poseidon2, sha2, sponge
+from . import chacha20, fields, keccak, ntt, poly1305, poseidon2, sha2, sponge
 from .chacha20 import (
     chacha20_keystream,
     chacha20_keystream_np,
@@ -54,6 +55,13 @@ from .ntt import (
     negacyclic_conv_np,
     ntt_np,
     ntt_torch,
+)
+from .poly1305 import (
+    chacha20_poly1305_open_torch,
+    chacha20_poly1305_torch,
+    poly1305_np,
+    poly1305_np_batch,
+    poly1305_torch,
 )
 from .poseidon2 import (
     BABYBEAR_POSEIDON2_16,
@@ -118,6 +126,8 @@ __all__ = [
     "chacha20_keystream",
     "chacha20_keystream_np",
     "chacha20_keystream_torch",
+    "chacha20_poly1305_open_torch",
+    "chacha20_poly1305_torch",
     "chacha20_xor",
     "compress_np",
     "fields",
@@ -137,6 +147,10 @@ __all__ = [
     "pad_batch",
     "pad_torch",
     "padded_len",
+    "poly1305",
+    "poly1305_np",
+    "poly1305_np_batch",
+    "poly1305_torch",
     "poseidon2",
     "poseidon2_permute_np",
     "poseidon2_permute_torch",

@@ -39,7 +39,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from triton_crypto import devices
-from triton_crypto.primitives import chacha20, keccak, poseidon2, sha2, sponge
+from triton_crypto.primitives import chacha20, keccak, poly1305, poseidon2, sha2, sponge
 from triton_crypto.primitives.ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -181,6 +181,36 @@ def bench_poseidon2(batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_poly1305(batch: int, size: int, dev) -> Bench:
+    rows, size = max(batch, 1), max(size, 16)
+    size -= size % 16  # the device path takes whole 16-byte blocks
+    rng = np.random.default_rng(0)
+    keys = rng.integers(0, 256, (rows, 32), dtype=np.uint8)
+    msgs = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    return Bench(
+        lambda: poly1305.poly1305_torch(keys, msgs, device=dev),
+        units=rows * size,
+        unit="B",
+        nbytes=rows * size,
+        note="RFC 8439, 5x26-bit limbs",
+    )
+
+
+def bench_aead(batch: int, size: int, dev) -> Bench:
+    rows, size = max(batch, 1), max(size, 1)
+    rng = np.random.default_rng(0)
+    keys = rng.integers(0, 256, (rows, 32), dtype=np.uint8)
+    nonces = rng.integers(0, 256, (rows, 12), dtype=np.uint8)
+    pt = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    return Bench(
+        lambda: poly1305.chacha20_poly1305_torch(keys, nonces, pt, device=dev),
+        units=rows * size,
+        unit="B",
+        nbytes=2 * rows * size,
+        note="ChaCha20-Poly1305 seal, no AAD",
+    )
+
+
 def bench_chacha20(batch: int, size: int, dev) -> Bench:
     rng = np.random.default_rng(0)
     rows = max(batch, 1)
@@ -209,6 +239,8 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "ntt-babybear": lambda b, s, d: _ntt_bench(BABYBEAR_NTT, b, s, d),
     "chacha20": bench_chacha20,
     "poseidon2": bench_poseidon2,
+    "poly1305": bench_poly1305,
+    "chacha20-poly1305": bench_aead,
 }
 
 ORDER = list(CASES)
@@ -227,6 +259,8 @@ WHAT = {
     "ntt-babybear": "negacyclic NTT, q = 2^31-2^27+1, 8 layers",
     "chacha20": "ChaCha20 keystream (RFC 8439) over --size-byte streams",
     "poseidon2": "Poseidon2-BabyBear/16 permutation (Plonky3 parameters)",
+    "poly1305": "Poly1305 over --size-byte messages (multiple of 16)",
+    "chacha20-poly1305": "ChaCha20-Poly1305 seal (encrypt + tag), no AAD",
 }
 
 
@@ -256,6 +290,7 @@ CPU_RIVAL = {
     "sha3-256": "sha3-256",
     "sha3-512": "sha3-512",
     "poseidon2": "poseidon2",
+    "chacha20-poly1305": "chacha20-poly1305",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"

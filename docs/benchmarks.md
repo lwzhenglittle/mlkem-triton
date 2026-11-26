@@ -634,3 +634,33 @@ Two things worth knowing before reading Falcon numbers anywhere:
   decoder is a prefix code, so it cannot be vectorised as a bit gather; the batch decoder is
   vectorised *across signatures* instead (one numpy op per coefficient index), which is what
   took it from 134 µs to 24 µs per signature.
+
+## 17. Poly1305 and ChaCha20-Poly1305
+
+`python benchmarks/bench_primitive.py --only poly1305,chacha20-poly1305 --batch 65536`.
+Arc B390, 1 KiB messages, min-of-7.
+
+| primitive | B | rate | GB/s | %copy | vs 1T | vs 16P |
+|---|---:|---:|---:|---:|---:|---:|
+| `poly1305` | 4096 | 8.69 GB/s | 8.7 | 4% | n/a | n/a |
+| `poly1305` | 65536 | **11.37 GB/s** | 11.4 | 5% | n/a | n/a |
+| `chacha20-poly1305` | 4096 | 3.82 GB/s | 7.6 | 4% | 2.38x | 0.37x |
+| `chacha20-poly1305` | 65536 | **4.50 GB/s** | 9.0 | 4% | 2.81x | 0.44x |
+
+`rate` for the AEAD row is plaintext throughput (the GB/s column counts read+write traffic).
+The CPU rival is OpenSSL's ChaCha20-Poly1305: 3.26 GB/s on one thread, 20.7 GB/s over sixteen
+processes. **Poly1305 is the cheapest primitive to be honest about**: 11.4 GB/s is 1.2x the
+single-core OpenSSL Poly1305 (~9.6 GB/s, derived from the AEAD and raw ChaCha20 rates) and
+about **0.13x of sixteen processes**, which is the same shape as every other ALU-bound row.
+It is here for coverage -- the AEAD row now exists -- not for a speed story.
+
+Two things this pair cost, both worth recording:
+
+- **One `->cpu()` turns 4.5 GB/s into 2.1 GB/s.** The first version of the AEAD handed the
+  Poly1305 kernel host buffers (`poly_key.cpu().numpy()`), i.e. a 4 MB round trip per call at
+  B = 4096. Keeping the tensors on the device took the seal from 2.10 to 4.04 GB/s; nothing
+  about the kernels changed.
+- **The MAC pads, the ciphertext does not.** RFC 8439's `mac_data` is `aad || pad16 || ct ||
+  pad16 || le64(len(aad)) || le64(len(ct))`, so the device Poly1305 only ever sees whole
+  16-byte blocks, while the ciphertext keeps its exact length. The AEAD therefore supports
+  arbitrary message lengths even though `poly1305_torch` itself does not.

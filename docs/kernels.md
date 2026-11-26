@@ -32,6 +32,7 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
+| `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
@@ -222,6 +223,31 @@ Two properties are load-bearing and both were found the hard way:
 The norm is computed in int64 and compared against `floor(beta^2) = 34034726`. With
 `|s1| <= q/2 = 6144` and `n = 512` the sum is below `2^33`, so the comparison is exact; the
 reference's saturation arithmetic exists only because it works in 32 bits.
+
+### `_poly1305_kernel(KEY, MSG, TAG, B, NBLK, BLK)` — `primitives/poly1305.py`
+
+Poly1305 in the canonical 5 x 26-bit limb layout (poly1305-donna), one lane per key.
+`MSG` is `[B, NBLK*16]` uint8 and must be whole 16-byte blocks: every block carries the
+implicit `+2^128`, which is correct for a full block and wrong for a padded partial tail
+(there the `0x01` byte *is* the high bit). `poly1305_np` handles any length; the AEAD pads
+with zeros per RFC 8439's pad16 before calling this.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `KEY` | `[B, 32]` | `uint8` | `r || s` |
+| `MSG` | `[B, NBLK*16]` | `uint8` | message blocks |
+| `TAG` | `[B, 16]` | `uint8` | the tag |
+
+Three things this kernel pins down:
+
+- **A 26x26-bit product is 52 bits**, and five of them summed stay under 2^58: int64 carries
+  the whole computation, so no `umulhi` pair per multiply and no Montgomery form.
+- **`h + limb & MASK` is not what it looks like.** Python binds `+` tighter than `&`, so the
+  mask truncates the accumulator to 26 bits after every block. It has to be
+  `h + (limb & MASK)`. The degenerate keys (r = 1, s = 0) pass either way; only a real
+  multi-block message catches it.
+- **The key stride is 32, not 16.** Reading `lane * 16` works for lane 0 and for a batch of 1,
+  which is exactly the shape of a hand-written smoke test.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 
