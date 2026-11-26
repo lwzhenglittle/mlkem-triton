@@ -44,7 +44,7 @@ from __future__ import annotations
 from .devices import available_devices, backend_of, describe, gemm_cfg, resolve_device
 from .mlkem.params import PARAMS, N, Params, Q
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "PARAMS",

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "triton-crypto-kernels"
-version = "1.0.0"
+version = "1.1.0"
 description = "Cryptographic kernels in pure Triton: ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and LMS/HSS (SP 800-208), on a shared layer of Keccak/sponge, SHA-2, parameterised NTT, prime-field and ChaCha20 primitives"
 readme = "README.md"
 requires-python = ">=3.10"

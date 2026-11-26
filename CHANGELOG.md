@@ -1,6 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [1.1.0] — four primitives, one scheme, and the column that decides whether to port
+
+What the primitive layer learned overnight: the CPU rival matters more than the device. Every
+row below is measured in the same window against `benchmarks/cpu_baseline.json`, and the
+`vs 16P` column is now part of the table.
+
 
 ### Poseidon2-BabyBear/16, and the first `vs CPU` column in the primitive table
 
