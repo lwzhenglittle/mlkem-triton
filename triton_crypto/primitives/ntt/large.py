@@ -270,8 +270,11 @@ class LargeNTT:
         import torch
 
         q = self.q
+        # Two scratch buffers and a read-only input: the ping-pong must never write into the
+        # caller's tensor, which is what a single `buf` did (see `_run_cached` below).
         buf = torch.empty_like(x)
-        for p in self._passes4_cached(dev):
+        alt = torch.empty_like(x)
+        for i, p in enumerate(self._passes4_cached(dev)):
             if p[0] == 4:
                 _, m, w1a, w1b, w2 = p
                 quarter = w1a.numel()
@@ -285,7 +288,9 @@ class LargeNTT:
                     w1a,
                     w1b,
                     w2,
+                    self._device_pre(dev),
                     Q=q,
+                    FUSE_PRE=(i == 0),
                     BLK=STAGE_BLK,
                     num_warps=STAGE_WARPS,
                 )
@@ -307,14 +312,17 @@ class LargeNTT:
                     BLK=STAGE_BLK,
                     num_warps=STAGE_WARPS,
                 )
-            x, buf = buf, x
+            x, buf, alt = buf, alt, buf
         return x
 
     def _run_cached(self, x, direction: str, dev):
         import torch
 
         q = self.q
+        # The single-buffer version wrote pass 18's output into the caller's tensor on a 19-pass
+        # transform, so a second `forward_tensor_torch(x)` transformed the wreckage of the first.
         buf = torch.empty_like(x)
+        alt = torch.empty_like(x)
         tables = self._device_tables(direction, dev)
         pre = self._device_pre(dev)
         post = self._device_post(dev)
@@ -337,7 +345,7 @@ class LargeNTT:
                 BLK=STAGE_BLK,
                 num_warps=STAGE_WARPS,
             )
-            x, buf = buf, x
+            x, buf, alt = buf, alt, buf
         return x
 
     def _device_post(self, dev):
@@ -417,7 +425,6 @@ class LargeNTT:
         """
         self._check_tensor(x, "input")
         if self.radix == 4:
-            x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
             return self._run4(x, dev)
         return self._run_cached(x, "fwd", dev)
 
@@ -470,7 +477,10 @@ class LargeNTT:
 
 
 @triton.jit
-def _stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q: tl.constexpr, BLK: tl.constexpr):
+def _stage4_kernel(
+    X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, PRE, Q: tl.constexpr,
+    FUSE_PRE: tl.constexpr, BLK: tl.constexpr
+):
     """Two radix-2 DIF stages fused into one radix-4 pass: ten passes instead of twenty.
 
     Fusion is exact, not approximate: the second radix-2 stage runs on blocks of `M/2`, so its
@@ -490,6 +500,13 @@ def _stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q: tl.constexpr, BLK: tl
     a1 = tl.load(X + base + quarter + j, mask=mask, other=0).to(tl.int64)
     a2 = tl.load(X + base + 2 * quarter + j, mask=mask, other=0).to(tl.int64)
     a3 = tl.load(X + base + 3 * quarter + j, mask=mask, other=0).to(tl.int64)
+    if FUSE_PRE:
+        # the negacyclic pre-twiddle is index-dependent only: apply it on the way into the first
+        # pass instead of spending a launch and 16 MB on a separate pass
+        a0 = a0 * tl.load(PRE + base + j, mask=mask, other=1).to(tl.int64) % Q
+        a1 = a1 * tl.load(PRE + base + quarter + j, mask=mask, other=1).to(tl.int64) % Q
+        a2 = a2 * tl.load(PRE + base + 2 * quarter + j, mask=mask, other=1).to(tl.int64) % Q
+        a3 = a3 * tl.load(PRE + base + 3 * quarter + j, mask=mask, other=1).to(tl.int64) % Q
     w1a = tl.load(W1A + j, mask=mask, other=0).to(tl.int64)
     w1b = tl.load(W1B + j, mask=mask, other=0).to(tl.int64)
     w2 = tl.load(W2 + j, mask=mask, other=0).to(tl.int64)

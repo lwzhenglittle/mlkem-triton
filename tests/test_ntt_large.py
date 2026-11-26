@@ -132,6 +132,28 @@ def test_degenerate_polynomials(logn):
     assert not t.mul_torch(a, np.zeros(n, dtype=np.int64)).cpu().numpy().any()
 
 
+@pytest.mark.parametrize("radix", [2, 4])
+def test_the_input_tensor_is_not_modified(radix):
+    """`forward_tensor_torch` promises "device tensor in, device tensor out".
+
+    It lied: the ping-pong buffer started as `empty_like(x)` and was then swapped, so every pass
+    after the first wrote into the caller's tensor. On a 19-pass transform the input ended up
+    holding pass 18's output, and a second call transformed the wreckage of the first -- which is
+    exactly the pattern a benchmark loop uses.
+    """
+    import torch
+
+    t = LargeNTT(1 << 12, Q, radix=radix)
+    a = np.random.default_rng(radix).integers(0, Q, 1 << 12)
+    x = torch.as_tensor(a, dtype=torch.int32, device="xpu")
+    before = x.cpu().numpy().copy()
+    first = t.forward_tensor_torch(x, dev=x.device).cpu().numpy().astype(np.int64)
+    second = t.forward_tensor_torch(x, dev=x.device).cpu().numpy().astype(np.int64)
+    assert np.array_equal(before, x.cpu().numpy()), "the input tensor was modified"
+    assert np.array_equal(first, second), "a second call on the same tensor differs"
+    assert np.array_equal(first, t.ntt(a))
+
+
 def test_rejects_wrong_shapes_before_touching_the_device():
     """A wrong length used to be a silent out-of-bounds read, not an error.
 
