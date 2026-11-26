@@ -1044,10 +1044,11 @@ Three things worth reading off it:
 
 - **This is the only primitive in the repository whose cost is dominated by memory traffic.**
   Everything else (SHA-3, ChaCha20, Poseidon2, Poly1305, AES, BLAKE3) keeps its working set in
-  registers and moves 3-31 GB/s of *useful* data; this one moves 160 MB because every pass
-  touches the whole array, and a pure-traffic floor would be 0.74 ms. **It is not at that floor**
-  -- 76 GB/s against copy's 216 -- and §22.2 shows the gap is not bandwidth: halving the traffic
-  with radix-4 buys only 10-20%.
+  registers and moves 3-31 GB/s of *useful* data; this one moves **84 MB** per transform at the
+  default radix-4 (160 MB at radix-2) because every pass touches the whole array. A pure-traffic
+  floor at 217 GB/s is 0.39 ms, and the transform runs at 0.85 ms = **45%** of copy bandwidth.
+  §22.2 shows the gap is not bandwidth: halving the traffic from radix-2 to radix-4 buys only
+  10-20%.
 - **The first correct implementation is 7x off that roofline** (10.8 ms against 0.74). The
   traffic is done at 15.5 GB/s, not 112. The stages are one launch each, the later stages access
   with a stride that defeats coalescing, and the passes are radix-2 (20 of them rather than 7
