@@ -179,6 +179,13 @@ the n odd powers of a 2n-th root, so the pre-twiddled sum runs over n terms and
 (zero stays zero, the constant agrees with the numpy path) and asserts the *false* assumption is
 false, so nobody re-derives it.
 
+### ...and int32 state takes it to 15.6 µs
+
+The decoder's state moved from int64 to int32: `pos` never exceeds 5300 and every coefficient is
+bounded by 2047, so the narrowing is exact by construction. Half the bytes per numpy op buys
+another 9% -- 16.8 -> **15.6 µs per signature**, 69.9 -> 63.9 ms per 4096-signature batch,
+bit-identical output. End to end: 20.8 -> **18.9 µs**.
+
 ### Falcon's host decoder: one 32-bit window per coefficient, 21.4 -> 16.8 µs
 
 The decoder is 81% of Falcon's end-to-end cost, so it was worth another look. Each coefficient

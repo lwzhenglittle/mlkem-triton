@@ -251,18 +251,18 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
         the 16-bit unary run at `bitpos + 8` -- so the scan does four gathers per coefficient
         instead of six, which is where two thirds of its time went.
         """
-        b0 = buf[rows, np.minimum(byte, clip)].astype(np.int64)
-        b1 = buf[rows, np.minimum(byte + 1, clip)].astype(np.int64)
-        b2 = buf[rows, np.minimum(byte + 2, clip)].astype(np.int64)
-        b3 = buf[rows, np.minimum(byte + 3, clip)].astype(np.int64)
+        b0 = buf[rows, np.minimum(byte, clip)].astype(np.int32)
+        b1 = buf[rows, np.minimum(byte + 1, clip)].astype(np.int32)
+        b2 = buf[rows, np.minimum(byte + 2, clip)].astype(np.int32)
+        b3 = buf[rows, np.minimum(byte + 3, clip)].astype(np.int32)
         return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
 
     # Leading-zero count of a 16-bit window, as a table: one gather instead of 16 `where`s.
-    lead = np.zeros(1 << 16, dtype=np.int64)
+    lead = np.zeros(1 << 16, dtype=np.int32)
     for v in range(1, 1 << 16):
         lead[v] = 16 - int(v).bit_length()
-    x = np.zeros((B, params.n), dtype=np.int64)
-    pos = np.zeros(B, dtype=np.int64)
+    x = np.zeros((B, params.n), dtype=np.int32)
+    pos = np.zeros(B, dtype=np.int32)
     ok = np.ones(B, dtype=bool)
     bits = lens * 8
     max_mag = params.max_abs_coefficient
