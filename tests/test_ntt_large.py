@@ -177,6 +177,20 @@ def test_rejects_wrong_shapes_before_touching_the_device():
         t.forward_tensor_torch(np.zeros(64, dtype=np.int64), dev)
 
 
+@pytest.mark.parametrize(
+    ("logn", "radix", "passes"),
+    [(20, 2, 20), (20, 4, 10), (15, 4, 8), (12, 4, 6), (4, 2, 4)],
+)
+def test_the_reported_pass_count_is_the_real_one(logn, radix, passes):
+    """`n_passes` feeds the benchmark's traffic column.
+
+    The 2^20 row hardcoded twenty passes; once radix-4 became the default that overstated traffic,
+    GB/s and `%copy` by 2x -- a measurement-definition bug that made the result look better, which
+    is the failure mode this repository keeps finding.
+    """
+    assert LargeNTT(1 << logn, Q, radix=radix).n_passes == passes
+
+
 def test_rejects_non_power_of_two():
     with pytest.raises(ValueError, match="power of two"):
         LargeNTT(1000, Q)
