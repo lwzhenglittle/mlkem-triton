@@ -599,7 +599,8 @@ device's ALU-bound throughput barely moves between rows (10-31 GB/s); the 100x s
 
 Also collects the six Triton traps (signed `%` is truncated, `h + x & M` masks the sum,
 `expand` is not contiguous, a `tl.constexpr` cannot take a loop variable, a runtime loop cannot
-carry a tuple, and `tl.sort` is silently wrong on XPU 3.9) and the two shapes that did not land,
+carry a tuple, and an earlier `tl.sort` observation that does not reproduce today) and the two
+shapes that did not land,
 with what stopped each.
 
 ### `benchmarks/snapshot.py`: the measurement discipline as the default

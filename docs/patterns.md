@@ -117,9 +117,13 @@ output before a known-answer vector caught it.
    body must be `t = t + (v,)` and only works under `tl.static_range`.
 5. **A runtime loop cannot carry a tuple assignment.** Any state that has to survive a loop
    needs named scalars — and unrolling to keep the tuple is not free (trap 6).
-6. **`tl.sort` compiles and is silently wrong on XPU 3.9** (returns a permutation of the input,
-   not the sorted order). "It compiles" is not evidence; every kernel here is checked against a
-   KAT or an independent implementation.
+6. **"It compiles" is not evidence.** An earlier session recorded `tl.sort` as *silently wrong* on
+   XPU 3.9 (a permutation rather than the sorted order). **That does not reproduce on this build**:
+   1-D ascending and descending both sort correctly, and so does the **last axis** of a 2-D tile,
+   while `axis=0` raises a `CompilationError` -- a loud refusal, not a silent wrong answer. The
+   claim is narrowed to that, and `tests/test_triton_behaviour.py` pins the current behaviour so a
+   backend change turns red. The rule it stood for survives: every kernel here is checked against a
+   KAT or an independent implementation, because compiling proves nothing.
 7. **Shifting a 32-bit value by 32 is undefined behaviour, and the backend turns the whole
    kernel's results into zeros** — with a `UserWarning` that a test log filters out. It cost four
    sessions of bisection on BLAKE3; the tell was that the *inputs* read back correct from inside
