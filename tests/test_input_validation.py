@@ -179,3 +179,35 @@ def test_device_entry_points_do_not_modify_their_inputs(api):
         assert np.array_equal(snapshot, x.cpu().numpy())
         t.inverse_tensor_torch(x, dev)
         assert np.array_equal(snapshot, x.cpu().numpy())
+
+
+def test_blake3_accepts_a_device_tensor():
+    """A tensor is the input a caller most plausibly has on a GPU machine."""
+    import torch
+
+    rng = np.random.default_rng(9)
+    msgs = rng.integers(0, 256, (3, 300), dtype=np.uint8)
+    want = blake3.blake3_hash_torch(msgs).cpu().numpy()
+    dev = torch.device("xpu")
+    assert np.array_equal(
+        blake3.blake3_hash_torch(torch.as_tensor(msgs, device=dev)).cpu().numpy(), want
+    )
+    assert np.array_equal(blake3.blake3_hash_torch(torch.as_tensor(msgs)).cpu().numpy(), want)
+    with pytest.raises(TypeError, match="integer bytes"):
+        blake3.blake3_hash_torch(torch.zeros((2, 8), dtype=torch.float32, device=dev))
+
+
+def test_mul_torch_accepts_device_operands():
+    """ "Both operands and the result stay on the device" is what the docstring promises."""
+    import torch
+
+    from triton_crypto.primitives.ntt import LargeNTT
+
+    q = 2013265921
+    t = LargeNTT(1 << 10, q)
+    a = np.random.default_rng(10).integers(0, q, 1 << 10)
+    dev = torch.device("xpu")
+    ta = torch.as_tensor(a, dtype=torch.int32, device=dev)
+    assert np.array_equal(t.mul_torch(ta, ta).cpu().numpy().astype(np.int64), t.mul_np(a, a))
+    # and the host path still works
+    assert np.array_equal(t.mul_torch(a, a).cpu().numpy().astype(np.int64), t.mul_np(a, a))

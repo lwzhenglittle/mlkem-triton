@@ -359,37 +359,56 @@ def _iv_tensor(dev):
 
 
 def blake3_hash_torch(messages, device=None):
-    """`[B, n]` uint8 -> `[B, 32]` uint8. One launch per block index, then one per tree level."""
+    """`[B, n]` uint8 -> `[B, 32]` uint8.
+
+    Accepts a numpy array, a CPU tensor or a **device** tensor: routing an XPU tensor through
+    `np.asarray` raises "can't convert xpu:0 device type tensor to numpy", which is a confusing way
+    to reject the input a caller most plausibly has. One launch per block index, then one per tree
+    level.
+    """
     import torch
 
     from .. import devices as _devices
 
     dev = _devices.resolve_device(device)
-    arr = np.asarray(messages)
-    if not np.issubdtype(arr.dtype, np.integer):
-        # a float array would be truncated to bytes silently, and a digest of the wrong bytes is
-        # indistinguishable from a digest of the right ones
-        raise TypeError(f"messages must be integer bytes, got dtype {arr.dtype}")
-    if arr.dtype != np.uint8:
-        if arr.size and (arr.min() < 0 or arr.max() > 255):
-            raise ValueError(
-                f"messages must hold byte values (0..255), got [{arr.min()}, {arr.max()}]"
-            )
-        arr = arr.astype(np.uint8)
-    if not arr.flags.writeable:
-        # a read-only view (np.frombuffer, or a sliced bytes literal) makes torch warn on the
-        # zero-copy conversion; nothing here writes to the input, but the copy is cheap compared
-        # to a warning in every caller's log and an undefined-behaviour footnote
-        arr = arr.copy()
-    msg = torch.as_tensor(arr, device=dev)
-    if msg.ndim != 2:
-        raise ValueError("messages must be [B, nbytes]")
+    if isinstance(messages, torch.Tensor):
+        if messages.dim() != 2:
+            raise ValueError(f"messages must be [B, nbytes], got shape {tuple(messages.shape)}")
+        if messages.dtype.is_floating_point:
+            raise TypeError(f"messages must be integer bytes, got dtype {messages.dtype}")
+        if (
+            messages.dtype != torch.uint8
+            and messages.numel()
+            and (int(messages.min()) < 0 or int(messages.max()) > 255)
+        ):
+            raise ValueError("messages must hold byte values (0..255)")
+        msg = messages.to(device=dev, dtype=torch.uint8).contiguous()
+    else:
+        arr = np.asarray(messages)
+        if not np.issubdtype(arr.dtype, np.integer):
+            # a float array would be truncated to bytes silently, and a digest of the wrong bytes
+            # is indistinguishable from a digest of the right ones
+            raise TypeError(f"messages must be integer bytes, got dtype {arr.dtype}")
+        if arr.dtype != np.uint8:
+            if arr.size and (arr.min() < 0 or arr.max() > 255):
+                raise ValueError(
+                    f"messages must hold byte values (0..255), got [{arr.min()}, {arr.max()}]"
+                )
+            arr = arr.astype(np.uint8)
+        if not arr.flags.writeable:
+            # a read-only view (np.frombuffer, or a sliced bytes literal) makes torch warn on the
+            # zero-copy conversion; nothing here writes to the input, but the copy is cheap next to
+            # a warning in every caller's log
+            arr = arr.copy()
+        msg = torch.as_tensor(arr, device=dev)
+        if msg.ndim != 2:
+            raise ValueError("messages must be [B, nbytes]")
+
     batch, nbytes = msg.shape
     if batch == 0:
         return torch.zeros((0, 32), dtype=torch.uint8, device=dev)
     if nbytes == 0:
         raise ValueError("pass at least one byte per message")
-
     nchunks = max(1, (nbytes + CHUNK_LEN - 1) // CHUNK_LEN)
     blk = 64
     iv = _iv_tensor(dev)

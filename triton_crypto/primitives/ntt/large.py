@@ -455,17 +455,25 @@ class LargeNTT:
 
         dev = _devices.resolve_device(device)
         for operand, name in ((a, "a"), (b, "b")):
-            arr = np.asarray(operand, dtype=np.int64)
-            if arr.ndim != 1 or arr.size != self.n:
-                raise ValueError(f"{name} must be 1-D of length {self.n}, got {arr.shape}")
-        fa = self.forward_tensor_torch(
-            torch.as_tensor(np.asarray(a, dtype=np.int64) % self.q, dtype=torch.int32, device=dev),
-            dev,
-        )
-        fb = self.forward_tensor_torch(
-            torch.as_tensor(np.asarray(b, dtype=np.int64) % self.q, dtype=torch.int32, device=dev),
-            dev,
-        )
+            # A device tensor is the *documented* way to call this ("both operands and the result
+            # stay on the device"), so the shape check must read it where it lives -- routing it
+            # through numpy raises "can't convert xpu:0 device type tensor to numpy".
+            if hasattr(operand, "shape") and hasattr(operand, "device"):
+                shape = tuple(operand.shape)
+            else:
+                shape = np.asarray(operand).shape
+            if len(shape) != 1 or shape[0] != self.n:
+                raise ValueError(f"{name} must be 1-D of length {self.n}, got {shape}")
+
+        def _as_device_poly(v):
+            if hasattr(v, "to") and hasattr(v, "device"):
+                return v.to(device=dev, dtype=torch.int32).contiguous()
+            return torch.as_tensor(
+                np.asarray(v, dtype=np.int64) % self.q, dtype=torch.int32, device=dev
+            )
+
+        fa = self.forward_tensor_torch(_as_device_poly(a), dev)
+        fb = self.forward_tensor_torch(_as_device_poly(b), dev)
         prod = self._mul_dev(fa, fb, dev, self.q, "pointwise")
         return self.inverse_tensor_torch(prod, dev)
 

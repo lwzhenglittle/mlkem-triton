@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1169 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1171 tests green** |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
