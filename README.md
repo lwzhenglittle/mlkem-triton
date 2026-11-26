@@ -25,6 +25,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |
 | `primitives.poly1305` | Poly1305 (RFC 8439) and the ChaCha20-Poly1305 AEAD |
 | `primitives.aes` | AES-128-CTR through a T-table — a gather measurement, not a fast path |
+| `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.96 TMAC/s at n = 2048), the GF(2^k) GEMM substrate |
 
 **1043 tests** — NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs

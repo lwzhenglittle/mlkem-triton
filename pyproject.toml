@@ -105,6 +105,7 @@ ignore = [
 "triton_crypto/primitives/poseidon2.py" = ["RUF005"]
 "triton_crypto/primitives/poly1305.py" = ["RUF005"]   # same Triton restriction
 "triton_crypto/primitives/aes.py" = ["RUF005"]        # and here
+"triton_crypto/primitives/blake3.py" = ["RUF005"]     # and here
 
 [tool.ruff.format]
 quote-style = "double"

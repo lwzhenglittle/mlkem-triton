@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1048 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1104 tests green** |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -30,6 +30,7 @@ same idioms but **not run** there. Nothing in this column is claimed beyond that
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 | ✅ | ⚠️ | Plonky3 0.8 (its own `kat` output) |
 | `primitives.aes` | AES-128-CTR, T-table (a measurement, not a fast path) | ✅ | ⚠️ | FIPS-197 C.1, `openssl enc -aes-128-ctr` |
 | `primitives.gemm` | exact `int8 x int8 -> int32` | ✅ | ⚠️ | numpy, and a bit-plane GF(2^8) product |
+| `primitives.blake3` | BLAKE3 (tree hash) | ✅ | ⚠️ | the official Rust implementation's 26 KAT vectors |
 
 The ML-KEM CUDA row was **actually run on that machine**: same code, same ACVP vectors, 264
 tests green, without changing a single kernel. Only the tile configuration differs. The other

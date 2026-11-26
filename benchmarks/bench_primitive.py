@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from triton_crypto import devices
 from triton_crypto.primitives import (
     aes,
+    blake3,
     chacha20,
     gemm,
     keccak,
@@ -232,6 +233,19 @@ def bench_aes(batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_blake3(batch: int, size: int, dev) -> Bench:
+    rows, size = max(batch, 1), max(size, 1)
+    rng = np.random.default_rng(0)
+    msgs = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    return Bench(
+        lambda: blake3.blake3_hash_torch(msgs, device=dev),
+        units=rows * size,
+        unit="B",
+        nbytes=rows * size,
+        note="BLAKE3, unkeyed, 32-byte output",
+    )
+
+
 def bench_poly1305(batch: int, size: int, dev) -> Bench:
     rows, size = max(batch, 1), max(size, 16)
     size -= size % 16  # the device path takes whole 16-byte blocks
@@ -294,6 +308,7 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "chacha20-poly1305": bench_aead,
     "aes128-ctr": bench_aes,
     "gemm-int8": bench_gemm_int8,
+    "blake3": bench_blake3,
 }
 
 ORDER = list(CASES)
@@ -316,6 +331,7 @@ WHAT = {
     "chacha20-poly1305": "ChaCha20-Poly1305 seal (encrypt + tag), no AAD",
     "aes128-ctr": "AES-128-CTR through a T-table (the gather counter-example)",
     "gemm-int8": "exact int8 GEMM, 256x256x256 (the GF(2^k) GEMM substrate)",
+    "blake3": "BLAKE3 (tree hash), --size-byte messages",
 }
 
 
@@ -350,6 +366,7 @@ CPU_RIVAL = {
     "poly1305": "poly1305",
     "shake128": "shake128",
     "shake256": "shake256",
+    "blake3": "blake3",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"

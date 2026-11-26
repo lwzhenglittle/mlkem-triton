@@ -783,3 +783,37 @@ whose sections are the eight measurements above. A sibling `.json` records each 
 command, return code and wall time, so a snapshot can be diffed against the next one.
 
 Snapshots are gitignored: they are artifacts of a window, not sources.
+
+## 21. BLAKE3: the tree hash, and the UB that hid for four sessions
+
+`python benchmarks/bench_primitive.py --only blake3 --size 16384 --batch 4096`. Arc B390,
+min-of-7, one launch per block index plus one per tree level.
+
+| message | device | CPU 1T (official Rust) | CPU 16P | vs 1T | vs 16P |
+|---|---:|---:|---:|---:|---:|
+| 1 KiB (1 chunk) | **10.1 GB/s** | 2.93 GB/s | 51.9 GB/s | 3.45x | **0.19x** |
+| 16 KiB (16 chunks) | **9.9 GB/s** | 2.93 GB/s | 51.9 GB/s | 3.40x | 0.19x |
+
+Flat across message size, i.e. ALU-bound as predicted (7 rounds x 8 G x ~20 ops per 64-byte
+block). The verdict is the one the eval predicted for the ARX family: **3.4x one core, 0.19x
+sixteen processes** -- the tree machinery is correct and costs ~2% (1 KiB is one chunk, 16 KiB is
+five tree levels, and the throughput barely moves).
+
+**The bug is worth more than the number.** For four sessions this kernel "stored zeros": the
+store mask, the block count, the flags (11 = CHUNK_START|CHUNK_END|ROOT) and the block length all
+read back *correct* from inside the same launch, while the value being stored was zero. Every
+piece worked in isolation -- the compression, one block step through a global buffer, a
+sixteen-launch chain through that buffer. The cause was one line:
+
+```python
+v13 = counter >> 32        # counter is uint32 -> shift by the bit width -> UB
+```
+
+LLVM is allowed to do anything with that, and this backend chose "the kernel computes zero",
+with only a `UserWarning` ("Value 32 exceeds the maximum bitwidth") that a test log filters out.
+The counter is now passed as an explicit `(low, high)` pair, and the regression guard is a
+**multi-chunk** vector: any message over 1 KiB has a non-zero chunk counter, which no 64-byte KAT
+can exercise.
+
+That is the sixth entry for the "Triton 表达缺口" table, and it is the only one that produced
+*plausible* output rather than an error or a wrong answer.

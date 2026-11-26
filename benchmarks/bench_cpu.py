@@ -332,6 +332,34 @@ def liboqs_pair(so: Path, tag: str, n: int | None = None) -> tuple[float, float]
 # --------------------------------------------------------------------------- poseidon2
 
 
+def _blake3_exe() -> Path:
+    exe = ROOT / "benchmarks" / "blake3_ref" / "target" / "release" / "blake3-ref"
+    if not exe.exists():
+        raise RuntimeError("benchmarks/blake3_ref is not built (see its Cargo.toml)")
+    return exe
+
+
+def _blake3_rate(exe: str, nbytes: int) -> float:
+    """min of 3, like every other rival here: `max` biased the 16-process aggregate by 30%."""
+    rates = []
+    for _ in range(3):
+        out = subprocess.run([exe, "bench", str(nbytes), "3"], capture_output=True, text=True)
+        rates.append(json.loads(out.stdout)["gbs"] * 1e9)
+    return min(rates)
+
+
+def _blake3_child(args) -> float:
+    exe, nbytes = args
+    return _blake3_rate(exe, nbytes)
+
+
+def blake3_pair(nbytes: int = 1 << 20) -> tuple[float, float]:
+    exe = _blake3_exe()
+    one = _blake3_rate(str(exe), nbytes)
+    many = _parallel_rate(_blake3_child, [(str(exe), nbytes // 2)] * NPROC)
+    return one, many
+
+
 def _poseidon_exe() -> Path:
     exe = ROOT / "benchmarks" / "poseidon2_ref" / "target" / "release" / "poseidon2-ref"
     if not exe.exists():
@@ -399,6 +427,7 @@ CASES: dict[str, Rival] = {
         "B/s", _openssl_evp("shake256"), "openssl speed -evp shake256", ("shake256",)
     ),
     "poly1305": Rival("B/s", poly1305_pair, "OpenSSL 3.5 EVP_MAC POLY1305", ("poly1305",)),
+    "blake3": Rival("B/s", blake3_pair, "official BLAKE3 (cargo ref)", ("blake3",)),
     "poseidon2": Rival(
         "op/s", poseidon2_pair, "Plonky3 0.8 packed monty-31x8 (cargo ref)", ("poseidon2",)
     ),

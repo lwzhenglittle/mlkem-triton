@@ -45,7 +45,7 @@ Two corollaries this project ran into:
 | # | pattern | representative | status | device | vs 1T | vs 16P | what it cost in Triton |
 |---|---|---|---|---|---|---|---|
 | 1 | ARX (add-rotate-xor) | ChaCha20 | ✅ | 14.1 GB/s | 2.99x | 0.49x | easy; the only trap is that `>>` on int32 is arithmetic, so rotate needs `.to(tl.uint32)` |
-| 2 | tree hash | BLAKE3 | ⚠️ | — | — | — | the hard one: a chunk is 16 serial compressions carrying 8 chaining words. Runtime loop cannot carry a tuple; `tl.static_range` blew up the Xe compiler (>10 min IR). Vectors and CPU rival are committed; see §2 |
+| 2 | tree hash | BLAKE3 | ✅ | 10.1 GB/s | 3.45x | 0.19x | one launch per block index + one per level; the chaining value lives in a buffer because a runtime loop cannot carry a tuple. See §2 for the four sessions it took |
 | 3 | sponge | SHA3/SHAKE | ✅ | 31.5 GB/s | 43.9x | **4.00x** | easy and a winner: one lane holds 25 uint64 and the round loop must be *rolled*, not unrolled (unrolled: `spill_size=3584`, rolled: 0 and 30% faster) |
 | 4 | lookup vs bitslice | AES-CTR T-table | ✅ | 10.6 GB/s | 0.77x | 0.06x | 160 gathers/block into a 4.25 KiB hot table; bitslice (2-3 weeks) not attempted |
 | 5 | multi-limb big integer | Poly1305 | ✅ | 11.6 GB/s | 1.53x | 0.15x | 5x26-bit limbs fit int64 exactly; no `umulhi` pairs needed. X25519 not attempted |
@@ -70,14 +70,12 @@ an integrated GPU with a 16-core hybrid CPU beside it.
 
 ## 2. The patterns that did not land, and what stopped them
 
-- **Tree hash (BLAKE3).** The compression is fine; the chunk loop is the problem. Three shapes
-  were tried: one kernel with a runtime block loop (cannot carry the chaining value — Triton
-  does not carry tuple assignments across a runtime loop), one kernel with `tl.static_range(16)`
-  (Xe compiler spent >10 minutes on the IR and was killed), and one launch per block index
-  (compiles in 44 s, but the first version's chaining-value buffer was not updated — the store
-  mask or the `[B, chunks, 8]` addressing, never isolated). The vectors, the numpy reference and
-  the CPU rival are committed in `data/vectors/blake3/` and `benchmarks/blake3_ref/`; the README
-  there records the three attempts.
+- **Tree hash (BLAKE3) — landed on the fourth attempt.** The shape is one launch per block
+  index plus one per tree level. What blocked it was not the tree: `counter >> 32` on a uint32 is
+  undefined behaviour, the Xe backend folded the whole kernel to zero, and every input read back
+  correct from inside the same launch. Four sessions of bisection: the compression, one block
+  step through a global buffer and a sixteen-launch chain all worked in isolation; the one line
+  that differed was the shift. See `docs/benchmarks.md` §21.
 - **Falcon signature decoding on the device.** Tried because `comp_decode` is 96% of Falcon's
   end-to-end cost. One lane per signature, 512 sequential steps (a prefix code cannot be
   bit-gathered across a batch). **Measured 2.6 ms/signature against the host's 75 us — 35x
@@ -89,10 +87,10 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   the useful part: a contiguous `[BLK, 720]` tile with a prefix-sum and a scatter is fast
   (0.47 us per row), while the same number of gathered *bytes* at data-dependent addresses is
   35x slower. Same problem size, opposite verdict — the access pattern, not the arithmetic.
-- **Large-N NTT (2^20).** Needs a multi-pass, global-memory structure, i.e. the same
-  "one launch per level" shape that BLAKE3's tree needs. It is blocked behind pattern 2 for the
-  same reason, and it is the item most likely to win once that shape works (predicted 1.4 ms,
-  bandwidth-bound, against 15-30 ms on one CPU core).
+- **Large-N NTT (2^20).** Needs a multi-pass, global-memory structure — the same "one launch per
+  level" shape BLAKE3 now uses, so the pattern is proven (`primitives/blake3.py` has it working
+  across up to 64 chunks). Predicted 1.4 ms, bandwidth-bound, against 15-30 ms on one CPU core;
+  it is the item most likely to win 10x now that the shape exists.
 
 ## 3. Five Triton traps found the hard way
 
@@ -114,6 +112,10 @@ output before a known-answer vector caught it.
 6. **`tl.sort` compiles and is silently wrong on XPU 3.9** (returns a permutation of the input,
    not the sorted order). "It compiles" is not evidence; every kernel here is checked against a
    KAT or an independent implementation.
+7. **Shifting a 32-bit value by 32 is undefined behaviour, and the backend turns the whole
+   kernel's results into zeros** — with a `UserWarning` that a test log filters out. It cost four
+   sessions of bisection on BLAKE3; the tell was that the *inputs* read back correct from inside
+   the launch while the stored value was zero.
 
 ## 4. If you are deciding what to port next
 

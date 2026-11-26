@@ -34,6 +34,8 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
 | `_gemm_int8_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN))` | `gemm_int8_torch` |
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
+| `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
+| `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
@@ -288,6 +290,32 @@ lets a GF(2^8) matrix product be assembled from per-bit-plane integer products X
 the polynomial's reduction masks (`tests/test_gemm_int8.py` does exactly that and checks it
 against a schoolbook GF(2^8) product). Whether that beats a bitsliced CUDA-core version is the
 question `PLAN_ffgemm.md` exists to answer; this kernel only guarantees the arithmetic.
+
+### `_block_kernel(...)` and `_pair_kernel(...)` — `primitives/blake3.py`
+
+BLAKE3's tree, one launch per block index and one per level. A lane holds one
+(message, chunk); the 8-word chaining value lives in a `[B * chunks, 8]` buffer between
+launches.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `MSG` | `[B, nbytes]` | `uint8` | the messages |
+| `CVS` | `[B * chunks, 8]` | `int32` | chaining values, seeded with `BLAKE3_IV` |
+| `ROOT_CV`, `ROOT_XOF` | `[B, 8]` | `int32` | the digest halves when the root is reached |
+
+Four constraints shaped this, and the fourth cost four sessions:
+
+- a **runtime loop cannot carry a tuple** in Triton, so the chaining value has to live in memory
+  between block indices rather than in registers;
+- a `tl.constexpr` parameter **cannot receive a loop variable**, so the block index is a runtime
+  argument (passing a loop variable to a constexpr silently loads the wrong block);
+- the CV store is masked by `block < nblocks`: the last chunk of a message is usually partial and
+  the extra iterations would overwrite it with a compression of zero padding;
+- **never shift a 32-bit value by 32.** `counter >> 32` is undefined behaviour. The Xe backend
+  accepts it, prints a warning that any test log filters out, and folds the **entire kernel's
+  results to zero** -- with every input reading back correct from inside the same launch. The
+  counter is now an explicit `(low, high)` pair and the guard is a test: any message over 1 KiB
+  has a non-zero chunk counter, which is exactly the case a 64-byte KAT cannot see.
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

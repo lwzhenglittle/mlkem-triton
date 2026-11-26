@@ -94,6 +94,32 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### BLAKE3 lands on the fourth attempt, and the bug was one line of undefined behaviour
+
+`primitives/blake3.py`: 7-round compression, 1 KiB chunks, a level-by-level tree — one launch per
+block index plus one per level, with the chaining value in a `[B * chunks, 8]` buffer.
+
+**Measured 10.1 GB/s** at 1 KiB messages (flat to 16 KiB), against the official Rust
+implementation at 2.93 GB/s on one thread and 51.9 GB/s over sixteen processes: **3.45x one
+core, 0.19x sixteen processes**.
+
+The interesting part is why it took four sessions. The kernel "stored zeros": the store mask,
+block count, flags (11 = CHUNK_START|CHUNK_END|ROOT) and block length all read back correct from
+inside the same launch, and every piece worked in isolation — the compression, a single block
+step through a global buffer, a sixteen-launch chain through that buffer. The cause was
+
+    v13 = counter >> 32      # uint32, shifted by its own width: UB
+
+LLVM may do anything with that; this backend chose "the kernel computes zero" and printed a
+`UserWarning` that a test log filters out. The counter is now an explicit `(low, high)` pair, and
+the regression guard is a multi-chunk vector — any message over 1 KiB has a non-zero chunk
+counter, which no 64-byte known-answer test can see. It is the sixth entry in the Triton gap
+table and the only one that produced plausible output instead of an error.
+
+Also: `benchmarks/blake3_ref` supplies both the 26 official vectors and the CPU rival;
+`benchmarks/bench_cpu.py` grew a BLAKE3 row (2.93 GB/s 1T, 51.9 GB/s 16P, min-of-3 — `max`
+biased the aggregate by 30%).
+
 ### The wheel is verified end to end, not just built
 
 `pip wheel` succeeding proves nothing about whether the installed package works. A smoke run from
