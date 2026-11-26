@@ -85,6 +85,13 @@ def _gemm_int8_kernel(
 
 def gemm_int8_torch(a, b, device=None, out=None, tile=None):
     """`[M,K] int8 x [K,N] int8 -> [M,N] int32`, exact, on the device."""
+    for operand, name in ((a, "a"), (b, "b")):
+        arr = np.asarray(operand)
+        if arr.dtype != np.int8:
+            raise TypeError(
+                f"{name} must be int8 (the contract is exact int8 x int8), got {arr.dtype}"
+            )
+
     import torch
 
     dev = _devices.resolve_device(device)

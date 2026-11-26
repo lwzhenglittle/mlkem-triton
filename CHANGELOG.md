@@ -197,6 +197,23 @@ bounded by 2047, so the narrowing is exact by construction. Half the bytes per n
 another 9% -- 16.8 -> **15.6 µs per signature**, 69.9 -> 63.9 ms per 4096-signature batch,
 bit-identical output. End to end: 20.8 -> **18.9 µs**.
 
+### The input-validation contract, as a file: 1158 tests
+
+After the wrong-shape bug (below), the other primitives were probed the same way, and three more
+silent coercions turned up:
+
+- **BLAKE3 accepted floats** (`np.asarray(..., uint8)` truncates them) and **out-of-range
+  integers** (`300` wraps to 44, `-1` to 255). A well-formed digest of the wrong bytes is
+  indistinguishable from a correct one, so both now raise, and a wider integer dtype in range is
+  still accepted.
+- **the int8 GEMM accepted floats and int32**, truncating them into the contract it advertises as
+  exact.
+
+`tests/test_input_validation.py` now pins every refusal in the primitive layer -- BLAKE3, GEMM,
+AES (key, block, nonce), Poseidon2's state width, Poly1305's key length -- because "it raises a
+clear error" is API surface, and none of the 1148 existing tests exercised it: they all pass the
+right thing.
+
 ### A wrong-shaped input was an out-of-bounds read, not an error
 
 `LargeNTT.mul_torch(zeros(64), zeros(32))` returned a result: the stage kernel loads

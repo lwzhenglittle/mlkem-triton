@@ -365,7 +365,17 @@ def blake3_hash_torch(messages, device=None):
     from .. import devices as _devices
 
     dev = _devices.resolve_device(device)
-    arr = np.asarray(messages, dtype=np.uint8)
+    arr = np.asarray(messages)
+    if not np.issubdtype(arr.dtype, np.integer):
+        # a float array would be truncated to bytes silently, and a digest of the wrong bytes is
+        # indistinguishable from a digest of the right ones
+        raise TypeError(f"messages must be integer bytes, got dtype {arr.dtype}")
+    if arr.dtype != np.uint8:
+        if arr.size and (arr.min() < 0 or arr.max() > 255):
+            raise ValueError(
+                f"messages must hold byte values (0..255), got [{arr.min()}, {arr.max()}]"
+            )
+        arr = arr.astype(np.uint8)
     if not arr.flags.writeable:
         # a read-only view (np.frombuffer, or a sliced bytes literal) makes torch warn on the
         # zero-copy conversion; nothing here writes to the input, but the copy is cheap compared
