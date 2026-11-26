@@ -28,9 +28,9 @@ the ML-DSA numbers in `docs/benchmarks.md` §11 cross-implementation rather than
 Hardware:
 
 - **To run the whole suite**: a GPU with a Triton backend (NVIDIA / AMD / Intel). Without a GPU
-  `pytest tests` still runs (123 passed / 252 skipped) because `tests/conftest.py` skips the
-  device-dependent cases centrally. **This project has no GPU CI** — the tests are run by hand
-  on real machines, so please state in your PR which hardware you ran.
+  `pytest tests` still runs because `tests/conftest.py` skips the device-dependent cases
+  centrally. GPU CI is self-hosted rather than on hosted runners — please also state in your PR
+  which hardware you ran.
 - **Just reading the code or running the reference implementation**: CPU is enough;
   `triton_crypto.ntt_ref` and `keyprep` are pure numpy.
 
@@ -43,7 +43,7 @@ pytest tests/test_glue.py   # one file
 ruff check . && ruff format --check .
 ```
 
-Four layers:
+Five layers:
 
 1. **Pure maths** (`test_ntt.py`, `test_keyprep.py`, `test_dot_exact.py`, `test_primitives.py`) —
    the Toeplitz identity, NTT algebra for both `(q, N, ζ)` domains against a schoolbook
@@ -58,8 +58,11 @@ Four layers:
 3. **Reference-implementation agreement** (`test_mldsa_ref.py`) — the numpy FIPS 204
    implementation against ACVP keyGen (byte-exact), sigGen (byte-exact, deterministic *and*
    hedged) and sigVer (180/180), plus the codec edge cases.
-4. **End-to-end** (`test_pipeline*.py`, `test_mldsa.py`) — official NIST ACVP vectors, implicit
-   rejection, every batch size, tampered signatures and hint blocks.
+4. **Hash-based schemes** (`test_slhdsa*.py`, `test_lms*.py`) — all twelve SLH-DSA sets and both
+   SHA-256 LMS families against ACVP, including header-tampering cases.
+5. **End-to-end and packaging** (`test_pipeline*.py`, `test_mldsa*.py`, `test_api_contract.py`) —
+   official NIST ACVP vectors, implicit rejection, every batch size, tampered signatures and
+   hint blocks; version metadata, README imports and `find_packages()`.
 
 ## Adding a backend
 

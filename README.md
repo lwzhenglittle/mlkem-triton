@@ -397,40 +397,40 @@ Same butterfly, two instantiations. Two differences are *not* unified, on purpos
 
 What each scheme keeps for itself: ML-KEM's base-case multiply, ByteEncode/Compress, CBD;
 ML-DSA's SampleInBall, Decompose/UseHint, hint encoding, and the bit-packing of `z`, `w1` and
-`t1`. The NTT kernel's ML-KEM instantiation is unchanged by the refactor — the 264 ML-KEM
-tests, including the byte-exact keygen and the ACVP vectors, still pass bit-for-bit.
+`t1`. The NTT kernel's ML-KEM instantiation is unchanged by the refactor — the ML-KEM test
+suite, including the byte-exact keygen and the ACVP vectors, still pass bit-for-bit.
 
 ---
 
 ## Support matrix
 
-| backend | ML-KEM (FIPS 203) | ML-DSA verify (FIPS 204) | notes |
-|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **375 tests green** |
-| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
-| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
-| Apple MPS / CPU | ❌ | ❌ | no Triton backend / no usable Triton CPU target |
+| backend | ML-KEM (FIPS 203) | ML-DSA (FIPS 204) | SLH-DSA (FIPS 205) | LMS/HSS (SP 800-208) | notes |
+|---|---|---|---|---|---|
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **sign + verify** | ✅ **measured** (all 12) | ✅ **measured** | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **812 tests green** |
+| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green |
+| AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
+| Apple MPS / CPU | ❌ | ❌ | ❌ | ❌ | no Triton backend / no usable Triton CPU target |
 
-The ML-KEM CUDA column was actually run on that machine: same code, same vectors, 264 tests
-green, not one kernel line changed — only the tile configuration differs. ML-DSA has only been
-run on the Intel device so far; there is no NVIDIA hardware in this checkout's development
-environment, and the numbers above are for the Intel iGPU only. Detail and tuning knobs:
-[docs/support.md](docs/support.md).
+The ML-KEM CUDA column was actually run on that machine: same code, same vectors, the ML-KEM
+suite green, not one kernel line changed — only the tile configuration differs. ML-DSA, SLH-DSA
+and LMS have only been run on the Intel device so far; there is no NVIDIA hardware in this
+checkout's development environment. Detail and tuning knobs: [docs/support.md](docs/support.md).
 
 ## Testing
 
 `pytest` (GPU cases skip themselves with no GPU), plus `ruff check . && ruff format --check .`.
-**375 tests**, four layers:
+**812 tests**, five layers:
 
 | layer | what it protects against |
 |---|---|
 | pure maths | Toeplitz identity, fp16 exactness bound, NTT algebra for both `(q, N, ζ)` domains against a schoolbook convolution |
-| kernels vs numpy | every fused kernel must be byte-equal to its unfused/numpy equivalent — the guard against silent fallback, and for ML-DSA the only practical way to debug a data-dependent verdict |
-| ACVP vectors | ML-KEM encap/decap (3×35), ML-DSA sigVer (180), plus keyGen (75) and sigGen (360) for the numpy reference |
+| kernels vs numpy | every fused kernel must be byte-equal to its unfused/numpy equivalent — the guard against silent fallback, and the only practical way to debug a data-dependent verdict |
+| ACVP vectors | ML-KEM encap/decap, ML-DSA sigVer/keyGen/sigGen, SLH-DSA keyGen/sigVer, LMS sigVer |
 | cross-implementation | byte-exact ML-KEM keygen against kyber-py; ML-DSA against liboqs-signed batches when liboqs is built |
+| packaging/API | version metadata, every README import line, `find_packages()` (LMS was missing), public `__all__`, input normalization |
 
-Without a GPU: **123 passed / 252 skipped**. Contribution process and **measurement
-discipline**: [CONTRIBUTING.md](CONTRIBUTING.md).
+Without a GPU, the device-dependent cases skip centrally and the maths/reference paths still
+run. Contribution process and **measurement discipline**: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Limitations
 
@@ -455,9 +455,10 @@ Read these first; detail in [docs/compare.md](docs/compare.md) §5.
 
 ML-DSA specific:
 
-- **Verification only.** Signing is not implemented on the GPU: it needs the rejection loop and
-  secret-key material, and its cost is dominated by that loop, not by arithmetic. `mldsa/ref.py`
-  has a full numpy implementation (byte-exact against ACVP sigGen) if you need signatures.
+- **Signing is batch-bound, not latency-bound.** `Signer` is GPU-resident and byte-exact against
+  all 360 ACVP sigGen cases, at ~43–45 µs/signature at B=1024 on the B390 (liboqs one core:
+  ~97 µs). At B=1 the rejection loop and launch overhead dominate; many signatures in one batch
+  is the shape it optimises for.
 - **Same one-key shape.** Â and t̂1 are expanded once per `Verifier`: **4.3 ms** of host-side
   work on the B390 (2.5 ms of which is `k·l` SHAKE128 calls with rejection sampling, 1.8 ms the
   `k` transforms), plus the first device upload when the device is cold. Many keys × few
@@ -465,7 +466,8 @@ ML-DSA specific:
 
 SLH-DSA specific:
 
-- **Verification only**, like ML-DSA.
+- **Verification only.** SLH-DSA signing is not implemented (ML-DSA signing is); the numpy
+  reference in `slhdsa/ref.py` can still produce signatures for test vectors.
 - **Two hash backends, two schedules.** SHAKE sets hash with Keccak; SHA-2 sets with SHA-256/512
   (and FIPS 205's asymmetric instantiation: F is always SHA-256, H/T_l switch to SHA-512 above
   128 bits). The chain loop is the same; only the `thash` differs.

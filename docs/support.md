@@ -6,8 +6,8 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | notes |
 |---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **771 tests green** |
-| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, 264 ML-KEM tests green |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **812 tests green** |
+| NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | no Triton backend |
 | CPU | ❌ | ❌ | ❌ | ❌ | no usable Triton CPU target |
@@ -18,8 +18,8 @@ not been run on NVIDIA hardware yet — its kernels are plain Triton with the sa
 (`tl.gather`, int64 lanes, `while` in one kernel), but that is reasoning, not a measurement, and
 is marked as such. ROCm remains an inference from the code and is not claimed as working.
 
-With no GPU at all, `pytest tests` skips the device-dependent cases (currently **123 passed /
-251 skipped**), so a CPU-only machine can still smoke-test the maths and reference paths.
+With no GPU at all, `pytest tests` skips the device-dependent cases centrally, so a CPU-only
+machine can still smoke-test the maths and reference paths.
 
 ### Cross-backend details that were verified, not assumed
 
@@ -84,6 +84,8 @@ usable CPU target, so with no accelerator present `resolve_device` raises.
 triton_crypto/
 ├── devices.py             backend detection, per-backend tile config, num_warps override
 ├── params.py              FIPS 203 parameter sets
+├── _inputs.py             uniform bytes/list/array/tensor normalization
+├── _codegen.py            safe write/import of generated Triton source
 ├── keyprep.py             private key -> W_dec / W_enc (numpy, host side)
 ├── ntt_ref.py             numpy reference for NTT / INTT / Toeplitz
 ├── pipeline.py            the main pipeline (fully device-resident)
@@ -97,12 +99,23 @@ triton_crypto/
 │   ├── sponge.py          sponge kernel, pad10*1, SHA3/SHAKE registry, torch helpers
 │   └── ntt.py             NTT over Z_q[X]/(X^N+1), parameterised by (q, N, ζ, layers),
 │                          forward + inverse, numpy + Triton, KYBER / DILITHIUM
-├── mldsa/                 FIPS 204 verification (+ a full numpy reference)
+├── mldsa/                 FIPS 204 signing + verification (+ a full numpy reference)
 │   ├── params.py          ML-DSA-44/65/87 parameter sets and derived sizes
 │   ├── ref.py             numpy FIPS 204: keygen, sign, verify, packing, sampling, rounding
 │   ├── kernels.py         BitUnpack z, MAC, SampleInBall, hint decode, UseHint+BitPack w1
+│   ├── sign.py            the batched Signer (rejection loop + speculation)
 │   ├── verify.py          the batched Verifier (public-key preprocessing, message formatting)
 │   └── acvp.py            ACVP keyGen / sigGen / sigVer parsing
+├── slhdsa/                FIPS 205 verification (+ a full numpy reference)
+│   ├── params.py          12 parameter sets (SHAKE and SHA-2)
+│   ├── ref.py             numpy FIPS 205: keygen, sign, verify, formatting
+│   ├── kernels.py         fused thash (SHAKE); SHA-2 lives in primitives/sha2.py
+│   └── verify.py          the batched Verifier
+├── lms/                   SP 800-208 LMS/HSS verification (+ RFC 8554 reference)
+│   ├── params.py          LMS / LM-OTS type codes and derived sizes
+│   ├── ref.py             numpy keygen/sign/verify
+│   ├── kernels.py         parallel Winternitz chains
+│   └── verify.py          the batched Verifier
 └── kernels/               ML-KEM-specific kernels
     ├── glue.py            compress/pack, Y/E assembly, CBD direct write
     ├── padcat.py          pad10*1 + segment concatenation (one launch)
@@ -132,5 +145,6 @@ The decapsulation dataflow is diagrammed in [docs/design.md](design.md) §3.
    clock conditions — see [CONTRIBUTING.md](../CONTRIBUTING.md) for the measurement discipline
    this project requires.
 
-Do not add CI: GitHub Actions has no GPU runners, so a workflow would burn quota to test
-nothing. The test suite skips cleanly without a GPU, which is the useful property.
+CI keeps the checks that do not need a GPU on hosted runners (`ruff check`, wheel layout) and the
+device suite on a self-hosted GPU runner. The test suite also skips cleanly without a GPU, so a
+plain `pytest` on a CPU-only machine is still a useful smoke test.

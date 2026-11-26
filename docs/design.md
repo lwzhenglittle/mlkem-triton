@@ -355,7 +355,7 @@ Two things are worth recording because both cost time:
    ~1.7× cheaper on this iGPU, and nothing else changed.
 
 The refactor is performance-neutral for ML-KEM by construction — the kernel body, tables and
-`br`/`num_warps` are the same — and the 264 ML-KEM tests, including byte-exact keygen against
+`br`/`num_warps` are the same — and the ML-KEM test suite, including byte-exact keygen against
 kyber-py and the ACVP vectors, pass unchanged.
 
 ---
