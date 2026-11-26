@@ -66,7 +66,7 @@ from .chacha20 import (
     chacha20_xor,
 )
 from .fields import BABYBEAR, MONT_R, PrimeField, mont_mul
-from .gemm import gemm_int8_np, gemm_int8_torch
+from .gemm import gemm_int8_np, gemm_int8_torch, gf2_8_matmul_torch
 from .ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -168,6 +168,7 @@ __all__ = [
     "gemm_int8_np",
     "gemm_int8_torch",
     "get_sponge",
+    "gf2_8_matmul_torch",
     "hash_np",
     "hash_np_batch",
     "intt_np",

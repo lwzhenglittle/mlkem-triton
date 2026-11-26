@@ -147,7 +147,7 @@ def test_every_kernel_in_the_tree_is_in_the_doc():
     assert defined, "no kernels found -- the scan is wrong, not the tree"
     # Same hardening as the export test: ask about the Summary table, which is what claims to list
     # every kernel, not about the document as a whole.
-    summary = doc[doc.index("## Summary"):doc.index("## The exported surface")]
+    summary = doc[doc.index("## Summary") : doc.index("## The exported surface")]
     missing = sorted(f"{name} ({mod}/)" for name, mod in defined if name not in summary)
     assert not missing, f"kernels with no row in the Summary table of docs/kernels.md: {missing}"
 
@@ -256,4 +256,30 @@ def test_every_exported_primitive_is_in_the_doc():
     assert not missing, (
         f"exported from primitives but absent from the exported-surface table in "
         f"docs/kernels.md: {missing}"
+    )
+
+    # ...and the other direction: a name the table promises must actually be importable. The wheel
+    # is where this bites -- `gf2_8_matmul_torch` was documented as an export for two commits while
+    # `primitives/__init__.py` never imported it, so the documented call raised ImportError from an
+    # installed wheel and worked from a source checkout, where the test's own `sys.path` hid it.
+    import triton_crypto.primitives as package
+
+    # The first version of this check was circular: it only inspected names that were *both*
+    # exported and in the table, so a name in the table but missing from `__init__` -- exactly the
+    # `gf2_8_matmul_torch` failure -- was invisible. Read the table itself instead.
+    # bare identifiers are top-level promises; a dotted path or a `_kernel` name is a submodule
+    # attribute, which is a different claim
+    promised = {
+        tok
+        for tok in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", table)
+        if not tok.startswith("_") and tok not in {"annotations", "__future__"}
+    }
+    unimplemented = sorted(name for name in promised if not hasattr(package, name))
+    assert not unimplemented, (
+        f"docs promise these imports but the package lacks them: {unimplemented}"
+    )
+    in_all = set(getattr(package, "__all__", ()))
+    missing_from_all = sorted(name for name in promised if name not in in_all)
+    assert not missing_from_all, (
+        f"exported in the table but absent from __all__: {missing_from_all}"
     )

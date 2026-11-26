@@ -88,22 +88,24 @@ and the traps for the ones with a kernel behind them.
 | `DOMAIN_SHA3` / `DOMAIN_SHAKE` | the pad bytes those configurations use |
 | `IV256` / `K256` / `IV512` / `K512` | SHA-2 initial values and round constants |
 | `annotations` | the `__future__` feature object itself, which the module import accidentally binds into its namespace. Not an API; listed because it is genuinely reachable as `triton_crypto.primitives.annotations` |
-| `keccak_f_ref` | scalar Keccak-f[1600], the oracle for the kernel |
+| `primitives.keccak.keccak_f_ref` | scalar Keccak-f[1600], the oracle for the kernel (submodule, not re-exported) |
 | `hash_np` / `hash_np_batch` / `pad_torch` / `pad_batch` / `pad10star1` / `padded_len` | the sponge reference and its padding helpers |
-| `ntt_np` / `intt_np` / `mul_np` / `negacyclic_conv_np` / `bitrev` | the NTT reference path (`ntt/ref.py`, `fields.py`) |
-| `large_ntt_np` / `large_ntt_torch` | the 2^k multi-pass path, numpy and device |
+| `ntt_np` / `intt_np` / `mul_np` / `negacyclic_conv_np` | the NTT reference path (`ntt/ref.py`, `fields.py`) |
+| `primitives.ntt.domain.bitrev` | the bit-reversal helper (submodule, not re-exported) |
+| `primitives.ntt.large.large_ntt_np` / `primitives.ntt.large.large_ntt_torch` | the 2^k multi-pass path, numpy and device (submodule; the class `LargeNTT` is the top-level entry) |
 | `poseidon2_permute_np` | the Plonky3-shaped reference permutation |
 | `gemm_int8_np` / `gemm_int8_torch` | exact int8 GEMM (the matrix-unit substrate) |
 | `gf2_8_matmul_torch` | **GF(2^8) product from 64 int8 GEMMs** — see its own entry below |
-| `aes128_expand_key_np` / `aes128_encrypt_block_np` / `aes128_ctr_np` / `aes128_ctr_torch` / `t_table` | AES reference and the T-table device path |
+| `aes128_expand_key_np` / `aes128_encrypt_block_np` / `aes128_ctr_np` / `aes128_ctr_torch` | AES reference and the T-table device path |
+| `primitives.aes.t_table` | the generated T-table itself (submodule) |
 | `chacha20_keystream_np` / `chacha20_keystream_torch` | ChaCha20 keystream, reference and device |
 | `poly1305_np_batch` / `poly1305_torch` / `chacha20_poly1305_torch` / `chacha20_poly1305_open_torch` | Poly1305 and the AEAD, reference and device |
 | `blake3_hash_np` / `blake3_hash_torch` | BLAKE3 reference and the tree-hash device path |
 | `get_sponge` / `sponge_padded` / `sha_absorb` / `sha2` | the sponge/sha2 entry points the schemes call |
 | `intt_torch` / `mont_mul` / `poseidon2_permute_torch` | the device inverse NTT, the Montgomery helper and the device permutation |
 | `chacha20_xor` | ChaCha20 XOR (the AEAD's data path), one `_xor_kernel` launch |
-| `compress_np` | the 7-round BLAKE3 compression primitive `compression_np` wraps |
-| `compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on |
+| `compress_np` | the 7-round BLAKE3 compression primitive, exported at the top level |
+| `primitives.blake3.compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on (submodule) |
 
 ## Primitives
 
@@ -181,7 +183,7 @@ source stays short.
 
 The point of "start from a state" is that the first block of every SLH-DSA SHA-2 hash is
 `blockpad(PK.seed)`, constant per parameter set: its state is computed once on the host
-(`sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
+(`primitives.sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
 different hash function.
 
 `sha_thash` (now `slhdsa/thash_sha2.py`; `primitives.sha2.sha_thash` remains as a deprecated
