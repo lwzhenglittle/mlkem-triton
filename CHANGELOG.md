@@ -309,6 +309,7 @@ measurement, and the ratio next to the number it came from.
 
 A full-suite run reported `1 failed, 137 passed` and then nineteen consecutive runs were clean.
 The position put the failure in the liboqs Falcon cross-check, so `probes/falcon-padded-hunt.py`
+(beside this repository, not in it)
 generated **500 signatures across 63 keypairs**: 320 valid ones all accepted, 320 tampered ones all
 rejected by both implementations, zero disagreements. That hypothesis is dead.
 
@@ -460,7 +461,8 @@ is claimed to work rather than merely to build.
 ### `HashToPoint` moves to the device: Falcon's end-to-end drops 31.3 -> 24.4 us
 
 `comp_decode` and `HashToPoint` were the two host stages; a probe measured both halves of the
-second one before any kernel was written (`probes/hashpoint-shape-probe.py`): the sponge costs
+second one before any kernel was written (`probes/hashpoint-shape-probe.py`, beside this
+repository): the sponge costs
 0.10 us/signature and the rejection-plus-prefix-sum filter 0.47 us, against 9.3 us for
 `hashlib` + numpy on the host. **16x**, so it was written.
 

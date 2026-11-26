@@ -700,7 +700,9 @@ place for the next attempt -- on the host, where a vectorised scan beats the dev
 gather by 35x.
 
 `HashToPoint` moved to the device after a probe measured both halves of it
-(`probes/hashpoint-shape-probe.py`): the sponge costs 0.10 µs/signature and the
+(`probes/hashpoint-shape-probe.py`, in the workspace beside this repository -- the probes back
+claims in the evaluation documents as well, so they are not shipped in the package): the sponge
+costs 0.10 µs/signature and the
 rejection-plus-prefix-sum filter 0.47 µs, against 9.3 µs on the host -- a 16x win, and the
 prefix-sum-plus-scatter shape is the one a multi-pass NTT will need. `comp_decode` did **not**
 survive the same test (see below), so the end-to-end number is now 96% decode.
