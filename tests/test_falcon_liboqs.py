@@ -14,6 +14,15 @@ Build the library once:
     ninja -C build-falcon
 
 `FALCON_LIBOQS_SO` overrides the path; everything degrades to a skip when it is missing.
+
+**The corpus is nondeterministic on purpose, and that is a known limitation.** liboqs signs with a
+fresh keypair and a fresh nonce on every run, and this build has neither
+`OQS_randombytes_nist_kat_init_256bit` nor a working `OQS_randombytes_switch_algorithm("NIST-KAT")`
+(both were tried: the switch returns -1), so the vectors cannot be frozen without adding a data
+file. If a run fails here, `probes/falcon-padded-hunt.py` regenerates a few hundred signatures and
+reports which ones were rejected and why -- it was written to chase exactly one such failure, and
+500 signatures later (320 accepted, 320 tampered rejected by both implementations) that hypothesis
+was dead.
 """
 
 from __future__ import annotations

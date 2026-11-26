@@ -110,6 +110,19 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### One non-reproducing test failure, chased and left as an open note
+
+A full-suite run reported `1 failed, 137 passed` and then nineteen consecutive runs were clean.
+The position put the failure in the liboqs Falcon cross-check, so `probes/falcon-padded-hunt.py`
+generated **500 signatures across 63 keypairs**: 320 valid ones all accepted, 320 tampered ones all
+rejected by both implementations, zero disagreements. That hypothesis is dead.
+
+What the hunt did establish is that the corpus is **nondeterministic by construction**: liboqs signs
+with a fresh keypair and nonce per run, and this build offers no way to freeze it (no
+`OQS_randombytes_nist_kat_init_256bit`, and `OQS_randombytes_switch_algorithm("NIST-KAT")` returns
+-1). The module docstring now says so, points at the hunting probe, and records what it found. A
+test that cannot reproduce its own failure should say so out loud rather than look green.
+
 ### Barrett reduction: measured, 1.02x, not adopted
 
 `q = 2^31 - 2^27 + 1`, so a 62-bit product can be reduced with shifts, adds and one narrow
