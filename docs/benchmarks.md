@@ -618,7 +618,14 @@ the cipher and reads 0.39 GB/s instead of 7.5. The GPU row is a batched kernel a
 per-call cost, which is exactly the kind of asymmetry that makes a naive comparison wrong.
 
 Arc B390 / Core Ultra X7 358H (4P+8E+4LP), governor `powersave` at 400 MHz idle, 16P = sixteen
-concurrent **processes** (threads do not scale on this hybrid part), min-of-5:
+concurrent **processes** (threads do not scale on this hybrid part), min-of-5.
+
+> **This table is one window's measurement, not the committed baseline.** The baseline the
+> documents are computed against is `benchmarks/cpu_baseline.json`; comparing the two shows the
+> usual clock drift -- most rows agree within a few per cent, Poly1305's 16P is 15% apart (75.8 here
+> against 87.2 there), and Falcon-512's one-thread figure is 1.7x apart (42.2 k/s here against
+> 24.8 k/s there -- see the caveat at the end of this section). Quote the ratio from whichever
+> window produced the device number, never across two.
 
 | rival | 1T | 16P | scale | source |
 |---|---:|---:|---:|---|
