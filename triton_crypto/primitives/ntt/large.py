@@ -136,6 +136,16 @@ class LargeNTT:
             m //= 2
         return out
 
+    @property
+    def n_passes(self) -> int:
+        """Passes per transform, for whoever wants to reason about traffic.
+
+        `radix=4` does `log2(n) / 2` passes (plus one radix-2 pass when `log2(n)` is odd);
+        `radix=2` does `log2(n)`.
+        """
+        halves, odd = divmod(self.logn, 2)
+        return halves + (1 if odd else 0) if self.radix == 4 else self.logn
+
     def fwd_passes4(self) -> list[tuple]:
         """Forward passes as `(quarter_length, w1a, w1b, w2)` for radix-4, plus a final
         `(quarter_length, w)` radix-2 pass when `log2(n)` is odd."""

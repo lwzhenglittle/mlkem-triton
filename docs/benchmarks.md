@@ -880,10 +880,14 @@ per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **1.0–1.4 ms** | 69.9 ms | 5.25 ms | **57–83x** | **4.3–6.2x** |
-| traffic (10 passes x 8 MB, radix-4) | 88 MB | | | | |
+| 2^20 forward NTT | **0.88–1.2 ms** | 69.9 ms | 5.25 ms | **57–79x** | **4.3–5.9x** |
+| traffic (10 passes x 8 MB, radix-4) | 84 MB | | | | |
 | last window measured | 1.36 ms -> 38.9x / 2.92x | | | | |
-| achieved (fast clock) | 155 GB/s (72% of copy) | 2.4 GB/s | 30 GB/s | | |
+| achieved (fast clock) | 95 GB/s (**44%** of copy) | 2.4 GB/s | 30 GB/s | | |
+
+> The `% of copy` figure here was **44%, not 72/88%**: the benchmark's advertised traffic was
+> computed from the radix-2 pass count while radix-4 runs ten passes, so both GB/s and `%copy`
+> were overstated by 2x until the bench started reading `LargeNTT.n_passes`.
 
 Two numbers per cell because this transform is the one row whose result moves with the clock
 state rather than with its own code: 0.98 ms when the iGPU is at its top clock (155 GB/s of

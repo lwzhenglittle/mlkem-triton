@@ -253,8 +253,11 @@ def bench_ntt_large(batch: int, size: int, dev) -> Bench:
         lambda: t.forward_tensor_torch(x, dev),
         units=1,
         unit="p2^20",
-        nbytes=(1 << 20) * 4 * 2 * 20,
-        note="BabyBear 2^20, 20 passes",
+        # 8 MB read + 8 MB write per pass, and the pass count depends on the radix -- hardcoding
+        # 20 overstated the traffic (and therefore GB/s and %copy) by 2x once radix-4 became
+        # the default.
+        nbytes=(1 << 20) * 4 * 2 * t.n_passes,
+        note=f"BabyBear 2^20, {t.n_passes} passes (radix={t.radix})",
     )
 
 
