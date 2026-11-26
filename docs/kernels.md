@@ -277,7 +277,7 @@ with zeros per RFC 8439's pad16 before calling this.
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
-| `KEY` | `[B, 32]` | `uint8` | `r || s` |
+| `KEY` | `[B, 32]` | `uint8` | `r \|\| s` |
 | `MSG` | `[B, NBLK*16]` | `uint8` | message blocks |
 | `TAG` | `[B, 16]` | `uint8` | the tag |
 
@@ -300,7 +300,7 @@ costs on a GPU.
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
 | `RK` | `[B, 44]` | `int32` | expanded round keys (host-side, 44 words per key) |
-| `NONCE` | `[B, 8]` | `uint8` | the nonce half of `nonce || counter(8)` |
+| `NONCE` | `[B, 8]` | `uint8` | the nonce half of `nonce \|\| counter(8)` |
 | `OUT` | `[B, NBLK*16]` | `uint8` | keystream |
 | `TBL` | `[5*256]` | `int32` | `Te0..Te3` then the S-box, 4.25 KiB, gathered from global memory |
 
