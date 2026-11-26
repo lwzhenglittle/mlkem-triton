@@ -667,6 +667,11 @@ quantity, all measured this session:
 | `bench_mldsa_verify.py`: `pool.map` wall time / ops | 198 k ops/s |
 | **barrier + pre-generated corpora, verify only** | **370 k ops/s** |
 
+The same probe on Falcon-512 (the other scheme with a liboqs rival, `benchmarks/probe_16p_method.py
+--tag falcon_512 --n 64`) gives **278 k ops/s** against `bench_cpu.py`'s 449 k -- the same
+direction, a factor of 1.6. So the bias is not an ML-DSA artefact: the upper bound is 1.6-2.6x
+depending on how many operations fit in one timed region.
+
 Both harnesses are wrong in opposite directions. The first sums minima taken at different moments --
 when one child finishes, the others speed up, so their later reps are cheaper and the sum
 over-counts. The second times `LibOQS(...)` construction (a `ctypes.CDLL` load, ~1 ms) inside the
