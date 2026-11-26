@@ -59,6 +59,31 @@ def bitrev(k: int, bits: int) -> int:
     return int(format(k, f"0{bits}b")[::-1], 2)
 
 
+def _is_probable_prime(n: int) -> bool:
+    """Deterministic Miller-Rabin for 64-bit integers (the bases below are sufficient)."""
+    if n < 2:
+        return False
+    small = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
+    for p in small:
+        if n % p == 0:
+            return n == p
+    d, s = n - 1, 0
+    while d % 2 == 0:
+        d //= 2
+        s += 1
+    for a in (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37):
+        x = pow(a, d, n)
+        if x in (1, n - 1):
+            continue
+        for _ in range(s - 1):
+            x = x * x % n
+            if x == n - 1:
+                break
+        else:
+            return False
+    return True
+
+
 def _multiplicative_order(a: int, q: int) -> int:
     """Order of `a` in (Z/q)ˣ, by removing prime factors of q-1 while the power stays 1."""
     order = q - 1
@@ -88,10 +113,20 @@ class NTTDomain:
     layers: int = 0  # 0 -> run all log2(N) layers
 
     def __post_init__(self):
-        if self.n & (self.n - 1):
-            raise ValueError("N must be a power of two")
+        if self.q < 3 or self.q % 2 == 0:
+            raise ValueError(f"q must be an odd integer >= 3, got {self.q}")
+        if not _is_probable_prime(self.q):
+            raise ValueError(f"q = {self.q} is not prime; Z_q would not be a field")
+        if self.n & (self.n - 1) or self.n < 2:
+            raise ValueError("N must be a power of two >= 2")
+        if (self.q - 1) ** 2 >= 2**63:
+            raise ValueError(f"q = {self.q} is too large: products would not fit in int64")
         if self.layers == 0:
             object.__setattr__(self, "layers", self.n.bit_length() - 1)
+        if not 1 <= self.layers <= self.log_n:
+            raise ValueError(f"layers must be in 1..{self.log_n}, got {self.layers}")
+        if not 1 < self.zeta < self.q:
+            raise ValueError(f"ζ must be in 2..q-1, got {self.zeta}")
         order = _multiplicative_order(self.zeta, self.q)
         if order != 2 ** (self.layers + 1):
             raise ValueError(
@@ -417,8 +452,24 @@ def ntt_torch(
         x = x[None, :]
     if x.dim() != 2 or x.shape[1] != domain.n:
         raise ValueError(f"expected [P, {domain.n}] input, got {tuple(x.shape)}")
+    if x.dtype.is_floating_point or x.dtype not in (
+        torch.uint8,
+        torch.int8,
+        torch.int16,
+        torch.int32,
+        torch.int64,
+    ):
+        raise TypeError(f"expected an integer tensor, got {x.dtype}")
     p = x.shape[0]
     if x.dtype != torch.int32:
+        # A silent `.to(torch.int32)` truncates; the CLI contract is "convert explicitly
+        # if the values do not fit", which this check enforces.
+        if x.numel():
+            lo, hi = int(x.min()), int(x.max())
+            if lo < -(2**31) or hi >= 2**31:
+                raise ValueError(
+                    f"values in [{lo}, {hi}] do not fit in int32; convert with % q first"
+                )
         x = x.to(torch.int32)
     x = x.contiguous()
     out = torch.empty_like(x)
@@ -447,6 +498,6 @@ def ntt_torch(
     return out[0] if squeeze else out
 
 
-def intt_torch(x, domain: NTTDomain = KYBER, br: int = 2, warps: int = 2):
+def intt_torch(x, domain: NTTDomain = KYBER, br: int = 2, warps: int = 2, mont: bool | None = None):
     """[P, N] int32 NTT-domain values -> [P, N] int32 coefficients in [0, q)."""
-    return ntt_torch(x, domain, inverse=True, br=br, warps=warps)
+    return ntt_torch(x, domain, inverse=True, br=br, warps=warps, mont=mont)

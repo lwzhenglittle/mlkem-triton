@@ -15,11 +15,7 @@ value starts at byte 23.
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
-
+from .._codegen import compile_generated
 from ..primitives.sha2 import _k_tensor
 
 KERNELS: dict[int, object] = {}
@@ -127,14 +123,7 @@ def gen_source(nw: int = 8) -> str:
 def _compile(nw: int = 8):
     if nw in KERNELS:
         return KERNELS[nw]
-    src = gen_source(nw)
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_lms_chain_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    spec = importlib.util.spec_from_file_location(f"_lms_chain_{tag}", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = compile_generated(gen_source(nw), "lms_chain")
     KERNELS[nw] = mod.lms_chain_kernel
     return mod.lms_chain_kernel
 

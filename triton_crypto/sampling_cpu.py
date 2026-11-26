@@ -29,7 +29,8 @@ def prf(eta: int, s: bytes, b: int) -> bytes:
 def cbd(buf: bytes, eta: int) -> np.ndarray:
     """SamplePolyCBD_eta (FIPS 203 Algorithm 8)."""
     bits = np.unpackbits(np.frombuffer(buf, dtype=np.uint8), bitorder="little")
-    assert bits.size == 256 * 2 * eta
+    if bits.size != 256 * 2 * eta:
+        raise ValueError(f"expected {256 * 2 * eta} bits, got {bits.size}")
     bits = bits.reshape(256, 2 * eta).astype(np.int64)
     a = bits[:, :eta].sum(axis=1)
     b = bits[:, eta:].sum(axis=1)

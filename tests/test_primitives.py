@@ -157,7 +157,9 @@ def test_pad_batch_matches_pad10star1():
 
 
 def test_hash_registry():
+    assert HASHES["SHA3-224"].rate == 144
     assert HASHES["SHA3-256"].rate == 136
+    assert HASHES["SHA3-384"].rate == 104
     assert HASHES["SHA3-512"].rate == 72
     assert HASHES["SHAKE128"].rate == 168
     assert HASHES["SHAKE256"].rate == 136

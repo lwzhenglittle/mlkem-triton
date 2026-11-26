@@ -50,7 +50,8 @@ def cbd(bufs: Tensor, eta: int) -> Tensor:
     from .pipeline import _cbd2_kernel
 
     n = bufs.shape[0]
-    assert bufs.shape[1] == 64 * eta
+    if bufs.shape[1] != 64 * eta:
+        raise ValueError(f"expected [n, {64 * eta}] input, got {tuple(bufs.shape)}")
     if eta != 2:
         raise NotImplementedError("custom op only covers the eta=2 fast path")
     out = torch.empty((n, 256), dtype=torch.int16, device=bufs.device)

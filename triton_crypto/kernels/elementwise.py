@@ -41,7 +41,10 @@ def unpack_ct(cts: np.ndarray, k: int, du: int, dv: int):
     if cts.ndim == 1:
         cts = cts[None, :]
     c1_bytes, c2_bytes = 32 * du * k, 32 * dv
-    assert cts.shape[1] == c1_bytes + c2_bytes, (cts.shape, c1_bytes + c2_bytes)
+    if cts.shape[1] != c1_bytes + c2_bytes:
+        raise ValueError(
+            f"expected {c1_bytes + c2_bytes} bytes per ciphertext, got {cts.shape[1]}"
+        )
     c1 = _unpack_bits(cts[:, :c1_bytes], du, 256 * k).reshape(k, N, cts.shape[0])
     c2 = _unpack_bits(cts[:, c1_bytes:], dv, N)
     return c1, c2

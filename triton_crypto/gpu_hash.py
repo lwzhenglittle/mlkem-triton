@@ -33,7 +33,8 @@ def sha3_256_batch(msgs: np.ndarray, device=None) -> np.ndarray:
 
 def shake256_batch(msgs: np.ndarray, outlen: int = 32, device=None) -> np.ndarray:
     """J / PRF: [n, L] -> [n, outlen]."""
-    assert outlen % 8 == 0
+    if outlen % 8:
+        raise ValueError(f"outlen must be a multiple of 8, got {outlen}")
     return hash_np_batch(msgs, SHAKE256, outlen, device=device)
 
 
@@ -41,7 +42,8 @@ def cbd_batch(bufs: np.ndarray, eta: int) -> np.ndarray:
     """[n, 64·eta] -> [n, 256] centered binomial sampling (FIPS 203 Alg. 8, vectorized)."""
     bufs = np.ascontiguousarray(bufs, dtype=np.uint8)
     n = bufs.shape[0]
-    assert bufs.shape[1] == 64 * eta
+    if bufs.shape[1] != 64 * eta:
+        raise ValueError(f"expected [n, {64 * eta}] input, got {tuple(bufs.shape)}")
     bits = np.unpackbits(bufs, axis=1, bitorder="little").reshape(n, 256, 2 * eta)
     bits = bits.astype(np.int64)
     a = bits[:, :, :eta].sum(axis=2)

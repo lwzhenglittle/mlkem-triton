@@ -41,14 +41,10 @@ Implementation notes
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
-
 import torch
 import triton
 
+from .._codegen import compile_generated
 from ..devices import warps
 
 BR_DEFAULT = 32
@@ -75,7 +71,8 @@ def _chunks(n: int) -> list[tuple[int, int]]:
 def gen_padcat2_source(
     la_w: int, lb_w: int, total_w: int, domain: int, a_bcast: bool, b_bcast: bool
 ) -> str:
-    assert la_w > 0 and lb_w >= 0 and total_w > la_w + lb_w
+    if la_w <= 0 or lb_w < 0 or total_w <= la_w + lb_w:
+        raise ValueError(f"invalid padcat2 word layout: {la_w}, {lb_w}, {total_w}")
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
     L.append("def padcat2_kernel(A, B, OUT, n, BR: tl.constexpr):")
     L.append("    pid = tl.program_id(0)")
@@ -168,11 +165,14 @@ def gen_padcat_sfx_source(
     prefix be read in place directly from a large tensor (e.g. the 64 B output of
     G), saving one `contiguous()` copy.
     """
-    assert prefix_w > 0 and total_w > prefix_w + 1 and mod >= 1
+    if prefix_w <= 0 or total_w <= prefix_w + 1 or mod < 1:
+        raise ValueError(f"invalid padcat_sfx layout: {prefix_w}, {total_w}, {mod}")
     sw = prefix_w if stride_w is None else stride_w
-    assert sw >= prefix_w + base_w
+    if sw < prefix_w + base_w:
+        raise ValueError(f"stride {sw} is smaller than {prefix_w + base_w}")
     dom_w, last_w = prefix_w, total_w - 1
-    assert dom_w < last_w, "suffix+domain cannot share a word with 0x80 (not needed here)"
+    if dom_w >= last_w:
+        raise ValueError("suffix and domain byte would share a word with 0x80")
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
     L.append("def padcat_sfx_kernel(A, OUT, n, MOD: tl.constexpr, OFF: tl.constexpr,")
     L.append("                      BR: tl.constexpr):")
@@ -214,15 +214,7 @@ _CACHE: dict[tuple, object] = {}
 
 
 def _compile(src: str, fname: str):
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_mlkem_{fname}_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    name = f"_mlkem_{fname}_{tag}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return getattr(mod, fname)
+    return getattr(compile_generated(src, fname), fname)
 
 
 def _launch(kern, args, n: int, br: int = BR_DEFAULT, nwarps: int = WARPS_DEFAULT):

@@ -16,10 +16,7 @@ caller's job to "copy the bytes in the right order", which torch is good at.
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
+from .._codegen import compile_generated
 
 __all__ = ["IV256", "IV512", "K256", "K512", "compress_np", "sha_absorb", "sha_thash"]
 
@@ -204,10 +201,14 @@ def compress_np(state: list[int], blocks: bytes, bits: int = 256) -> list[int]:
     `bits` is the digest size; the *word* size is `bits // 8` bits (32 for SHA-256, 64 for
     SHA-512), which is the one that matters for masking and rotation.
     """
+    if bits not in (256, 512):
+        raise ValueError(f"bits must be 256 or 512, got {bits}")
     nw, rounds = 16, (64 if bits == 256 else 80)
     wbits = bits // 8
     wsize = wbits // 8
     bsize = nw * wsize
+    if len(blocks) % bsize:
+        raise ValueError(f"blocks length {len(blocks)} is not a multiple of {bsize}")
     mask = (1 << wbits) - 1
     K = K256 if bits == 256 else K512
     if bits == 256:
@@ -266,8 +267,12 @@ def hash_np(msg: bytes, bits: int = 256) -> bytes:
 _CACHE: dict[tuple[int, int], object] = {}
 
 
-def gen_source(bits: int, nblocks: int) -> str:
-    """A kernel that absorbs `nblocks` pre-padded blocks and writes the 8-word state."""
+def gen_source(bits: int) -> str:
+    """A kernel that absorbs `NB` pre-padded blocks (runtime) and writes the 8-word state.
+
+    `NB` is a runtime argument so a new message length no longer compiles a new kernel;
+    previously every distinct block count was a separate `constexpr` instantiation.
+    """
     W = bits // 8  # word bits
     T = f"tl.uint{W}"
     rounds = 64 if bits == 256 else 80
@@ -300,7 +305,7 @@ def gen_source(bits: int, nblocks: int) -> str:
         f"    return (x >> r) | (x << ({W} - r))",
         "",
         "@triton.jit",
-        "def sha_kernel(HIN, KT, MSG, OUT, rows, NW: tl.constexpr, NOUT: tl.constexpr,",
+        "def sha_kernel(HIN, KT, MSG, OUT, rows, NB, NW: tl.constexpr, NOUT: tl.constexpr,",
         "               BLOCK: tl.constexpr):",
         "    pid = tl.program_id(0)",
         "    row = pid * BLOCK + tl.arange(0, BLOCK)",
@@ -309,7 +314,7 @@ def gen_source(bits: int, nblocks: int) -> str:
     L.append(f"    zero_v = tl.zeros((BLOCK,), dtype={T})")
     for i in range(8):
         L.append(f"    h{i} = tl.load(HIN + {i}).to({T}, bitcast=True) | zero_v")
-    L.append(f"    for _b in range(0, {nblocks}, 1):")
+    L.append("    for _b in range(0, NB, 1):")
     for i in range(8):
         L.append(f"        a{i} = h{i}")
     for i in range(16):
@@ -343,20 +348,14 @@ def gen_source(bits: int, nblocks: int) -> str:
     return "\n".join(L) + "\n"
 
 
-def _compile(bits: int, nblocks: int):
-    key = (bits, nblocks)
+def _compile(bits: int):
+    key = bits
     kern = _CACHE.get(key)
     if kern is not None:
         return kern
-    src = gen_source(bits, nblocks)
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_sha2_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    name = f"_sha2_{tag}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    if bits not in (256, 512):
+        raise ValueError(f"bits must be 256 or 512, got {bits}")
+    mod = compile_generated(gen_source(bits), "sha2")
     _CACHE[key] = mod.sha_kernel
     return mod.sha_kernel
 
@@ -365,13 +364,14 @@ def sha_absorb(hin, msg_words, out_words, rows: int, bits: int, nblocks: int, bl
     """Absorb `nblocks` blocks; `msg_words` is [rows, nblocks*nw] and `out_words` [rows, 8]."""
     import triton
 
-    kern = _compile(bits, nblocks)
+    kern = _compile(bits)
     kern[(triton.cdiv(rows, block),)](
         hin,
         _k_tensor(bits, out_words.device),
         msg_words,
         out_words,
         rows,
+        nblocks,
         NW=nblocks * (16),
         NOUT=8,
         BLOCK=block,
@@ -422,7 +422,8 @@ def gen_thash_source(bits: int, dn: int, nout_words: int, passthrough: bool) -> 
     tail = 22 + dn
     total_msg = bsize + tail
     lenbytes = 8 if bits == 256 else 16
-    assert tail + 1 + lenbytes <= bsize, "one block only"
+    if tail + 1 + lenbytes > bsize:
+        raise ValueError(f"dn={dn} needs more than one SHA-{bits} block")
     if bits == 256:
         (s0a, s0b, s0s), (s1a, s1b, s1s) = (7, 18, 3), (17, 19, 10)
         (S0a, S0b, S0c), (S1a, S1b, S1c) = (2, 13, 22), (6, 11, 25)
@@ -559,15 +560,7 @@ def _compile_thash(bits: int, dn: int, nout_words: int, passthrough: bool):
     kern = _THASH_CACHE.get(key)
     if kern is not None:
         return kern
-    src = gen_thash_source(bits, dn, nout_words, passthrough)
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_sha2_thash_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    name = f"_sha2_thash_{tag}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = compile_generated(gen_thash_source(bits, dn, nout_words, passthrough), "sha2_thash")
     _THASH_CACHE[key] = mod.sha_thash_kernel
     return mod.sha_thash_kernel
 

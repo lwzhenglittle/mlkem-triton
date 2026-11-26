@@ -28,12 +28,9 @@ warm.
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
-
-from ..primitives.sponge import _emit_rounds, _rc_tensor
+from .._codegen import compile_generated
+from ..primitives.keccak import _emit_rounds
+from ..primitives.sponge import _rc_tensor
 
 __all__ = ["thash"]
 
@@ -42,10 +39,12 @@ _CACHE: dict[tuple[int, int], object] = {}
 
 def gen_source(n: int, dn: int) -> str:
     """One kernel per (hash size, data size): both are constexpr, so the padding is static."""
-    assert n % 8 == 0 and dn % 8 == 0
+    if n % 8 or dn % 8:
+        raise ValueError(f"n and dn must be multiples of 8, got {n} and {dn}")
     nw_seed, nw_data, nw_out = n // 8, dn // 8, n // 8
     length = n + 32 + dn  # bytes absorbed before pad10*1
-    assert length < 136, "one block only"
+    if length >= 136:
+        raise ValueError(f"n={n}, dn={dn} does not fit in one SHAKE block")
     pad_word, pad_shift = length // 8, (length % 8) * 8
 
     L = [
@@ -101,7 +100,8 @@ def gen_source(n: int, dn: int) -> str:
         L.append(f"    a{i} = tl.zeros((BLOCK,), dtype=tl.uint64)")
 
     # pad10*1: 0x1F right after the message, 0x80 in the last byte of the block
-    assert pad_word < 17
+    if pad_word >= 17:
+        raise ValueError(f"padding word {pad_word} does not fit in one block")
     L.append(f"    a{pad_word} = a{pad_word} | (tl.full((BLOCK,), 0x1F, tl.uint64) << {pad_shift})")
     L.append("    a16 = a16 | (tl.full((BLOCK,), 0x80, tl.uint64) << 56)")
 
@@ -127,15 +127,7 @@ def _compile(n: int, dn: int):
     kern = _CACHE.get(key)
     if kern is not None:
         return kern
-    src = gen_source(n, dn)
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_slhdsa_thash_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    name = f"_slhdsa_thash_{tag}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = compile_generated(gen_source(n, dn), "slhdsa_thash")
     _CACHE[key] = mod.thash_kernel
     return mod.thash_kernel
 

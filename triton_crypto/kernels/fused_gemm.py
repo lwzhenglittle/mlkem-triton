@@ -70,9 +70,17 @@ def _gemm_tile(
 
     a_ptrs = W + offm[:, None] * K + offk[None, :]
     b_ptrs = Y + offk[:, None] * N + offn[None, :]
+    mask_n = offn < N
     acc = tl.zeros((BM, BN), dtype=tl.float32)
     for _ in range(0, tl.cdiv(K, BK)):
-        acc = tl.dot(tl.load(a_ptrs), tl.load(b_ptrs), acc, out_dtype=tl.float32)
+        # B is padded to BN by the caller only sometimes (it is the batch size), so the
+        # last column tile must be masked; unmasked loads read into the next row.
+        acc = tl.dot(
+            tl.load(a_ptrs),
+            tl.load(b_ptrs, mask=mask_n[None, :], other=0.0),
+            acc,
+            out_dtype=tl.float32,
+        )
         a_ptrs += BK
         b_ptrs += BK * N
     return acc

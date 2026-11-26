@@ -157,11 +157,14 @@ def gemm_modq(
     W: torch.Tensor, X: torch.Tensor, E: torch.Tensor, mode: str = "enc", tile=None, num_warps=None
 ) -> torch.Tensor:
     """W [M,K] fp16, X [K,B] fp16, E [M,B] int16 -> [M,B] int16."""
-    assert W.dtype == torch.float16 and X.dtype == torch.float16
-    assert E.dtype == torch.int16
+    if W.dtype != torch.float16 or X.dtype != torch.float16:
+        raise TypeError(f"W/X must be float16, got {W.dtype}/{X.dtype}")
+    if E.dtype != torch.int16:
+        raise TypeError(f"E must be int16, got {E.dtype}")
     M, K = W.shape
     K2, B = X.shape
-    assert K2 == K and E.shape == (M, B)
+    if K2 != K or E.shape != (M, B):
+        raise ValueError(f"K2={K2} (expected {K}), E.shape={tuple(E.shape)} (expected {(M, B)})")
     if tile is not None or num_warps is not None:
         # Benchmarking: pass tile/num_warps explicitly
         if X.shape[1] == 1:
@@ -306,8 +309,13 @@ def gemm_modq_int8(
     """W = 64*hi + lo, composed from two int8 dots."""
     M, K = hi.shape
     K2, B = X.shape
-    assert X.dtype == torch.int8 and hi.dtype == torch.int8 and lo.dtype == torch.int8
-    assert lo.shape == hi.shape and E.shape == (M, B) and K2 == K
+    if X.dtype != torch.int8 or hi.dtype != torch.int8 or lo.dtype != torch.int8:
+        raise TypeError(f"X/hi/lo must be int8, got {X.dtype}/{hi.dtype}/{lo.dtype}")
+    if lo.shape != hi.shape or E.shape != (M, B) or K2 != K:
+        raise ValueError(
+            f"lo.shape={tuple(lo.shape)}, hi.shape={tuple(hi.shape)}, "
+            f"E.shape={tuple(E.shape)} (expected {(M, B)}), K2={K2} (expected {K})"
+        )
 
     if B != 1:
         return _launch_i8(hi, lo, X, E, mode)

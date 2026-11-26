@@ -15,12 +15,9 @@ Implementation notes:
 
 from __future__ import annotations
 
-import hashlib
-import importlib.util
-import tempfile
-from pathlib import Path
-
 import numpy as np
+
+from .._codegen import compile_generated
 
 # ---------------- Keccak constants ----------------
 
@@ -67,8 +64,38 @@ def _rotl_expr(var: str, r: int) -> str:
     return f"(({var} << {r}) | ({var} >> {64 - r}))"
 
 
+def _emit_rounds(L: list[str], rnd: int, ind: str = "    ", rc_expr: str | None = None) -> None:
+    """Emit one Keccak-f round on the Python-side variables a0..a24.
+
+    This is the single round emitter: the standalone permutation kernel and the sponge
+    kernel (which rolls the round loop and reads the constant from a tensor) both use it.
+    """
+    rc = rc_expr if rc_expr is not None else str(RC[rnd])
+    for x in range(5):
+        L.append(f"{ind}c{x} = a{x} ^ a{x + 5} ^ a{x + 10} ^ a{x + 15} ^ a{x + 20}")
+    for x in range(5):
+        cp, cn = (x + 1) % 5, (x + 4) % 5
+        L.append(f"{ind}d{x} = c{cn} ^ {_rotl_expr(f'c{cp}', 1)}")
+    for y in range(5):
+        for x in range(5):
+            i = x + 5 * y
+            L.append(f"{ind}a{i} = a{i} ^ d{x}")
+    for y in range(5):
+        for x in range(5):
+            src = x + 5 * y
+            dst = y + 5 * ((2 * x + 3 * y) % 5)
+            L.append(f"{ind}b{dst} = {_rotl_expr(f'a{src}', ROT[x][y])}")
+    for y in range(5):
+        for x in range(5):
+            L.append(
+                f"{ind}a{x + 5 * y} = b{x + 5 * y} ^ "
+                f"((~b{(x + 1) % 5 + 5 * y}) & b{(x + 2) % 5 + 5 * y})"
+            )
+    L.append(f"{ind}a0 = a0 ^ {rc}")
+
+
 def gen_source(n_rounds: int = 24) -> str:
-    """Generate the full Triton kernel source."""
+    """Generate the full Triton kernel source (rounds unrolled)."""
     L = [
         "import triton",
         "import triton.language as tl",
@@ -85,31 +112,7 @@ def gen_source(n_rounds: int = 24) -> str:
         )
 
     for rnd in range(n_rounds):
-        # θ
-        for x in range(5):
-            L.append(f"    c{x} = a{x} ^ a{x + 5} ^ a{x + 10} ^ a{x + 15} ^ a{x + 20}")
-        for x in range(5):
-            cp, cn = (x + 1) % 5, (x + 4) % 5
-            L.append(f"    d{x} = c{cn} ^ {_rotl_expr(f'c{cp}', 1)}")
-        for y in range(5):
-            for x in range(5):
-                i = x + 5 * y
-                L.append(f"    a{i} = a{i} ^ d{x}")
-        # ρ + π
-        for y in range(5):
-            for x in range(5):
-                src = x + 5 * y
-                dst = y + 5 * ((2 * x + 3 * y) % 5)
-                L.append(f"    b{dst} = {_rotl_expr(f'a{src}', ROT[x][y])}")
-        # χ
-        for y in range(5):
-            for x in range(5):
-                L.append(
-                    f"    a{x + 5 * y} = b{x + 5 * y} ^ "
-                    f"((~b{(x + 1) % 5 + 5 * y}) & b{(x + 2) % 5 + 5 * y})"
-                )
-        # ι
-        L.append(f"    a0 = a0 ^ {RC[rnd]}")
+        _emit_rounds(L, rnd, ind="    ")
 
     for i in range(25):
         L.append(f"    tl.store(OUT + {i} * n + offs, a{i}.to(tl.int64, bitcast=True), mask=m)")
@@ -124,14 +127,7 @@ def get_kernel():
     global _KERNEL
     if _KERNEL is not None:
         return _KERNEL
-    src = gen_source()
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_mlkem_keccak_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    spec = importlib.util.spec_from_file_location(f"_mlkem_keccak_{tag}", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = compile_generated(gen_source(), "keccak")
     _KERNEL = mod.keccak_f_kernel
     return _KERNEL
 

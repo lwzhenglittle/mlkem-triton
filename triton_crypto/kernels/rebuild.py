@@ -196,7 +196,8 @@ class GpuKeyRebuilder:
         dk_pke = dk[: 384 * k]
         ek = dk[384 * k : 768 * k + 32]
         rho = ek[384 * k :]
-        assert len(rho) == 32
+        if len(rho) != 32:
+            raise ValueError(f"rho must be 32 bytes, got {len(rho)}")
 
         # 1) Â_hat: SHAKE-128 × k² + rejection sampling
         n = k * k

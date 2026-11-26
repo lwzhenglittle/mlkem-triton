@@ -38,15 +38,13 @@ bottom, which do the padding and the int64 view for you.
 from __future__ import annotations
 
 import hashlib
-import importlib.util
-import tempfile
 from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
 import torch
 
-from .keccak import RC, ROT, _rotl_expr
+from .._codegen import compile_generated
+from .keccak import RC, _emit_rounds
 
 # ---------------- domain separation bytes (NIST SP 800-185 style) ----------------
 
@@ -73,35 +71,12 @@ def _rc_tensor(device: torch.device) -> torch.Tensor:
     return t
 
 
-def _emit_rounds(L: list[str], rnd: int, ind: str = "        ", rc_expr: str | None = None) -> None:
-    rc = rc_expr if rc_expr is not None else str(RC[rnd])
-    for x in range(5):
-        L.append(f"{ind}c{x} = a{x} ^ a{x + 5} ^ a{x + 10} ^ a{x + 15} ^ a{x + 20}")
-    for x in range(5):
-        cp, cn = (x + 1) % 5, (x + 4) % 5
-        L.append(f"{ind}d{x} = c{cn} ^ {_rotl_expr(f'c{cp}', 1)}")
-    for y in range(5):
-        for x in range(5):
-            i = x + 5 * y
-            L.append(f"{ind}a{i} = a{i} ^ d{x}")
-    for y in range(5):
-        for x in range(5):
-            src = x + 5 * y
-            dst = y + 5 * ((2 * x + 3 * y) % 5)
-            L.append(f"{ind}b{dst} = {_rotl_expr(f'a{src}', ROT[x][y])}")
-    for y in range(5):
-        for x in range(5):
-            L.append(
-                f"{ind}a{x + 5 * y} = b{x + 5 * y} ^ "
-                f"((~b{(x + 1) % 5 + 5 * y}) & b{(x + 2) % 5 + 5 * y})"
-            )
-    L.append(f"{ind}a0 = a0 ^ {rc}")
-
-
 def gen_sponge_source(rate: int, outlen: int) -> str:
     nw = rate // 8
-    assert rate % 8 == 0 and outlen % 8 == 0
-    assert outlen <= 16 * rate, "too many squeeze blocks"
+    if rate % 8 or outlen % 8:
+        raise ValueError(f"rate and outlen must be multiples of 8, got {rate} and {outlen}")
+    if outlen > 16 * rate:
+        raise ValueError(f"outlen {outlen} needs more than 16 squeeze blocks (rate {rate})")
 
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
     # NB / ROW are runtime arguments: the block count no longer has to be
@@ -180,15 +155,7 @@ def get_sponge(rate: int, outlen: int):
     key = (rate, outlen)
     if key in _CACHE:
         return _CACHE[key]
-    src = gen_sponge_source(rate, outlen)
-    tag = hashlib.sha256(src.encode()).hexdigest()[:16]
-    path = Path(tempfile.gettempdir()) / f"_mlkem_sponge_{tag}.py"
-    if not path.exists():
-        path.write_text(src)
-    name = f"_mlkem_sponge_{tag}"
-    spec = importlib.util.spec_from_file_location(name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = compile_generated(gen_sponge_source(rate, outlen), "sponge")
     _CACHE[key] = _SpongeLauncher(mod.sponge_kernel)
     return _CACHE[key]
 
@@ -248,9 +215,14 @@ def sponge_padded(padded: torch.Tensor, rate: int, outlen: int, warps: int = WAR
     nblocks = tot // rate
     if nblocks * rate != tot:
         raise ValueError(f"padded length {tot} is not a multiple of rate {rate}")
+    if outlen <= 0:
+        raise ValueError("outlen must be positive")
+    # The kernel squeezes in 64-bit words; SHA3-224's 28-byte digest needs one word
+    # more and a byte slice (an XOF stream makes the extra bytes harmless).
+    words = -(-outlen // 8)
     x = padded.contiguous().view(torch.int64)
-    out = torch.empty((n, outlen // 8), dtype=torch.int64, device=padded.device)
-    kern = get_sponge(rate, outlen)
+    out = torch.empty((n, words), dtype=torch.int64, device=padded.device)
+    kern = get_sponge(rate, words * 8)
     grid = (max(1, -(-n // BLOCK)),)
     kern[grid](
         x,
@@ -258,11 +230,12 @@ def sponge_padded(padded: torch.Tensor, rate: int, outlen: int, warps: int = WAR
         n,
         nblocks,
         nblocks * rate // 8,
-        OUTW=outlen // 8,
+        OUTW=words,
         BLOCK=BLOCK,
         num_warps=warps,
     )
-    return out.view(torch.uint8).view(n, outlen)
+    full = out.view(torch.uint8).view(n, words * 8)
+    return full if words * 8 == outlen else full[:, :outlen]
 
 
 # ---------------- named hash functions ----------------
@@ -295,19 +268,35 @@ class HashFn:
         return h.digest(n) if self.outlen is None else h.digest()
 
     def hash_torch(self, msgs: torch.Tensor, outlen: int | None = None) -> torch.Tensor:
-        """[n, L] uint8 -> [n, outlen] uint8, on device (pads internally)."""
+        """[n, L] uint8 -> [n, outlen] uint8, on device (pads internally).
+
+        A 1-D input is one message and returns a 1-D digest.
+        """
         n = outlen if outlen is not None else self.outlen
         if n is None:
             raise ValueError(f"{self.name} is an XOF: pass outlen")
-        return sponge_padded(pad_torch(msgs, self.rate, self.domain), self.rate, n)
+        squeeze = msgs.dim() == 1
+        if squeeze:
+            msgs = msgs[None, :]
+        out = sponge_padded(pad_torch(msgs, self.rate, self.domain), self.rate, n)
+        return out[0] if squeeze else out
+
+    def hash(self, data: bytes | bytearray | memoryview) -> bytes:
+        """Host-side digest of one message (convenience alias for `digest_bytes`)."""
+        return self.digest_bytes(bytes(data))
 
 
+SHA3_224 = HashFn("SHA3-224", 144, DOMAIN_SHA3, 28, "sha3_224")
 SHA3_256 = HashFn("SHA3-256", 136, DOMAIN_SHA3, 32, "sha3_256")
+SHA3_384 = HashFn("SHA3-384", 104, DOMAIN_SHA3, 48, "sha3_384")
 SHA3_512 = HashFn("SHA3-512", 72, DOMAIN_SHA3, 64, "sha3_512")
 SHAKE128 = HashFn("SHAKE128", 168, DOMAIN_SHAKE, None, "shake_128")
 SHAKE256 = HashFn("SHAKE256", 136, DOMAIN_SHAKE, None, "shake_256")
 
-HASHES = {h.name: h for h in (SHA3_256, SHA3_512, SHAKE128, SHAKE256)}
+HASHES = {
+    h.name: h
+    for h in (SHA3_224, SHA3_256, SHA3_384, SHA3_512, SHAKE128, SHAKE256)
+}
 
 
 def hash_np_batch(
@@ -325,9 +314,10 @@ def hash_np_batch(
         raise ValueError(f"{hf.name} is an XOF: pass outlen")
     padded = pad_batch(msgs, hf.rate, hf.domain)
     dev = resolve_device(device)
+    words = -(-n // 8)
     x = torch.from_numpy(padded.copy()).view(torch.int64).to(dev)
-    out = torch.empty((padded.shape[0], n // 8), dtype=torch.int64, device=dev)
-    kern = get_sponge(hf.rate, n)
+    out = torch.empty((padded.shape[0], words), dtype=torch.int64, device=dev)
+    kern = get_sponge(hf.rate, words * 8)
     grid = (max(1, -(-padded.shape[0] // BLOCK)),)
     kern[grid](
         x,
@@ -335,11 +325,12 @@ def hash_np_batch(
         padded.shape[0],
         padded.shape[1] // hf.rate,
         padded.shape[1] // 8,
-        OUTW=n // 8,
+        OUTW=words,
         BLOCK=BLOCK,
         num_warps=WARPS,
     )
-    return out.cpu().numpy().view(np.uint8).reshape(padded.shape[0], n)
+    full = out.cpu().numpy().view(np.uint8).reshape(padded.shape[0], words * 8)
+    return full if words * 8 == n else full[:, :n]
 
 
 __all__ = [
@@ -349,7 +340,9 @@ __all__ = [
     "DOMAIN_SHA3",
     "DOMAIN_SHAKE",
     "HASHES",
+    "SHA3_224",
     "SHA3_256",
+    "SHA3_384",
     "SHA3_512",
     "SHAKE128",
     "SHAKE256",

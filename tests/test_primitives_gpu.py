@@ -125,3 +125,19 @@ def test_ntt_row_blocking_is_exact(br):
     x = np.random.default_rng(5).integers(0, DILITHIUM.q, (11, 256), dtype=np.int64)
     got = ntt_torch(_np_to_dev(x.astype(np.int32)), DILITHIUM, br=br).cpu().numpy()
     assert np.array_equal(got.astype(np.int64), ntt_np(x, DILITHIUM))
+
+
+def test_keccak_f_kernel_matches_reference():
+    """The standalone permutation is a real entry point, not just a constants module."""
+    from triton_crypto.primitives.keccak import get_kernel, keccak_f_ref
+
+    n = 5
+    rng = np.random.default_rng(11)
+    states = rng.integers(0, 2**64, (n, 25), dtype=np.uint64)
+    x = torch.from_numpy(states.T.copy().view(np.int64)).to(DEV)  # [25, n] bit patterns
+    out = torch.empty((25, n), dtype=torch.int64, device=DEV)
+    get_kernel()[(1,)](x, out, n, BLOCK=32)
+    got = out.cpu().numpy().view(np.uint64)  # [25, n]
+    for i in range(n):
+        want = keccak_f_ref(states[i])
+        assert np.array_equal(got[:, i], want), i
