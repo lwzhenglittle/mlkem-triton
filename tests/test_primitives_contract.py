@@ -241,8 +241,16 @@ def test_every_exported_primitive_is_in_the_doc():
         for alias in node.names
     }
     assert len(exported) > 50, "the export scan is wrong, not the tree"
+    # The first version of this test asked "does the name appear anywhere in the document", and
+    # nine exports that were only in the narrative sections passed while the summary table was
+    # missing them. Ask about the table instead.
+    table_start = doc.index("## The exported surface")
+    table = doc[table_start : doc.index("## Primitives", table_start)]
     # `annotations` is a `__future__` feature object that `from __future__ import annotations`
     # leaves bound in the namespace; it is genuinely reachable, so the doc names it explicitly
     # rather than the scan special-casing it.
-    missing = sorted(name for name in exported if name not in doc)
-    assert not missing, f"exported from primitives but absent from docs/kernels.md: {missing}"
+    missing = sorted(name for name in exported if name not in table)
+    assert not missing, (
+        f"exported from primitives but absent from the exported-surface table in "
+        f"docs/kernels.md: {missing}"
+    )
