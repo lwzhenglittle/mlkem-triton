@@ -129,7 +129,8 @@ DILITHIUM.q, DILITHIUM.zeta, DILITHIUM.layers, DILITHIUM.wide  # (8380417, 1753,
 
 from triton_crypto.primitives import chacha20_keystream, SHA3_256, hash_np_batch
 
-ks = chacha20_keystream(key, nonce, nbytes)  # [B, nbytes] uint8, RFC 8439
+ks = chacha20_keystream(keys, nonces, nbytes)  # [B, nbytes] uint8, RFC 8439
+# keys: 32 bytes or [B, 32]; nonces: 12 bytes or [B, 12]; a batch of 1 broadcasts
 digests = hash_np_batch(messages, SHA3_256)  # [B, 32] uint8
 ```
 

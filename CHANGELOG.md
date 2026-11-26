@@ -110,6 +110,19 @@ Two lessons, both already in the docs and both worth repeating: a ratio is only 
 of its sides, and a benchmark harness that cannot detect a degraded *baseline* will confidently
 publish the wrong winner.
 
+### The README's code blocks as executable claims
+
+Every snippet in `README.md` is illustrative -- it uses `dk`, `pk`, `messages` that the reader
+supplies -- but the *shape* of each call is a promise, and nothing was checking it.
+`tests/test_docs_api.py` now pins them with `inspect.signature` (cheap, no keys needed) plus the
+two constant tuples the README quotes by value: `KYBER (3329, 17, 7, False)`,
+`DILITHIUM (8380417, 1753, 8, True)`, `BABYBEAR_NTT.q`.
+
+It immediately found one: the README showed `chacha20_keystream(key, nonce, nbytes)` while the API
+is batched -- `(keys, nonces, nbytes, counters=0)` -- so a reader following the snippet would have
+been surprised by a plural argument name and by the fact that one key broadcasts against many
+nonces. The snippet is corrected and the test says why the plural matters.
+
 ### A documented command that did not run
 
 `docs/benchmarks.md` §18 documents `bench_primitive.py --only aes128-ctr --batch 4096,65536` to
