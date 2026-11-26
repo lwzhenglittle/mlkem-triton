@@ -392,6 +392,20 @@ class LargeNTT:
         x = torch.as_tensor(np.asarray(a, dtype=np.int64) % self.q, dtype=torch.int32, device=dev)
         return self.forward_tensor_torch(x, dev)
 
+    def _check_tensor(self, x, what: str) -> None:
+        """Refuse a tensor this transform cannot handle, before a kernel reads off the end.
+
+        The stage kernel loads `x[base + j]` and `x[base + half + j]` with no mask past the
+        buffer, so a wrong length is a silent out-of-bounds read rather than a crash. Measured
+        before this check existed: `mul_torch(zeros(64), zeros(32))` returned a result.
+        """
+        import torch
+
+        if not isinstance(x, torch.Tensor):
+            raise TypeError(f"{what} must be a torch tensor, got {type(x).__name__}")
+        if x.dim() != 1 or x.numel() != self.n:
+            raise ValueError(f"{what} must be 1-D of length {self.n}, got shape {tuple(x.shape)}")
+
     def forward_tensor_torch(self, x, dev):
         """Device tensor in, device tensor out, tables cached: the timing entry point.
 
@@ -401,6 +415,7 @@ class LargeNTT:
         two radix-2 passes each touch one adjacent pair. It is kept because the arithmetic is
         verified against the radix-2 result and another device may not have that problem.
         """
+        self._check_tensor(x, "input")
         if self.radix == 4:
             x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
             return self._run4(x, dev)
@@ -416,6 +431,7 @@ class LargeNTT:
         return self.inverse_tensor_torch(t, dev)
 
     def inverse_tensor_torch(self, t, dev):
+        self._check_tensor(t, "input")
         return self._run_cached(t, "inv", dev)
 
     # ------------------------------------------------------------------ products
@@ -431,6 +447,10 @@ class LargeNTT:
         from ... import devices as _devices
 
         dev = _devices.resolve_device(device)
+        for operand, name in ((a, "a"), (b, "b")):
+            arr = np.asarray(operand, dtype=np.int64)
+            if arr.ndim != 1 or arr.size != self.n:
+                raise ValueError(f"{name} must be 1-D of length {self.n}, got {arr.shape}")
         fa = self.forward_tensor_torch(
             torch.as_tensor(np.asarray(a, dtype=np.int64) % self.q, dtype=torch.int32, device=dev),
             dev,

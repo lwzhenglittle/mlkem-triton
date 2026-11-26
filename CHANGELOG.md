@@ -197,6 +197,17 @@ bounded by 2047, so the narrowing is exact by construction. Half the bytes per n
 another 9% -- 16.8 -> **15.6 µs per signature**, 69.9 -> 63.9 ms per 4096-signature batch,
 bit-identical output. End to end: 20.8 -> **18.9 µs**.
 
+### A wrong-shaped input was an out-of-bounds read, not an error
+
+`LargeNTT.mul_torch(zeros(64), zeros(32))` returned a result: the stage kernel loads
+`x[base + half + j]` with no mask past the buffer, so a mismatch read whatever followed the tensor
+and computed with it. Same for a 2-D input. Both now raise, and the message names the operand
+(`b must be 1-D of length 64, got (32,)`); `forward_tensor_torch`/`inverse_tensor_torch` do the
+same, and a non-tensor gets a `TypeError` rather than an attribute error three layers down.
+
+Found by probing the API as a user would, which is the only way this class of bug surfaces: every
+test passed, because every test passes the right shape.
+
 ### The CPU-only contract, checked by pretending
 
 `docs/support.md` claims a machine without an accelerator "can still smoke-test the maths and

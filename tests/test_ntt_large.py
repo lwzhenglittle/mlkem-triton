@@ -132,6 +132,29 @@ def test_degenerate_polynomials(logn):
     assert not t.mul_torch(a, np.zeros(n, dtype=np.int64)).cpu().numpy().any()
 
 
+def test_rejects_wrong_shapes_before_touching_the_device():
+    """A wrong length used to be a silent out-of-bounds read, not an error.
+
+    The stage kernel loads `x[base + half + j]` without a mask past the buffer, so
+    `mul_torch(zeros(64), zeros(32))` returned a result before these checks existed. Every entry
+    point now refuses first, and names the operand.
+    """
+    import torch
+
+    t = LargeNTT(64, Q)
+    dev = torch.device("xpu")
+    with pytest.raises(ValueError, match=r"b must be 1-D of length 64"):
+        t.mul_torch(np.zeros(64, dtype=np.int64), np.zeros(32, dtype=np.int64))
+    with pytest.raises(ValueError, match=r"a must be 1-D of length 64"):
+        t.mul_torch(np.zeros((2, 64), dtype=np.int64), np.zeros(64, dtype=np.int64))
+    with pytest.raises(ValueError, match=r"input must be 1-D of length 64"):
+        t.forward_tensor_torch(torch.zeros(32, dtype=torch.int32, device=dev), dev)
+    with pytest.raises(ValueError, match=r"input must be 1-D of length 64"):
+        t.inverse_tensor_torch(torch.zeros((2, 64), dtype=torch.int32, device=dev), dev)
+    with pytest.raises(TypeError, match="must be a torch tensor"):
+        t.forward_tensor_torch(np.zeros(64, dtype=np.int64), dev)
+
+
 def test_rejects_non_power_of_two():
     with pytest.raises(ValueError, match="power of two"):
         LargeNTT(1000, Q)
