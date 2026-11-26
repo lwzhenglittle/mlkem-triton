@@ -94,6 +94,17 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### The Poseidon2 vectors grew from 9 to 64
+
+The Plonky3 `kat` mode emitted nine cases: the 0..15 ramp, seven offsets chosen to stress the
+reduction paths, and all-`q-1`. Nine vectors can all pass while a bug sits in the middle of the
+field -- they exercise the edges by design. Fifty-five deterministic pseudo-random states (an
+LCG in the generator, so the JSON stays reproducible) now sit alongside them, and
+`tests/test_poseidon2.py` checks every one. Regenerate with
+`cargo run --release -- kat > data/vectors/poseidon2/bb16.json`; the README in that directory
+also records the `RUSTFLAGS="-C target-cpu=native"` requirement, without which the "packed" CPU
+rival silently measures the scalar path.
+
 ### Two more independent oracles: Poly1305 and AES against OpenSSL
 
 The known-answer vectors each primitive already had were one point each. Two new test files

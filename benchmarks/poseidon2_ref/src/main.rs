@@ -35,6 +35,17 @@ fn vectors() -> Vec<[u32; 16]> {
     }
     // 3. all-max: the largest canonical state
     cases.push([Q - 1; 16]);
+    // 4. deterministic pseudo-random states: the structured cases above exercise the edges,
+    //    these exercise the middle (an LCG so the JSON is reproducible without shipping data)
+    let mut s: u64 = 0x2545_F491_4F6C_DD1D;
+    for _ in 0..55 {
+        let mut st = [0u32; 16];
+        for v in st.iter_mut() {
+            s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            *v = ((s >> 33) % Q as u64) as u32;
+        }
+        cases.push(st);
+    }
     cases
 }
 
