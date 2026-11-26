@@ -689,7 +689,13 @@ does one gather per coefficient instead of four gathers and seven arithmetic ops
 
 That last step is the general lesson of this kernel: at a batch of 4096 a numpy call costs ~7 µs
 whether it touches 1 element or 4096, so what a scan like this pays for is the **number of calls**,
-not the work inside them. It is still 81% of the end-to-end cost, and still the right
+not the work inside them.
+
+**And the obvious next idea does not follow from it.** Decoding two coefficients per step would
+halve the 512 steps, but the second coefficient's position depends on the first's length, so it
+costs the same ~13 calls as the first -- 256 steps of ~26 calls is the same 6700 calls. The only
+way down is fewer calls *per coefficient*, and a prefix code gives no way to batch across
+coefficients: that is exactly the property that made the device decoder 35x slower (`§16`). It is still 81% of the end-to-end cost, and still the right
 place for the next attempt -- on the host, where a vectorised scan beats the device's per-coefficient
 gather by 35x.
 
