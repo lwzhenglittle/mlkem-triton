@@ -308,9 +308,16 @@ the GPU verifier consume exactly the same signatures.
 | ML-DSA-87 | 8192 | 31.010 ms | 3.78 | 48.123 ms | 5.87 | 136.1 µs | 20.53 µs | 5.4× |
 
 `liboqs 16P` is the aggregate over 16 concurrent **processes** (the same convention as §8 for
-ML-KEM; threads in one process do not scale on this hybrid 4P+8E+4LP part). Two caveats, both
-inherited from §1: clocks drift between sessions, so only same-process ratios are meaningful;
-and the CPU figures were taken while this machine was running builds and tests, which biases
+> **The `dev vs 16P` column in this table is too generous, and it is known why.** Those CPU
+> figures were taken while the machine was running builds and tests, i.e. in a low-clock
+> window: ML-DSA-44 one thread reads 58.7 us here and 15.6-16.6 us in an idle window
+> (`benchmarks/cpu_baseline.json`). Re-paired in one window (`benchmarks/snapshot.py`), ML-DSA-44
+> verification is **1.0-1.8x** the 16-process CPU, not 5.6x. The `vs 1T` claim everywhere else
+> in these docs is unaffected in direction but also inflated by up to ~3x.
+>
+> ML-KEM; threads in one process do not scale on this hybrid 4P+8E+4LP part). Two caveats, both
+> inherited from §1: clocks drift between sessions, so only same-process ratios are meaningful;
+> and the CPU figures were taken while this machine was running builds and tests, which biases
 them *upward* — the ratios should be read as "≈5×", not as four significant figures.
 
 The end-to-end column is 1.6–1.8× the device-only column: one H2D of `B × sig_size`
