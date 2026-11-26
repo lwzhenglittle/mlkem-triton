@@ -1,0 +1,13 @@
+[package]
+name = "blake3-ref"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# The reference BLAKE3 (the official Rust implementation). Two jobs the Triton kernel cannot do
+# for itself: emit known-answer vectors, and be the CPU rival in the benchmark table.
+[dependencies]
+blake3 = "1"
+
+[profile.release]
+opt-level = 3
