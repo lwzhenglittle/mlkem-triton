@@ -434,10 +434,12 @@ B=1024). What got it there:
 - signatures assembled for the whole accepted batch in numpy instead of per-row `bytes.join`;
 - `pointwise_kernel` broadcasts `ĉ` inside the kernel: the host version repeated both operands into
   full `[n·M, 256]` arrays, which at 4096 rows was ~150 MB of memory traffic per attempt;
-- **mixed-length messages in one batch**: μ is `SHAKE256(H(pk) ‖ M′, 64)` and a shorter `M′` simply
-  has its pad10*1 earlier inside the last block, so every row pads to the same block count and is
-  absorbed in one launch — the length-grouping penalty (1.4×, and any batch with messages of
-  differing sizes fell into it) is gone.
+- **mixed-length messages in one batch**, grouped by padded block count: μ is
+  `SHAKE256(H(pk) ‖ M′, 64)` and a shorter `M′` has its pad10*1 earlier inside the last block. The
+  sponge absorbs a launch-wide block count, so rows whose padding spans a different number of blocks
+  take a second launch; grouping by padded length keeps the common case at one launch. (The 0.7.1
+  version instead padded every row to the longest length, which absorbed extra all-zero blocks and
+  produced a wrong μ for the short rows; fixed in 0.7.2.)
 
 **Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
 97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and

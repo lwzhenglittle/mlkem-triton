@@ -14,17 +14,18 @@ Conventions used below:
 - `cdiv` is `triton.cdiv`; `B` is the batch dimension throughout.
 - "grid" is written the way the launcher writes it, so it can be copied.
 
-Three kernels are emitted as **source strings** and compiled at import time
-(`primitives/keccak.py`, `primitives/sponge.py`, `kernels/padcat.py`). Triton needs a real file to
-import, and these three are specialised per shape (round count, `rate`/`outlen`, message segment
-lengths), so generating their source is cheaper than carrying a `tl.static_range` over every
-variant.
+Several kernels are emitted as **source strings** and compiled at import time
+(`primitives/keccak.py`, `primitives/sponge.py`, `primitives/sha2.py`, `kernels/padcat.py`,
+`slhdsa/kernels.py`, `lms/kernels.py`). Triton needs a real file to import, and these are
+specialised per shape (round count, `rate`/`outlen`, message segment lengths, SHA-2 word size),
+so generating their source is cheaper than carrying a `tl.static_range` over every variant.
+`_codegen.compile_generated` owns the write/import step (per-user 0700 directory, 0600 files).
 
 ## Summary
 
 | kernel | file | layer | grid | launched by |
 |---|---|---|---|---|
-| `keccak_f_kernel` | `primitives/keccak.py` | primitive | `(cdiv(n, BLOCK),)` | `keccak.py` only (tests, `sponge`) |
+| `keccak_f_kernel` | `primitives/keccak.py` | primitive | `(cdiv(n, BLOCK),)` | direct tests; `sponge` shares the round emitter |
 | `sponge_kernel` | `primitives/sponge.py` | primitive | `(cdiv(n, BLOCK),)` | `sponge_padded`, `get_sponge`, `padcat` users |
 | `ntt_kernel` | `primitives/ntt.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
 | `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
@@ -100,7 +101,7 @@ Negacyclic NTT over `Z_q[X]/(X^N+1)`, forward or inverse, standard or NTT domain
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
 | `X` | `[P, N]` | `int32` (`int64` when `WIDE`) | input coefficients, rows independent |
-| `ZT` | `[LAYERS, N/2]` | same | per-layer twiddle factors, pre-multiplied by `SCALE` on the inverse side |
+| `ZT` | `[LAYERS * N]` | same | per-layer twiddle factors (layer `s` at `s*N`), pre-multiplied by `SCALE` on the inverse side |
 | `OUT` | `[P, N]` | same | transformed rows |
 
 `N`, `Q`, `SCALE`, `LOG_N`, `LAYERS`, `BR`, `INVERSE`, `WIDE`, `MONT`, `QINV` are all `constexpr`,
@@ -114,10 +115,11 @@ Montgomery form and the reduction is `t = (a*b * QINV) mod 2³²; r = (a*b - t*Q
 bit-identical to the reference and 1.92× faster than the naive int64 modulo. `MONT=True` switches
 the same reduction on for a narrow `q` (1.66× on ML-KEM's q = 3329).
 
-### `sha_kernel(HIN, KT, MSG, OUT, rows, NW, NOUT, BLOCK)` — `primitives/sha2.py`
+### `sha_kernel(HIN, KT, MSG, OUT, rows, NB, NW, NOUT, BLOCK)` — `primitives/sha2.py`
 
-SHA-256 / SHA-512 compression, absorbing `nblocks` fixed-size blocks from a given input state.
-Generated per `(bits, nblocks)`; the round loop is rolled (one body, `KT` from a tensor) so the
+SHA-256 / SHA-512 compression, absorbing `NB` fixed-size blocks from a given input state.
+Generated once per `bits`; `NB` is a runtime argument, so a new message length no longer compiles a
+new kernel. The round loop is rolled (one body, `KT` from a tensor) so the
 source stays short.
 
 | tensor | shape | dtype | meaning |
@@ -198,6 +200,9 @@ rows plus a per-row suffix. This is the ML-KEM rejection-sampling pattern (`rho 
 `A` is the 32-byte `rho` and the suffix is two bytes of indices.
 
 ## ML-KEM (FIPS 203)
+
+These kernels hard-code `q = 3329` and the ML-KEM block sizes; for another negacyclic ring use
+`primitives/ntt.py`, which is parameterised by `(q, N, ζ, layers)`.
 
 ### `encaps_kernel(W, Y, E, OUT, M, K, N, PIVOT, DU, DV, BM, BN, BK, GM, MASK_N)` — `kernels/encaps.py`
 
@@ -295,11 +300,13 @@ CBD for `eta=2` over `[n, 128]` bytes; replaces six chained PyTorch ops.
 (`D ∈ {18, 20}`), so unpacking is a subtract from `γ1`; a field never straddles more than three
 bytes, so three loads per field suffice. One program per (signature, polynomial).
 
-### `mac_kernel(Z, A, CH, T1, OUT, B, K, L, N, Q, BN)` — `mldsa/kernels.py`
+### `mac_kernel(Z, A, CH, T1, OUT, B, K, L, N, Q, BN, ZERO_CH)` — `mldsa/kernels.py`
 
 `ŵ_i = Σ_j Â[i][j]·ẑ[j] − ĉ·t̂1_i` (FIPS 204 Alg. 33/11). `Â` and `t̂1` are resident (they are part
 of the public key), so only `ẑ` and the output stream through. Products reach `q² ≈ 7·10¹³` and are
 computed in `int64`; `BN` batch rows per program, one program per `(row block, i)`.
+`ZERO_CH=True` skips the `ĉ·t̂1` load entirely (signing's first pass has `ĉ = 0`); passing a
+one-row tensor with `expand()` instead made the kernel read past that row.
 
 ### `sample_in_ball_kernel(BUF, OUT, N, TAU, RATE)` — `mldsa/kernels.py`
 

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  test:
+    # torch-xpu / triton-xpu and the Arc GPU are not available on hosted runners.
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pytest -q
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --wheel --outdir dist
+      - name: wheel contains every subpackage
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = set(zipfile.ZipFile(wheel).namelist())
+          for required in (
+              "triton_crypto/lms/__init__.py",
+              "triton_crypto/mldsa/__init__.py",
+              "triton_crypto/slhdsa/__init__.py",
+              "triton_crypto/primitives/__init__.py",
+          ):
+              assert required in names, f"{required} missing from {wheel}"
+          print("wheel layout OK")
+          PY

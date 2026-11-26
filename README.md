@@ -51,7 +51,7 @@ cts, keys = enc.encapsulate(msgs)  # 32 random bytes each -> [B, 1088] / [B, 32]
 NVIDIA cuPQC. The other two are 1.61× and 2.27× *faster* than cuPQC on the same card. See
 [docs/compare.md](docs/compare.md).
 
-ML-DSA, verification only (one long-lived public key, batched signatures):
+ML-DSA, batch verification and signing:
 
 ```python
 from triton_crypto.mldsa import Verifier
@@ -59,8 +59,7 @@ from triton_crypto.mldsa import Verifier
 ok = Verifier("ML-DSA-65", pk).verify(messages, signatures)  # -> [B] bool
 ```
 
-The pre-0.3 import name `mlkem_triton` still works — a shim maps it onto this package — and will
-be removed in 0.4.0.
+The pre-0.3 import name `mlkem_triton` still works — a shim maps it onto this package.
 
 ---
 
@@ -84,7 +83,7 @@ kernels. Full argument, fusion catalogue and Triton pitfalls: [docs/design.md](d
 **Not on PyPI yet** — the distribution name `triton-crypto-kernels` is unregistered, so
 `pip install triton-crypto-kernels` fails with "No matching distribution found" until the first
 release. Install from GitHub meanwhile (the GitHub repository itself is still called
-`mlkem-triton` and will be renamed together with the 0.3.0 tag):
+`mlkem-triton` and will be renamed at the next release):
 
 ```bash
 pip install "triton-crypto-kernels @ git+https://github.com/lwzhenglittle/mlkem-triton.git"
@@ -236,8 +235,9 @@ Throughput (Arc B390), against liboqs on one CPU thread (≈ 90 / 131 / 169 µs 
 **Signing is 2.3× / 2.7× / 3.2× faster than one CPU core at B=1024** (liboqs: 97 / 152 / 186 µs
 for 44 / 65 / 87) and reaches parity at B ≈ 150. Three things got it there: a fused acceptance-test kernel, *speculation* (a row's k-th
 attempt depends only on κ + k·ℓ, so a pass evaluates 8 candidates and keeps the first that accepts —
-the signature is bit-identical), and signing messages of **mixed lengths in one batch** (each row
-pads its own block, so no grouping). Against 16 CPU processes the device is behind at small batches
+the signature is bit-identical), and signing messages of **mixed lengths in one batch** when their
+padding lands in the same number of SHAKE blocks (rows that cross a block boundary take a second
+launch; the per-block-count grouping is what keeps μ byte-exact). Against 16 CPU processes the device is behind at small batches
 and roughly level at B=1024. Signing is the one operation in this repository the GPU does not accelerate — the reason is
 in the shape of the work: a signature is ~4.5 sequential rejection attempts, each a small
 `k·l`-sized batch, so the device pays launch latency where the CPU pays arithmetic. Verification
@@ -371,7 +371,7 @@ scheme is calling it.
 
 | module | what it is | consumers |
 |---|---|---|
-| `primitives.keccak` | Keccak-f[1600]: generated Triton kernel (one lane per thread, 24 rolled rounds) + a numpy reference | both |
+| `primitives.keccak` | Keccak-f[1600]: generated Triton kernel (one lane per thread, 24 unrolled rounds), the round emitter shared with the sponge, and a numpy reference | tests, sponge (emitter) |
 | `primitives.sponge` | pad10\*1, multi-block absorb, multi-block squeeze, and the named `SHA3-256` / `SHA3-512` / `SHAKE128` / `SHAKE256` instances | both |
 | `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`, forward **and** inverse | both |
 
