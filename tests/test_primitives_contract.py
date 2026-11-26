@@ -337,3 +337,41 @@ def test_bench_cpu_refuses_to_shrink_the_baseline():
     assert result.returncode == 2, result.stdout + result.stderr
     assert "--merge" in result.stderr, result.stderr
     assert baseline.read_text() == before, "the baseline changed despite the refusal"
+
+
+def test_no_cpu_baseline_row_claims_superlinear_scaling():
+    """`16P / 1T` cannot exceed the number of processes: sixteen processes on sixteen cores.
+
+    Three rivals in the committed baseline do exceed it (BLAKE3 19.2x, Falcon-512 18.1x,
+    Falcon-padded 19.2x), which proves those sixteen-process figures over-count -- `bench_cpu.py`
+    sums per-child minima, and a child that finishes early lets the others' later reps run cheaper.
+    They are allow-listed here rather than hidden, so a *new* violation fails: the fix is to
+    re-measure with `benchmarks/probe_16p_method.py`, which invalidates the snapshots' 16P columns
+    together.
+    """
+    import json
+
+    root = Path(__file__).resolve().parent.parent
+    baseline = json.loads((root / "benchmarks" / "cpu_baseline.json").read_text())
+    nproc = baseline["meta"]["nproc"]
+
+    known_upper_bounds = {
+        "blake3",
+        "falcon-512-verify",
+        "falcon-padded-512-verify",
+    }
+    offenders = {
+        name: r["procs16"] / r["one_thread"]
+        for name, r in baseline["rivals"].items()
+        if r["one_thread"] and r["procs16"] / r["one_thread"] > nproc
+    }
+    unexpected = {k: v for k, v in offenders.items() if k not in known_upper_bounds}
+    assert not unexpected, (
+        f"these rivals scale above {nproc} processes, which is physically impossible: "
+        f"{ {k: round(v, 1) for k, v in unexpected.items()} }"
+    )
+    # and the known ones must still be the ones we documented
+    assert set(offenders) == known_upper_bounds, (
+        f"the allow-list is stale: measured {sorted(offenders)}, documented "
+        f"{sorted(known_upper_bounds)}"
+    )
