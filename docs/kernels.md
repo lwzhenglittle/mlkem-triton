@@ -27,8 +27,10 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 |---|---|---|---|---|
 | `keccak_f_kernel` | `primitives/keccak.py` | primitive | `(cdiv(n, BLOCK),)` | direct tests; `sponge` shares the round emitter |
 | `sponge_kernel` | `primitives/sponge.py` | primitive | `(cdiv(n, BLOCK),)` | `sponge_padded`, `get_sponge`, `padcat` users |
-| `ntt_kernel` | `primitives/ntt.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
+| `ntt_kernel` | `primitives/ntt/kernel.py` | primitive | `(cdiv(P, BR),)` | `ntt_torch`, `intt_torch` |
 | `sha_kernel` | `primitives/sha2.py` | primitive | `(cdiv(rows, BLOCK),)` | `sha2.sha_absorb` |
+| `chacha20_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(B, 64), NBLK)` | `chacha20_keystream*` |
+| `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
 | `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
@@ -94,7 +96,7 @@ state.
 See `docs/benchmarks.md`; this is the single number that decides whether a hash-based scheme is
 worth putting on the device.
 
-### `ntt_kernel(X, OUT, ZT, P, N, Q, SCALE, LOG_N, LAYERS, BR, INVERSE, WIDE, MONT, QINV)` — `primitives/ntt.py`
+### `ntt_kernel(X, OUT, ZT, P, N, Q, SCALE, LOG_N, LAYERS, BR, INVERSE, WIDE, MONT, QINV)` — `primitives/ntt/kernel.py`
 
 Negacyclic NTT over `Z_q[X]/(X^N+1)`, forward or inverse, standard or NTT domain.
 
@@ -111,9 +113,12 @@ butterfly partner is `idx ^ L` (one `tl.gather`, not a shuffle pattern), and twi
 by `(iteration, row)`.
 
 `WIDE=True` is the ML-DSA path (q ≈ 2²³, products do not fit int32): twiddles are stored in
-Montgomery form and the reduction is `t = (a*b * QINV) mod 2³²; r = (a*b - t*Q) >> 32`, which is
-bit-identical to the reference and 1.92× faster than the naive int64 modulo. `MONT=True` switches
-the same reduction on for a narrow `q` (1.66× on ML-KEM's q = 3329).
+Montgomery form and the reduction is `primitives.fields.mont_mul` (`t = (a*b * QINV) mod 2³²;
+r = (a*b - t*Q) >> 32`, canonicalised to `[0, q)`), which is bit-identical to the reference and
+1.92× faster than the naive int64 modulo. `MONT=True` switches the same reduction on for a narrow
+`q` (1.66× on ML-KEM's q = 3329). The twiddle tables are built in `primitives/ntt/domain.py`;
+`NTTDomain` is generic in `(q, N, ζ, layers)`, so `BABYBEAR_NTT` (q = 2³¹−2²⁷+1) reuses the same
+kernel with no new code.
 
 ### `sha_kernel(HIN, KT, MSG, OUT, rows, NB, NW, NOUT, BLOCK)` — `primitives/sha2.py`
 
@@ -139,6 +144,27 @@ alias) is the same idea specialised to SLH-DSA's shape: one block whose first 22
 compressed ADRS, built in registers, with the input value copied through for rows whose WOTS chain
 has finished. Both are used by the SHA-2 parameter sets (`slhdsa/verify.py`), and both are checked
 against numpy for every `(n, dn)` the scheme can produce (`tests/test_sha2.py`).
+
+### `chacha20_kernel(KEY, NON, CTR, OUT, B, NBLK, BR)` — `primitives/chacha20.py`
+
+ChaCha20 keystream (RFC 8439, 96-bit nonce): one program is `BR` streams × one 64-byte block.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `KEY` | `[B, 8]` | `int32` | key words, little-endian |
+| `NON` | `[B, 3]` | `int32` | nonce words, little-endian |
+| `CTR` | `[B]` | `int32` | first block counter of each stream |
+| `OUT` | `[B, NBLK*16]` | `int32` | keystream words (little-endian in memory) |
+
+The state is sixteen scalars per lane, not a `[BR, 16]` tile: a tile cannot be sliced by a
+constant index, and the quarter round needs `x0, x4, x8, x12` as separate vectors. Output is
+serialised as four 3-D stores built from `tl.join(tl.join(a, b), tl.join(c, d))` — that lays out
+as `[a, b, c, d]` when the offset uses `2*last_axis + middle_axis`, which `tests/test_chacha20_gpu.py`
+pins.
+
+Rotation is `(x << r) | (x >> (32-r))` on **uint32**. On int32 the right shift is arithmetic and
+the result is silently wrong; LLVM folds the uint32 idiom into a funnel shift (one `shf` on
+NVIDIA, two to three instructions on Xe, where rotate is 2.2× the cost of an add).
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 
@@ -203,7 +229,7 @@ rows plus a per-row suffix. This is the ML-KEM rejection-sampling pattern (`rho 
 ## ML-KEM (FIPS 203)
 
 These kernels hard-code `q = 3329` and the ML-KEM block sizes; for another negacyclic ring use
-`primitives/ntt.py`, which is parameterised by `(q, N, ζ, layers)`.
+`primitives/ntt/`, which is parameterised by `(q, N, ζ, layers)`.
 
 ### `encaps_kernel(W, Y, E, OUT, M, K, N, PIVOT, DU, DV, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/encaps.py`
 
@@ -376,7 +402,9 @@ epilogues readable and are inlined by the compiler. They have no grid and no con
 | `_epi_enc`, `_epi_dec`, `_combine_parts` | `mlkem/kernels/fused_gemm.py` | the two fused kernels' epilogues |
 | `_compress_epi` | `mlkem/kernels/encaps.py` | `encaps_kernel` |
 | `_modq` | `mlkem/kernels/ntt.py` | `pow_mac_kernel` |
-| `_mod`, `_norm` | `primitives/ntt.py` | `ntt_kernel` |
+| `_mod`, `_norm` | `primitives/ntt/kernel.py` | `ntt_kernel` |
+| `mont_mul` | `primitives/fields.py` | `ntt_kernel`, every future modular primitive |
+| `_rotl`, `_qr` | `primitives/chacha20.py` | `chacha20_kernel` |
 | `_use_hint` | `mldsa/kernels.py` | `w1_pack_kernel` |
 
 One constraint worth repeating because it has bitten: **a `@triton.jit` helper whose body never

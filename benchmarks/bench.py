@@ -42,6 +42,11 @@ SCRIPTS = {
     "lms": {
         None: "bench_lms_verify.py",
     },
+    # Not a scheme: the throughput of the scheme-agnostic layer itself. It is dispatched from
+    # here anyway so that "one entry point for every measurement" stays true.
+    "primitives": {
+        None: "bench_primitive.py",
+    },
 }
 
 SCHEME_INFO = {
@@ -58,6 +63,11 @@ SCHEME_INFO = {
     "lms": (
         "LMS / HSS (SP 800-208) — signature verification",
         "lms",
+        [],
+    ),
+    "primitives": (
+        "Keccak / sponge / SHA-2 / NTT / ChaCha20 — throughput of the shared layer",
+        "primitives",
         [],
     ),
 }

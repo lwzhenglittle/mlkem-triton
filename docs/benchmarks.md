@@ -495,3 +495,43 @@ and **overlap two half-batches on two streams** so the latency-bound tail of one
 compute-bound main phase of the other. A persistent, grid-synchronised kernel for a whole attempt is
 not expressible in Triton today. Note the ceiling: even a perfect 2× would put small-batch signing at
 ~90 µs, i.e. level with one CPU core, and nowhere near the 16-process aggregate (28 µs/sig).
+
+---
+
+## 15. The primitive layer itself
+
+`python benchmarks/bench_primitive.py --batch 4096 --size 1024` (Arc B390, one process,
+min-of-7, device-only). `copy` is measured first and every GB/s cell is a fraction of it, because
+"GB/s" without a ceiling says nothing.
+
+| primitive | what | device ms | rate | GB/s | % of copy BW |
+|---|---|---:|---:|---:|---:|
+| `copy` | read+write, 256 MiB | 2.46 | 217 GB/s | 217 | 100% |
+| `keccak` | Keccak-f[1600], 2^18 lanes | 1.44 | 183 M perm/s | 73 | 34% |
+| `sha3-256` | 1 KiB messages, 8 blocks | 0.24 | 17.3 M msg/s | 19 | 9% |
+| `sha3-512` | 1 KiB messages, 15 blocks | 0.40 | 10.2 M msg/s | 12 | 5% |
+| `shake128` | 1 KiB → 32 B | 0.21 | 19.8 M msg/s | 24 | 11% |
+| `shake256` | 1 KiB → 32 B | 0.23 | 18.1 M msg/s | 20 | 9% |
+| `sha256` | 1 KiB messages | 0.10 | 43.1 M msg/s | 44 | 20% |
+| `sha512` | 1 KiB messages | 0.18 | 22.5 M msg/s | 23 | 11% |
+| `ntt-mlkem` | q = 3329, 7 layers | 0.26 | 16.0 M poly/s | 33 | 15% |
+| `ntt-mldsa` | q = 8380417, Montgomery | 0.79 | 5.2 M poly/s | 11 | 5% |
+| `ntt-babybear` | q = 2^31−2^27+1, Montgomery | 0.78 | 5.2 M poly/s | 11 | 5% |
+| `chacha20` | RFC 8439, 20 rounds | 0.28 | 14.8 GB/s | 15 | 7% |
+
+Three things worth reading off it:
+
+- **The ALU-bound primitives all land in the 15–45 GB/s band**, i.e. 7–20 % of copy bandwidth:
+  a 20-round ARX cipher, a 24-round permutation and a 7-layer NTT are all far from memory-bound on
+  this device. Raising them means reducing instructions per byte, not moving fewer bytes.
+- **SHA-256 beats SHA-512 per byte** (44 vs 23 GB/s) even though SHA-512 processes 128-byte blocks:
+  twice the rounds per block and 64-bit words on a 32-lane backend.
+- **q = 8380417 costs 4× q = 3329** (5.2 vs 16.0 M poly/s) even with Montgomery: int64 products,
+  and `%` would be a software divide. BabyBear (31 bits, same int64+Montgomery path) pays the same
+  4× — that is the price of a 31-bit modulus on this arithmetic model, not of the modulus itself.
+
+Clock caveat as everywhere else in this document: absolute numbers move 2–4× with the iGPU's
+frequency state. **This table is a high-clock session** (copy 217 GB/s); an earlier session the
+same day measured copy at 110 GB/s, Keccak at 116 M perm/s and ChaCha20 at 13.7 GB/s, with every
+`%copy` cell within a point or two of the values above. Quote the ratios, not the absolute rates —
+the ratios come from one process and one second, the absolutes do not.

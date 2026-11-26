@@ -315,7 +315,7 @@ not re-expanding `Â`. Full numbers in [docs/compare.md](compare.md) §0.2.
 
 Version 0.2 extracted the two pieces of mathematics that both FIPS 203 and FIPS 204 need.
 `kernels/keccak.py` and `kernels/shake.py` became `primitives/keccak.py` and
-`primitives/sponge.py`; the NTT left `kernels/ntt.py` and became `primitives/ntt.py`,
+`primitives/sponge.py`; the NTT left `kernels/ntt.py` and became `primitives/ntt/` (now a package: domains, kernel, reference),
 parameterised by `(q, N, ζ, layers)` instead of hard-coding ML-KEM.
 
 | module | API surface |

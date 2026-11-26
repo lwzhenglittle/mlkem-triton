@@ -6,7 +6,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | notes |
 |---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **813 tests green** |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) |  Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **860 tests green** |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -57,7 +57,9 @@ because on-chip memory is small.
 
 ### Small kernels — `devices.warps(name, default)`
 
-`num_warps` for the sponge, padcat, CBD and packing kernels lives at the top of each module.
+`num_warps` for the sponge, padcat, CBD, packing and ChaCha20 kernels lives at the top of each
+module and can be overridden per kernel with `MLKEM_WARPS="shake=8,chacha=8"`. It is not in
+`devices.__all__`: it is an implementation knob, not part of the public API.
 These **were only swept on Intel Xe3**; the other backends reuse the same values, which is
 defensible because small kernels are not very sensitive to `num_warps`, but there is **no
 CUDA or ROCm tuning data** and this document does not pretend otherwise. A single default plus

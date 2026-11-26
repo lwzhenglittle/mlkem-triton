@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "triton-crypto-kernels"
-version = "0.8.0"
-description = "Portable PQC kernels in pure Triton: ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and LMS/HSS (SP 800-208), built on shared Keccak, sponge and parameterised NTT primitives"
+version = "0.9.0"
+description = "Cryptographic kernels in pure Triton: ML-KEM (FIPS 203), ML-DSA (FIPS 204), SLH-DSA (FIPS 205) and LMS/HSS (SP 800-208), on a shared layer of Keccak/sponge, SHA-2, parameterised NTT, prime-field and ChaCha20 primitives"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }
@@ -24,7 +24,10 @@ keywords = [
     "fips-205",
     "keccak",
     "shake",
+    "chacha20",
+    "symmetric",
     "ntt",
+    "prime-field",
     "triton",
     "gpu",
     "intel",
@@ -91,7 +94,7 @@ ignore = [
 "triton_crypto/mlkem/kernels/*" = ["SIM108", "SIM102"]
 # Same reason in the parameterised NTT kernel: `if MONT: ... else: ...` selects an arithmetic
 # path at compile time.
-"triton_crypto/primitives/ntt.py" = ["SIM108"]
+"triton_crypto/primitives/ntt/kernel.py" = ["SIM108"]
 
 [tool.ruff.format]
 quote-style = "double"

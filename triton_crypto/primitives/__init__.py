@@ -9,26 +9,41 @@ originally written for ML-KEM alone inside the old `triton_crypto.kernels` packa
     primitives.sponge   the sponge around it: pad10*1, multi-block absorb, multi-block
                         squeeze, and the named SHA3/SHAKE instances
     primitives.ntt      negacyclic NTT over Z_q[X]/(X^N+1), parameterised by the modulus
-                        and the 2N-th root of unity, forward *and* inverse
+                        and the 2N-th root of unity, forward *and* inverse; a package
+                        (`domain` / `kernel` / `ref`) so a large-N transform can land
+                        beside the in-register one
+    primitives.fields   prime-field arithmetic: the 32-bit Montgomery product every
+                        modular primitive shares (`PrimeField`, `mont_mul`)
+    primitives.chacha20 the ARX stream cipher (RFC 8439), the first non-PQC primitive
 
 ML-KEM (`triton_crypto.mlkem`), ML-DSA (`triton_crypto.mldsa`), SLH-DSA
 (`triton_crypto.slhdsa`) and LMS/HSS (`triton_crypto.lms`) are thin layers on top of
 these; they keep only what is scheme-specific — ML-KEM's base-case multiply and Toeplitz
 GEMMs, ML-DSA's SampleInBall / Decompose, FIPS 205's thash, LMS's Winternitz chains.
 
-The two domains in use:
+Three domains in use:
 
-    >>> from triton_crypto.primitives import KYBER, DILITHIUM
+    >>> from triton_crypto.primitives import KYBER, DILITHIUM, BABYBEAR_NTT
     >>> KYBER.q, KYBER.zeta, KYBER.wide
     (3329, 17, False)
     >>> DILITHIUM.q, DILITHIUM.zeta, DILITHIUM.wide
     (8380417, 1753, True)
+    >>> BABYBEAR_NTT.q
+    2013265921
 """
 
 from __future__ import annotations
 
-from . import keccak, ntt, sha2, sponge
+from . import chacha20, fields, keccak, ntt, sha2, sponge
+from .chacha20 import (
+    chacha20_keystream,
+    chacha20_keystream_np,
+    chacha20_keystream_torch,
+    chacha20_xor,
+)
+from .fields import BABYBEAR, MONT_R, PrimeField, mont_mul
 from .ntt import (
+    BABYBEAR_NTT,
     DILITHIUM,
     KYBER,
     NTTDomain,
@@ -69,6 +84,8 @@ from .sponge import (
 )
 
 __all__ = [
+    "BABYBEAR",
+    "BABYBEAR_NTT",
     "DILITHIUM",
     "DOMAIN_SHA3",
     "DOMAIN_SHAKE",
@@ -78,6 +95,7 @@ __all__ = [
     "K256",
     "K512",
     "KYBER",
+    "MONT_R",
     "SHA3_224",
     "SHA3_256",
     "SHA3_384",
@@ -86,13 +104,21 @@ __all__ = [
     "SHAKE256",
     "HashFn",
     "NTTDomain",
+    "PrimeField",
+    "chacha20",
+    "chacha20_keystream",
+    "chacha20_keystream_np",
+    "chacha20_keystream_torch",
+    "chacha20_xor",
     "compress_np",
+    "fields",
     "get_sponge",
     "hash_np",
     "hash_np_batch",
     "intt_np",
     "intt_torch",
     "keccak",
+    "mont_mul",
     "mul_np",
     "negacyclic_conv_np",
     "ntt",

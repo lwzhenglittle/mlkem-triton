@@ -29,7 +29,14 @@ def test_lms_is_a_package():
         "triton_crypto.mlkem.kernels",
         "triton_crypto.mlkem.reference",
         "triton_crypto.primitives",
+        "triton_crypto.primitives.ntt",
     } <= packages
+    # The primitive modules are plain .py files, but they must exist in a wheel too.
+    from pathlib import Path as _Path
+
+    root = _Path(triton_crypto.__file__).parent
+    for module in ("fields.py", "chacha20.py", "ntt/__init__.py", "ntt/domain.py"):
+        assert (root / "primitives" / module).is_file(), f"primitives/{module} missing"
 
     from triton_crypto.lms import ALL_SETS, LMSSet, Verifier, from_name, get, verify_batch
 

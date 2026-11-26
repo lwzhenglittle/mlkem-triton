@@ -45,6 +45,8 @@ _NO_GPU_OK = {
     "test_compat.py",
     "test_slhdsa_ref.py",
     "test_sha2.py",
+    "test_fields.py",
+    "test_chacha20.py",
 }
 
 

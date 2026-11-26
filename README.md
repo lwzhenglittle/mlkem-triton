@@ -1,7 +1,9 @@
 # triton-crypto-kernels
 
-**Post-quantum cryptography in pure Triton** — no inline assembly, no vendor-specific intrinsics.
+**Cryptographic kernels in pure Triton** — no inline assembly, no vendor-specific intrinsics.
 One code base, measured on Intel XPU and NVIDIA CUDA, written for any Triton backend.
+
+Post-quantum schemes:
 
 | scheme | operations | standard |
 |---|---|---|
@@ -10,10 +12,20 @@ One code base, measured on Intel XPU and NVIDIA CUDA, written for any Triton bac
 | SLH-DSA | verify (all 12 parameter sets) | FIPS 205 |
 | LMS / HSS | verify (SHA-256/256 and /192) | SP 800-208 |
 
-**813 tests** — NIST ACVP vectors, liboqs cross-checks and independent numpy references — plus a
-shared primitive layer (`primitives.sponge`, `primitives.ntt`) that all four schemes reuse. Each
-scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`, `.lms`); the top level
-re-exports the ML-KEM entry points for backwards compatibility.
+And the scheme-agnostic primitives underneath them, usable on their own:
+
+| primitive | what |
+|---|---|
+| `primitives.sponge` | Keccak-f[1600] and the sponge: SHA3-224/256/384/512, SHAKE128/256, any rate, batched |
+| `primitives.sha2` | SHA-256 / SHA-512 compression |
+| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)` |
+| `primitives.fields` | prime-field arithmetic: the 32-bit Montgomery product, shared by every modular primitive |
+| `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
+
+**860 tests** — NIST ACVP vectors, RFC 8439 vectors, liboqs cross-checks and independent numpy
+references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
+`.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
+backwards compatibility.
 
 ## Install
 
@@ -94,14 +106,21 @@ implemented because their type codes are still TBD.
 ### Shared primitives
 
 ```python
-from triton_crypto.primitives import KYBER, DILITHIUM
+from triton_crypto.primitives import KYBER, DILITHIUM, BABYBEAR_NTT
 
 KYBER.q, KYBER.zeta, KYBER.layers, KYBER.wide  # (3329, 17, 7, False)
 DILITHIUM.q, DILITHIUM.zeta, DILITHIUM.layers, DILITHIUM.wide  # (8380417, 1753, 8, True)
+
+from triton_crypto.primitives import chacha20_keystream, SHA3_256, hash_np_batch
+
+ks = chacha20_keystream(key, nonce, nbytes)  # [B, nbytes] uint8, RFC 8439
+digests = hash_np_batch(messages, SHA3_256)  # [B, 32] uint8
 ```
 
-The same negacyclic NTT, parameterised by `(q, N, ζ, layers)`, serves both schemes; the sponge
-provides SHA3/SHAKE at any rate and output length, batched.
+The same negacyclic NTT, parameterised by `(q, N, ζ, layers)`, serves both schemes — and a third
+domain (BabyBear, for ZK work) needs no new kernel; the sponge provides SHA3/SHAKE at any rate and
+output length, batched. `benchmarks/bench_primitive.py` prints one throughput table for this whole
+layer against a measured copy bandwidth.
 
 ## Performance
 
@@ -131,7 +150,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**813 tests**, five layers:
+**860 tests**, five layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;

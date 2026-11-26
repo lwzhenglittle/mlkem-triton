@@ -1,5 +1,51 @@
 # Changelog
 
+## [0.9.0] — the primitive layer gets a floor, and the library stops being PQC-only
+
+The 0.8.0 refactor made the four schemes uniform. This release does the same job one layer
+down, where the next work actually goes: it gives modular arithmetic one home, gives the
+primitive layer its own benchmark table, and adds the first non-PQC primitive.
+
+**`primitives/fields.py` — one definition of "multiply modulo q".** The 32-bit Montgomery
+product used to be inlined three times inside `primitives/ntt.py`, and `docs/kernels.md`
+recorded why: a `@triton.jit` helper defined inside a factory that imports `tl` locally has no
+`tl` in its compiled globals, so no other kernel could call it. The fix is the import, not the
+helper: `fields.py` imports `triton.language as tl` at module level, and `mont_mul` is callable
+from anywhere. `tests/test_fields_gpu.py` calls it from a *different* module's kernel so the
+rule stays pinned. `PrimeField` carries `q`, `qinv`, `R`, `to_mont` / `from_mont`, numpy
+`mul`/`pow`/`inv`, and rejects `q >= 2**31` with a reason (Goldilocks-class moduli need a
+128-bit product; that path does not exist yet). `mont_mul` returns a canonical `[0, q)` value: REDC's raw output can be negative, the
+inlined copies all relied on a following `_norm` to fix the sign, and a new caller (Poseidon2,
+X25519) should not have to know that.
+
+**`primitives/ntt/` is a package** (`domain.py` / `kernel.py` / `ref.py`), because a
+2^20-point transform is a different algorithm (multi-pass, global memory) that will live
+beside the in-register one, not inside it. `NTTDomain` now validates the modulus at
+construction. `BABYBEAR_NTT` (q = 2^31−2^27+1) needed **no new kernel**: the `(q, N, ζ, layers)`
+parameterisation plus the int64+Montgomery path was already general, and
+`tests/test_fields_gpu.py` checks it against a schoolbook convolution. `negacyclic_conv_np`
+no longer overflows int64 for q beyond ~2^24 (it reduced per term instead of accumulating
+q²-sized products; the old version was wrong for any 31-bit modulus).
+
+**`primitives/chacha20.py`** — RFC 8439, batched, `[B, 32]` keys × `[B, 12]` nonces, counters,
+keystream and XOR. Rotation needs `.to(tl.uint32)`; on int32 the right shift is arithmetic and
+the result is silently wrong. Vectors: RFC 8439 §2.3.2 and §2.4.2, cross-checked against
+OpenSSL 3.5 before being written into the test. It is the first primitive in the library that
+is not post-quantum, which is the point: `primitives` is a crypto layer, not a PQC layer.
+
+**`benchmarks/bench_primitive.py`** answers a question the scheme benchmarks cannot: which
+*shape* of arithmetic this device is good at. One table, a measured copy bandwidth as the
+ceiling, and `bench.py --scheme primitives` dispatches to it. First numbers on the Arc B390
+(1 KiB messages, B = 4096): ChaCha20 **14.8 GB/s**, Keccak **183 Mperm/s**, SHA-256
+**43 M msg/s**, ML-KEM NTT **16.0 M poly/s**, ML-DSA NTT **5.2 M poly/s** — every ALU-bound
+primitive lands at 5–20 % of copy bandwidth.
+
+Also: the package description, README opening and `__init__` docstring no longer say
+"post-quantum only"; `docs/kernels.md` gained the ChaCha20 kernel contract and the module-level
+`tl` rule; `docs/benchmarks.md` §15 is the new table.
+
+**860 tests** (up from 813), `ruff check .` and `ruff format --check .` clean.
+
 ## [0.8.0] — package layout: one subpackage per scheme
 
 No algorithm changed. This is the structural cleanup the four-scheme package needed:

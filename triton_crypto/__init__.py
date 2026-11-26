@@ -1,10 +1,11 @@
-"""Portable post-quantum crypto kernels in pure Triton.
+"""Cryptographic kernels in pure Triton: post-quantum schemes and the primitives under them.
 
 Layout:
 
     primitives/   scheme-agnostic mathematics: Keccak-f[1600], the sponge
-                  (SHA3/SHAKE, any rate/output, batched), SHA-2 compression and a
-                  parameterised negacyclic NTT over Z_q[X]/(X^n+1)
+                  (SHA3/SHAKE, any rate/output, batched), SHA-2 compression, a
+                  parameterised negacyclic NTT over Z_q[X]/(X^n+1), prime-field
+                  arithmetic and ChaCha20
     mlkem/        ML-KEM (FIPS 203): keygen, encapsulate, decapsulate
     mldsa/        ML-DSA (FIPS 204): sign, verify, plus a numpy reference
     slhdsa/       SLH-DSA (FIPS 205): verify, plus a numpy reference
@@ -12,7 +13,13 @@ Layout:
 
 Every scheme is a thin layer over `primitives`; it keeps only what is
 scheme-specific (ML-KEM's Toeplitz GEMMs, ML-DSA's SampleInBall/Decompose,
-FIPS 205's thash, LMS Winternitz chains).
+FIPS 205's thash, LMS Winternitz chains). The primitive layer does not assume
+post-quantum: `primitives.chacha20` is a symmetric stream cipher, and
+`primitives.fields` is what a Poseidon2 or a secp-curve primitive would build on.
+
+Primitives on their own:
+
+    from triton_crypto.primitives import chacha20_keystream, SHA3_256, ntt_torch
 
 ML-KEM, all three operations (also available from `triton_crypto.mlkem`):
 
@@ -38,7 +45,7 @@ from __future__ import annotations
 from .devices import available_devices, backend_of, describe, gemm_cfg, resolve_device
 from .mlkem.params import PARAMS, N, Params, Q
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "PARAMS",
