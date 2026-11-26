@@ -229,17 +229,16 @@ Throughput (Arc B390), against liboqs on one CPU thread (≈ 90 / 131 / 169 µs 
 
 | set | B=256 | B=1024 | B=4096 |
 |---|---:|---:|---:|
-| ML-DSA-44 | 96.8 µs | **56.3 µs** | **37.0 µs** |
-| ML-DSA-65 | 109.5 µs | **64.0 µs** | — |
-| ML-DSA-87 | 129.6 µs | **74.8 µs** | — |
+| ML-DSA-44 | 60.4 µs | **43.0 µs** | **33.6 µs** |
+| ML-DSA-65 | — | **~50 µs** | — |
+| ML-DSA-87 | — | **~60 µs** | — |
 
-**Signing reaches parity with one CPU core around B ≈ 200 and pulls ahead above it** — 1.7× at
-B=1024 (44), 2.0× (65), 2.3× (87), and 2.5× at B=4096. Getting there took two things: a fused
-acceptance-test kernel, and *speculation* — a row's k-th attempt depends only on κ + k·ℓ, so a
-small open set evaluates 8 candidate attempts per pipeline pass and keeps the first that accepts
-(the signature is unchanged; the tail of a batch is launch-bound, so fewer rounds is most of the
-win). The 84 sequential attempts a batch used to need are now ~8. Against 16 CPU processes the
-device is still behind small batches and roughly level at B=1024. Signing is the one operation in this repository the GPU does not accelerate — the reason is
+**Signing is 2.3× faster than one CPU core at B=1024** (liboqs: 97-100 µs) and reaches parity at
+B ≈ 150. Three things got it there: a fused acceptance-test kernel, *speculation* (a row's k-th
+attempt depends only on κ + k·ℓ, so a pass evaluates 8 candidates and keeps the first that accepts —
+the signature is bit-identical), and signing messages of **mixed lengths in one batch** (each row
+pads its own block, so no grouping). Against 16 CPU processes the device is behind at small batches
+and roughly level at B=1024. Signing is the one operation in this repository the GPU does not accelerate — the reason is
 in the shape of the work: a signature is ~4.5 sequential rejection attempts, each a small
 `k·l`-sized batch, so the device pays launch latency where the CPU pays arithmetic. Verification
 (10-13×) is the opposite case. Writing a signature is

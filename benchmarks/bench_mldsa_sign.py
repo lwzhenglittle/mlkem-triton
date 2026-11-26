@@ -41,7 +41,7 @@ def main() -> int:
         signer = Signer(ps, sk)
         print(f"# {ps}: signature {m.p.sig_size} bytes")
         for b in args.batch:
-            msgs = [b"message %d" % i for i in range(b)]
+            msgs = [b"message %08d" % i for i in range(b)]
             signer.sign(msgs[:1])  # warm up (compiles the kernels)
             best = float("inf")
             for _ in range(args.reps):

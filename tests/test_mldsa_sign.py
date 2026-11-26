@@ -106,7 +106,7 @@ def test_batch_with_rejections():
     pk, sk = m.keygen(bytes(range(32)))
     signer = Signer(ps, sk)
     n = 24
-    msgs = [f"message {i}".encode() for i in range(n)]
+    msgs = [f"message {i:08d}".encode() for i in range(n)]
     t0 = time.perf_counter()
     sigs = signer.sign(msgs)
     assert sigs.shape == (n, len(m.sign(sk, msgs[0], rnd=None)))

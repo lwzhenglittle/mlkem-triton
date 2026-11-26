@@ -414,11 +414,11 @@ is 64-bit lane arithmetic).
 
 `benchmarks/bench_mldsa_sign.py`, Arc B390, one private key, batch of independent messages:
 
-| set | B=64 | B=128 | B=256 | B=1024 | B=4096 | liboqs 1T | liboqs 16P |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| ML-DSA-44 | 163 µs | 133 µs | 96.8 µs | **56.3 µs** | **37.0 µs** | 90.2 µs | 28.2 µs |
-| ML-DSA-65 | — | — | 109 µs | **64.0 µs** | — | 131.4 µs | 28.0 µs |
-| ML-DSA-87 | — | — | 130 µs | **74.8 µs** | — | 169.2 µs | 27.7 µs |
+| set | B=256 | B=1024 | B=4096 | liboqs 1T | liboqs 16P |
+|---|---:|---:|---:|---:|---:|
+| ML-DSA-44 | 60.4 µs | **43.0 µs** | **33.6 µs** | 97 µs | 28.2 µs |
+| ML-DSA-65 | — | ~50 µs | — | 131 µs | 28.0 µs |
+| ML-DSA-87 | — | ~60 µs | — | 169 µs | 27.7 µs |
 
 **Signing now reaches parity with one CPU core at B ≈ 200 and wins above it** (1.7× / 2.0× / 2.3× at
 B=1024). What got it there:
@@ -431,7 +431,13 @@ B=1024). What got it there:
   bit-identical (same attempt sequence); a batch of 1024 went from 84 sequential attempts to ~8
   pipeline rounds. `spec_target` keeps each pass near 512-2048 rows, which is the sweet spot on this
   device (swept).
-- signatures assembled for the whole accepted batch in numpy instead of per-row `bytes.join`.
+- signatures assembled for the whole accepted batch in numpy instead of per-row `bytes.join`;
+- `pointwise_kernel` broadcasts `ĉ` inside the kernel: the host version repeated both operands into
+  full `[n·M, 256]` arrays, which at 4096 rows was ~150 MB of memory traffic per attempt;
+- **mixed-length messages in one batch**: μ is `SHAKE256(H(pk) ‖ M′, 64)` and a shorter `M′` simply
+  has its pad10*1 earlier inside the last block, so every row pads to the same block count and is
+  absorbed in one launch — the length-grouping penalty (1.4×, and any batch with messages of
+  differing sizes fell into it) is gone.
 
 **Signing is the one operation here where the device loses.** liboqs signs an ML-DSA-44 signature in
 97.7 µs on a single core (min of five rounds of 100), so the GPU's 191 µs is 1.96× *slower* — and

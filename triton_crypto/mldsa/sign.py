@@ -138,16 +138,7 @@ class Signer:
         mprime = [bytes(m) for m in mprimes]
         if not mprime:
             return np.empty((0, 0), dtype=np.uint8)
-        lengths = {len(m) for m in mprime}
-        if len(lengths) > 1:
-            # the SHAKE over μ needs a rectangular buffer, so lengths are signed in groups
-            out = np.empty((len(mprime), self.p.sig_size), dtype=np.uint8)
-            for length in lengths:
-                idx = [i for i, m in enumerate(mprime) if len(m) == length]
-                out[idx] = self.sign_mprime([mprime[i] for i in idx], rnd)
-            return out
-        mprimes_np = np.stack([np.frombuffer(m, dtype=np.uint8) for m in mprime])
-        return self.sign_mu_rows(self._mu(mprimes_np, len(mprime[0])), rnd)
+        return self.sign_mu_rows(self._mu(mprime), rnd)
 
     def sign_mu(self, mus, rnd=None) -> np.ndarray:
         """The external-μ interface: each row is already μ (64 bytes)."""
@@ -298,13 +289,23 @@ class Signer:
         return accept.to(torch.bool), z, h, c_tilde
 
     # ---------------------------------------------------------------- helpers
-    def _mu(self, mprimes: np.ndarray, length: int) -> torch.Tensor:
-        b = mprimes.shape[0]
-        total = padded_len(64 + length, RATE_SHAKE)
+    def _mu(self, mprimes: list[bytes]) -> torch.Tensor:
+        """μ = SHAKE256(H(pk) ‖ M′, 64) for a batch of M′ of *any* lengths.
+
+        A shorter message simply has its pad10*1 earlier inside the last block, so every row can be
+        padded to the same block count and absorbed in one launch — no grouping by length.
+        """
+        b = len(mprimes)
+        lens = np.fromiter((len(m) for m in mprimes), dtype=np.int64, count=b)
+        total = padded_len(64 + int(lens.max()), RATE_SHAKE)
         buf = torch.zeros((b, total), dtype=torch.uint8, device=self.device)
-        buf[:, :64] = torch.frombuffer(bytearray(self.tr), dtype=torch.uint8).to(self.device)
-        buf[:, 64 : 64 + length] = torch.from_numpy(np.ascontiguousarray(mprimes)).to(self.device)
-        buf[:, 64 + length] = DOMAIN_SHAKE
+        tr = torch.frombuffer(bytearray(self.tr), dtype=torch.uint8).to(self.device)
+        buf[:, :64] = tr
+        host = buf.cpu().numpy()
+        for i, m in enumerate(mprimes):
+            host[i, 64 : 64 + len(m)] = np.frombuffer(m, dtype=np.uint8)
+            host[i, 64 + len(m)] = DOMAIN_SHAKE
+        buf = torch.from_numpy(host).to(self.device)
         buf[:, total - 1] = buf[:, total - 1] | 0x80
         return sponge_padded(buf, RATE_SHAKE, 64)
 
@@ -399,11 +400,9 @@ def _pointwise(a: torch.Tensor, *bs: torch.Tensor) -> torch.Tensor:
     of the whole batch three times per attempt; this keeps the product in registers.
     """
     n, m = a.shape[0], sum(b.shape[0] for b in bs)
-    a_rep = a.repeat_interleave(m, dim=0).contiguous()
-    # each row needs the m product-polyteers in block order, so the operand list repeats per row
-    b_rep = torch.cat(list(bs), dim=0).repeat(n, 1).contiguous()
+    stacked = torch.cat(list(bs), dim=0).contiguous()  # [m, 256], broadcast inside the kernel
     out = torch.empty((n * m, 256), dtype=torch.int32, device=a.device)
-    pointwise_kernel[(triton.cdiv(n * m, 16),)](a_rep, b_rep, out, n * m, 256, Q_VALUE, 16)
+    pointwise_kernel[(triton.cdiv(n * m, 16),)](a, stacked, out, n * m, m, 256, Q_VALUE, 16)
     return out.view(n, m, 256)
 
 

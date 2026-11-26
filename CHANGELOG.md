@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.7.1] — signing to 43 µs (2.3× one core), and mixed-length batches
+
+Building on the speculation work: ML-DSA-44 signing at B=1024 went 56.3 µs → **43.0 µs** (liboqs one
+core: 97-100 µs), B=4096 → **33.6 µs**, B=256 → 60.4 µs.
+
+- **Mixed-length messages are signed in one batch.** μ hashes `H(pk) ‖ M′` per row, and a shorter M′
+  only moves its pad10*1 earlier inside the last block, so all rows pad to the same block count and
+  go through one launch. Previously the batch was split by length; a batch of differing sizes paid
+  ~1.4× (and the earlier benchmarks, which used `b"message %d"`, were all silently in that mode
+  until this change made the penalty disappear).
+- **`pointwise_kernel` no longer materialises its operands.** The host repeated `ĉ` and ŝ into full
+  `[n·M, 256]` arrays — at 4096 rows that is ~150 MB of traffic per attempt. The kernel now
+  broadcasts inside: `i = row // M`, `j = row % M`.
+- Signature assembly for the accepted batch happens once in numpy rather than per row.
+
+Also fixed along the way: the attempt pipeline had grown a *duplicate* `hint_kernel`/`_use_hint`
+definition when the pointwise kernel was moved (Python silently kept the last one).
+
+360/360 ACVP sigGen byte-exact; 771 tests, ruff clean.
+
 ## [0.7.0] — signing reaches parity with one CPU core, by speculating on the rejection loop
 
 ML-DSA-44 signing at B=1024 went from 193 µs to **56.3 µs** per signature (liboqs on one core:

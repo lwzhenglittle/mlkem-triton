@@ -283,29 +283,32 @@ def pack_z_kernel(
 
 @triton.jit
 def pointwise_kernel(
-    A,
-    B,
+    C,
+    S,
     OUT,
     ROWS,
+    M: tl.constexpr,
     N: tl.constexpr,
     Q: tl.constexpr,
     BN: tl.constexpr,
 ):
-    """ĉ ∘ ŝ mod q, one program over `BN` rows of 256 coefficients.
+    """ĉ ∘ ŝ mod q, broadcasting `ĉ` [n, 256] over the `M` operand polynomials.
 
-    The host version broadcasts an int64 product and then reduces — fine, but it
-    materialises a 64-bit array of the whole batch three times per signing attempt.
-    This keeps the product in registers and writes int32 back.
+    The host version repeats `ĉ` and ŝ into full [n·M, 256] arrays first, which for a 4096-row
+    attempt is ~150 MB of traffic for 4096·M·256 products — the single largest memory cost of the
+    pipeline. Here the row index picks both operands, so nothing is materialised.
     """
     pid = tl.program_id(0)
     row = pid * BN + tl.arange(0, BN)
-    col = tl.arange(0, N)
     m = row < ROWS
-    a = tl.load(A + row[:, None] * N + col[None, :], mask=m[:, None], other=0)
-    b = tl.load(B + row[:, None] * N + col[None, :], mask=m[:, None], other=0)
-    v = (a.to(tl.int64) * b.to(tl.int64)) % Q
+    i = row // M
+    j = row % M
+    n = tl.arange(0, N)
+    c = tl.load(C + i[:, None] * N + n[None, :], mask=m[:, None], other=0)
+    sp = tl.load(S + j[:, None] * N + n[None, :], mask=m[:, None], other=0)
+    v = (c.to(tl.int64) * sp.to(tl.int64)) % Q
     v = tl.where(v < 0, v + Q, v)
-    tl.store(OUT + row[:, None] * N + col[None, :], v.to(tl.int32), mask=m[:, None])
+    tl.store(OUT + row[:, None] * N + n[None, :], v.to(tl.int32), mask=m[:, None])
 
 
 @triton.jit
