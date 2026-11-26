@@ -48,9 +48,23 @@ class KeyGenerator:
     def generate_torch(self, d: torch.Tensor, z: torch.Tensor):
         """`d`/`z` are both ``[B, 32]`` uint8. Returns ``(ek [B,384k+32], dk [B,768k+96])``."""
         p, k, dev = self.p, self.k, self.device
-        if d.shape != z.shape or d.shape[1] != 32:
-            raise ValueError("d/z must be [B,32] uint8")
+        for name, t in (("d", d), ("z", z)):
+            if not torch.is_tensor(t):
+                raise TypeError(f"{name} must be a torch.Tensor, got {type(t).__name__}")
+            if t.dtype != torch.uint8:
+                raise ValueError(f"{name} must be uint8, got {t.dtype}")
+        if d.shape != z.shape or d.ndim != 2 or d.shape[1] != 32:
+            raise ValueError(f"d/z must both be [B,32] uint8, got {tuple(d.shape)} / {tuple(z.shape)}")
         B = d.shape[0]
+        d = d.contiguous().to(dev)
+        z = z.contiguous().to(dev)
+        if B == 0:
+            ek_size = self.p.ek_size
+            dk_size = self.p.dk_size
+            return (
+                torch.empty((0, ek_size), dtype=torch.uint8, device=dev),
+                torch.empty((0, dk_size), dtype=torch.uint8, device=dev),
+            )
 
         # 1. (ρ, σ) = G(d ‖ k)   — SHA3-512, rate 72
         #    **Note that `k`**: FIPS 203 Alg. 13 uses `d ‖ k` for domain separation
@@ -144,22 +158,58 @@ class KeyGenerator:
         return ek, dk
 
     # ---- Host-side entry point ----
-    def generate(self, count: int, seeds=None):
+    def generate(self, count: int, seeds=None, rng=None):
         """Batch-generate with random (or given `d`) seeds.
+
+        `d` and `z` are the two 32-byte FIPS 203 seeds. They must come from a CSPRNG:
+        by default `secrets.token_bytes` is used. `rng` may be a callable returning
+        `n` random bytes, or a `numpy.random.Generator`; `seeds=` fixes `d` for
+        deterministic tests and is never a secure source.
 
         Returns two ``np.ndarray`` objects, ``(eks, dks)``.
         """
-        if seeds is None:
-            d = np.random.default_rng().integers(0, 256, (count, 32), dtype=np.uint8)
-        else:
-            d = np.asarray(seeds, dtype=np.uint8).reshape(count, 32)
-        z = np.random.default_rng().integers(0, 256, (count, 32), dtype=np.uint8)
+        if count < 0:
+            raise ValueError("count must be non-negative")
         dev = self.device
+        if count == 0:
+            ek_size = self.p.ek_size
+            dk_size = self.p.dk_size
+            return (
+                np.empty((0, ek_size), dtype=np.uint8),
+                np.empty((0, dk_size), dtype=np.uint8),
+            )
+        d = _random_bytes(count, rng) if seeds is None else _as_seed_matrix(seeds, count, "seeds")
+        z = _random_bytes(count, rng)
         ek, dk = self.generate_torch(
             torch.from_numpy(np.ascontiguousarray(d)).to(dev),
             torch.from_numpy(np.ascontiguousarray(z)).to(dev),
         )
         return ek.cpu().numpy(), dk.cpu().numpy()
+
+
+def _random_bytes(count: int, rng=None) -> np.ndarray:
+    """`count` × 32 bytes from a CSPRNG (or the caller's `rng`)."""
+    if rng is None:
+        import secrets
+
+        return np.frombuffer(secrets.token_bytes(32 * count), dtype=np.uint8).reshape(count, 32).copy()
+    if hasattr(rng, "integers"):
+        return np.asarray(rng.integers(0, 256, (count, 32), dtype=np.uint8))
+    buf = bytes(rng(32 * count))
+    if len(buf) != 32 * count:
+        raise ValueError(f"rng returned {len(buf)} bytes, expected {32 * count}")
+    return np.frombuffer(buf, dtype=np.uint8).reshape(count, 32).copy()
+
+
+def _as_seed_matrix(seeds, count: int, name: str) -> np.ndarray:
+    if isinstance(seeds, (bytes, bytearray, memoryview)):
+        arr = np.frombuffer(bytes(seeds), dtype=np.uint8)
+    else:
+        arr = np.asarray(seeds, dtype=np.uint8)
+    try:
+        return arr.reshape(count, 32)
+    except ValueError as exc:
+        raise ValueError(f"{name} must contain {count} 32-byte seeds, got shape {arr.shape}") from exc
 
 
 def generate_keypairs(ps: str, count: int = 1, device=None):

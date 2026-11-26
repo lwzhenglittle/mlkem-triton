@@ -92,3 +92,18 @@ def test_keygen_batch_then_encaps_decaps(ps):
     # our encaps can also use the ek we generated
     c2, K2 = Encapsulator(ps, ek, device=DEV).encapsulate([bytes(32)])
     assert refimpl.ref_decaps(ps, dk, c2[0].tobytes()) == K2[0].tobytes()
+
+
+def test_empty_batch_and_rng_injection():
+    g = KeyGenerator("ML-KEM-768")
+    eks, dks = g.generate(0)
+    assert eks.shape == (0, 1184) and dks.shape == (0, 2400)
+
+    first = g.generate(2, seeds=bytes(64), rng=lambda n: bytes(n))
+    second = g.generate(2, seeds=bytes(64), rng=lambda n: bytes(n))
+    assert np.array_equal(first[0], second[0]) and np.array_equal(first[1], second[1])
+
+    # the default source must be a CSPRNG, not a fixed seed
+    a, _ = g.generate(1)
+    b, _ = g.generate(1)
+    assert not np.array_equal(a, b)

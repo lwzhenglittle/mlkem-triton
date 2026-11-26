@@ -32,6 +32,7 @@ import numpy as np
 import torch
 
 from . import keyprep, ops
+from ._inputs import as_batch_bytes
 from .devices import resolve_device
 from .kernels.encaps import fused_encaps, pack_ciphertext
 from .params import PARAMS
@@ -48,18 +49,22 @@ class Encapsulator:
         ps: parameter set name.
         ek: encapsulation public key bytes (length ``384k+32``).
         device: ``None`` selects one automatically.
+        validate: enforce the FIPS 203 §7.2 encapsulation-key check (length and
+            canonical 12-bit coefficients) and reject non-canonical keys. Set to
+            ``False`` only for formally-invalid test vectors.
     """
 
-    def __init__(self, ps: str, ek: bytes, device=None):
+    def __init__(self, ps: str, ek: bytes, device=None, validate: bool = True):
         p = PARAMS[ps]
         self.ps, self.p = ps, p
         self.device = resolve_device(device)
-        self.kp = keyprep.parse_ek(ps, ek)
-        self.ek = ek
+        self.kp = keyprep.parse_ek(ps, ek, validate=validate)
+        self.ek = bytes(ek)
         dev = self.device
         self.h_ek = torch.frombuffer(bytearray(self.kp.h_ek), dtype=torch.uint8).to(dev)
         W = torch.from_numpy(np.ascontiguousarray(self.kp.W_enc))
-        assert W.abs().max().item() <= 2048
+        if W.abs().max().item() > 2048:
+            raise ValueError(f"W_enc out of the fp16 integer range: |W|max={W.abs().max().item()}")
         self.W_enc = W.to(torch.float16).to(dev)
 
     # ---- Main flow ----
@@ -75,15 +80,36 @@ class Encapsulator:
         """
         arr = _to_msgs2d(msgs)
         B = arr.shape[0]
+        if not arr.flags.writeable:  # np.frombuffer over a bytes object
+            arr = arr.copy()
         m = torch.from_numpy(arr).to(self.device)
         c, K = self.encapsulate_torch(m, B)
         return c.cpu().numpy(), K.cpu().numpy()
 
     def encapsulate_torch(self, m: torch.Tensor, B: int):
-        """Device-side flow only. `m` is ``[B, 32]`` uint8."""
+        """Device-side flow only. `m` is ``[B, 32]`` uint8.
+
+        The input is copied (``.contiguous()``) to the key's device when needed; a
+        non-contiguous view used to be consumed with the wrong strides, which produced
+        silently incorrect ciphertexts instead of an error.
+        """
         p, k, dev = self.p, self.p.k, self.device
-        if m.dtype != torch.uint8 or m.shape != (B, 32):
-            raise ValueError(f"m must be [B,32] uint8, got {tuple(m.shape)} {m.dtype}")
+        if not torch.is_tensor(m):
+            raise TypeError(f"m must be a torch.Tensor, got {type(m).__name__}")
+        if m.dtype != torch.uint8:
+            raise ValueError(f"m must be uint8, got {m.dtype}")
+        if m.shape != (B, 32):
+            raise ValueError(f"m must be [B,32] uint8, got {tuple(m.shape)}")
+        if B < 0:
+            raise ValueError("B must be non-negative")
+        m = m.contiguous()
+        if m.device != dev:
+            m = m.to(dev)
+        if B == 0:
+            return (
+                torch.empty((0, p.ct_size), dtype=torch.uint8, device=dev),
+                torch.empty((0, 32), dtype=torch.uint8, device=dev),
+            )
 
         # 1. (K_pre, r_seed) = G(m ‖ H(ek))     — SHA3-512, rate 72
         gr = sponge_gpu(_pad2_gpu(m, self.h_ek, B, RATE_SHA3_512, DOMAIN_SHA3), RATE_SHA3_512, 64)
@@ -160,21 +186,8 @@ class Encapsulator:
 
 
 def _to_msgs2d(msgs) -> np.ndarray:
-    if isinstance(msgs, np.ndarray):
-        a = np.ascontiguousarray(msgs)
-    elif isinstance(msgs, (bytes, bytearray, memoryview)):
-        buf = bytes(msgs)
-        if len(buf) % 32:
-            raise ValueError(f"total message length {len(buf)} is not a multiple of 32")
-        a = np.frombuffer(buf, np.uint8).reshape(-1, 32).copy()
-    else:
-        lst = list(msgs)
-        a = np.frombuffer(b"".join(lst), np.uint8).reshape(len(lst), 32).copy()
-    if a.ndim == 1:
-        a = a[None, :]
-    if a.shape[1] != 32:
-        raise ValueError(f"each message should be 32 bytes, got {a.shape}")
-    return a
+    """Normalize messages to ``[B, 32]`` uint8 (a bytes blob is a batch of 32-byte items)."""
+    return as_batch_bytes(msgs, 32, "message", blob_is_batch=True)
 
 
 def encapsulate(ps: str, ek: bytes, msgs, device=None):

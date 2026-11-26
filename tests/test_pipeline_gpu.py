@@ -188,3 +188,32 @@ def test_eta2_fast_path_only_for_ukem768_1024():
             B, k = 8, p.k
             y_buf = torch.zeros(B * k, 64 * p.eta1, dtype=torch.uint8, device=DEV)
             assert glue.can_cbd_y(y_buf, B, k, p.eta1)
+
+
+@pytest.mark.parametrize("ps", PARAM_SETS)
+def test_empty_and_non_contiguous_ciphertexts(ps):
+    ek, dk = refimpl.ref_keygen(ps)
+    dec = Decapsulator(ps, dk)
+    empty = dec.decaps(np.empty((0, dec.p.ct_size), np.uint8))
+    assert empty.shape == (0, 32)
+
+    cts = []
+    for _ in range(4):
+        _k, c = refimpl.ref_encaps(ps, ek)
+        cts.append(np.frombuffer(c, np.uint8))
+    arr = np.stack(cts)
+    want = dec.decaps(arr)
+
+    # [B, 2*ct] with every other byte used: valid values, non-contiguous rows
+    wide = torch.zeros((4, 2 * dec.p.ct_size), dtype=torch.uint8, device=DEV)
+    view = wide[:, ::2]
+    view.copy_(torch.from_numpy(arr).to(DEV))
+    assert not view.is_contiguous()
+    got = dec.decaps(view)
+    assert np.array_equal(got, want)
+
+    got_dev = dec.decaps_torch(view, 4).cpu().numpy()
+    assert np.array_equal(got_dev, want)
+
+    with pytest.raises(ValueError, match="ciphertext"):  # ct size per set
+        dec.decaps([b"\x00" * (dec.p.ct_size - 1), b"\x00" * (dec.p.ct_size + 1)])

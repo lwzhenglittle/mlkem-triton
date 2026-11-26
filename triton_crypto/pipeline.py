@@ -39,6 +39,7 @@ import triton
 import triton.language as tl
 
 from . import keyprep, ops
+from ._inputs import as_batch_bytes
 from .devices import resolve_device
 from .devices import sync as _sync
 from .kernels import glue
@@ -198,18 +199,6 @@ def _probe_pinned(dev: torch.device) -> bool:
     return staged * 1.15 < direct
 
 
-def total_is_uniform(buf, count: int, n0: int) -> bool:
-    """Whether the concatenated length of `count` ciphertexts is exactly `count * n0`.
-
-    This is O(1); the per-item `all(len(c) == n0 for c in lst)` costs 0.13 ms at
-    B=4096 (6% of end-to-end), which is not worth it. The only way to misjudge
-    is "ciphertexts of differing lengths mixed together whose total length
-    happens to equal count*n0" — impossible for valid inputs of a fixed
-    parameter set.
-    """
-    return n0 > 0 and len(buf) == count * n0
-
-
 def _cpu_tensor(arr: np.ndarray) -> torch.Tensor:
     """numpy (possibly read-only) → CPU tensor, zero-copy.
 
@@ -325,7 +314,8 @@ def sponge_gpu(padded: torch.Tensor, rate: int, outlen: int) -> torch.Tensor:
     """Padded [n, a multiple of rate] uint8 -> [n, outlen] uint8, all on device."""
     _n, tot = padded.shape
     nblocks = tot // rate
-    assert nblocks * rate == tot
+    if nblocks * rate != tot:
+        raise ValueError(f"padded length {tot} is not a multiple of rate {rate}")
     return ops.sponge(padded, rate, outlen)
 
 
@@ -370,7 +360,8 @@ def pack_bits_gpu(vals: torch.Tensor, d: int) -> torch.Tensor:
     """[count, B] integers -> [B, count*d/8] uint8 (ByteEncode bit packing)."""
     count, B = vals.shape
     nbits = count * d
-    assert nbits % 8 == 0
+    if nbits % 8:
+        raise ValueError(f"{count} values of {d} bits do not pack into whole bytes")
     shifts = torch.arange(d, device=vals.device, dtype=torch.int32)
     bits = (vals.to(torch.int32)[:, :, None] >> shifts) & 1  # [count,B,d]
     bits = bits.permute(0, 2, 1).reshape(nbits, B).T  # [B,nbits]
@@ -414,7 +405,8 @@ def _cbd2_kernel(buf, out, n, BLOCK: tl.constexpr):
 def cbd_gpu(bufs: torch.Tensor, eta: int) -> torch.Tensor:
     """[n, 64·eta] uint8 -> [n, 256] int32."""
     n = bufs.shape[0]
-    assert bufs.shape[1] == 64 * eta
+    if bufs.shape[1] != 64 * eta:
+        raise ValueError(f"expected [n, {64 * eta}] input, got {tuple(bufs.shape)}")
 
     if eta == 2:
         return ops.cbd(bufs, eta)
@@ -451,11 +443,11 @@ class Decapsulator:
             priority than an explicit argument and higher than auto-detection.
     """
 
-    def __init__(self, ps: str, dk: bytes, device=None):
+    def __init__(self, ps: str, dk: bytes, device=None, validate: bool = True):
         p = PARAMS[ps]
         device = resolve_device(device)
         self.ps, self.p, self.device = ps, p, device
-        self.kp = keyprep.parse_key(ps, dk)
+        self.kp = keyprep.parse_key(ps, dk, verify_hash=validate, validate=validate)
         k = p.k
         self.h_ek = torch.frombuffer(
             bytearray(dk[768 * k + 32 : 768 * k + 64]), dtype=torch.uint8
@@ -527,10 +519,11 @@ class Decapsulator:
         """
         n0_expected = self.p.ct_size
         if isinstance(cts, torch.Tensor):
-            self._check_shape(cts.shape[-2:] if cts.dim() > 1 else cts.shape, n0_expected)
-            ct = cts.reshape(-1, n0_expected)
-            if ct.dtype != torch.uint8:
-                raise TypeError(f"cts must be uint8, got {ct.dtype}")
+            if cts.dtype != torch.uint8:
+                raise TypeError(f"cts must be uint8, got {cts.dtype}")
+            if cts.dim() == 0:
+                raise ValueError(f"cts must be 1-D or 2-D, got shape {tuple(cts.shape)}")
+            ct = cts.reshape(-1, n0_expected).contiguous()
             if ct.device != self.device:
                 ct = ct.to(self.device)
             return self.decaps_torch(ct, ct.shape[0]).cpu().numpy()
@@ -585,51 +578,36 @@ class Decapsulator:
         return dbuf
 
     @staticmethod
-    def _check_shape(shape, n0: int) -> None:
-        if len(shape) >= 1 and shape[-1] != n0:
-            raise ValueError(f"each ciphertext must be {n0} bytes, got {tuple(shape)}")
-
-    @staticmethod
     def _to_numpy2d(cts, n0: int) -> np.ndarray:
-        """Normalize the various input forms into a [B, n0] uint8 CPU array
-        (zero or single copy where possible)."""
-        if isinstance(cts, np.ndarray):
-            if cts.dtype != np.uint8:
-                cts = cts.astype(np.uint8)
-            arr = np.ascontiguousarray(cts)
-            if arr.ndim == 1:
-                arr = arr[None, :]
-            if arr.ndim != 2 or (n0 > 0 and arr.shape[1] != n0):
-                raise ValueError(f"expected a [B, {n0}] uint8 array, got {arr.shape}")
-            return arr
+        """Normalize the input forms into a ``[B, n0]`` uint8 CPU array.
 
-        if isinstance(cts, (bytes, bytearray, memoryview)):
-            n = len(cts)
-            if n0 <= 0 or n % n0:
-                raise ValueError(f"input length {n} is not a multiple of ciphertext length {n0}")
-            return np.frombuffer(cts, np.uint8).reshape(n // n0, n0)
-
-        lst = list(cts)
-        if not lst:
-            return np.empty((0, n0), np.uint8)
-        try:
-            buf = b"".join(lst)  # accepts bytes-like only, otherwise TypeError
-        except TypeError:
-            buf = None
-        # O(1) check: if the total length is exactly n0 * len(lst), treat the
-        # items as equal-length. The per-item `all(len(c) == n0 for c in lst)`
-        # previously wasted 0.13 ms at B=4096 (6% of end-to-end). The cost: if
-        # the caller mixes ciphertexts of differing lengths whose total length
-        # happens to equal n0*len, this is misjudged — impossible for valid
-        # inputs of a fixed parameter set.
-        if buf is not None and total_is_uniform(buf, len(lst), n0):
-            return np.frombuffer(buf, np.uint8).reshape(len(lst), n0)
-        # slow path: elements are not bytes-like, or the lengths really differ
-        return np.stack([np.frombuffer(bytes(c), np.uint8) for c in lst])
+        Delegates to the shared normalizer, which checks every item's length instead
+        of inferring it from the total byte count. The old fast path accepted a pair
+        of 1087/1089-byte "ciphertexts" as two valid 1088-byte ones.
+        """
+        return as_batch_bytes(cts, n0, "ciphertext", blob_is_batch=True)
 
     def decaps_torch(self, ct: torch.Tensor, B: int) -> torch.Tensor:
-        """Pure device-side flow: input ct[B, ct_size] uint8, output K[B, 32] uint8."""
+        """Pure device-side flow: input ct[B, ct_size] uint8, output K[B, 32] uint8.
+
+        Non-contiguous inputs are copied, and the shape/dtype/device are checked, because
+        the kernels consume raw pointers: a transposed view used to produce a wrong key
+        without any error.
+        """
         p, k, dev = self.p, self.p.k, self.device
+        if not torch.is_tensor(ct):
+            raise TypeError(f"ct must be a torch.Tensor, got {type(ct).__name__}")
+        if ct.dtype != torch.uint8:
+            raise ValueError(f"ct must be uint8, got {ct.dtype}")
+        if ct.shape != (B, p.ct_size):
+            raise ValueError(f"ct must be [{B}, {p.ct_size}] uint8, got {tuple(ct.shape)}")
+        if B < 0:
+            raise ValueError("B must be non-negative")
+        ct = ct.contiguous()
+        if ct.device != dev:
+            ct = ct.to(dev)
+        if B == 0:
+            return torch.empty((0, 32), dtype=torch.uint8, device=dev)
 
         # 1. fused: unpack + decompress (+center) + transpose  →  U[256k,B] fp16, V[256,B] int16
         #    also emits int16 reference values c1r/c2r for the final comparison

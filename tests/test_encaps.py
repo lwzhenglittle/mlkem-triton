@@ -7,7 +7,7 @@ import pytest
 import torch
 from _common import DEV, HAS_GPU
 
-from triton_crypto import acvp, keyprep
+from triton_crypto import acvp, keyprep, refimpl
 from triton_crypto.encaps import Encapsulator
 
 pytest.importorskip("triton")
@@ -125,3 +125,39 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+@pytest.mark.parametrize("ps", PS)
+def test_empty_batch_and_non_contiguous_messages(ps):
+    ek = _h(_cases(ps)[0]["inputs"]["ek"])
+    enc = Encapsulator(ps, ek)
+    c, k = enc.encapsulate(np.empty((0, 32), np.uint8))
+    assert c.shape == (0, enc.p.ct_size) and k.shape == (0, 32)
+
+    msgs = np.arange(4 * 32, dtype=np.uint8).reshape(4, 32)
+    base_c, base_k = enc.encapsulate_torch(torch.from_numpy(msgs).to(DEV), 4)
+    # a column-strided view has valid values but non-contiguous rows
+    wide = torch.zeros((4, 64), dtype=torch.uint8, device=DEV)
+    view = wide[:, ::2]
+    view.copy_(torch.from_numpy(msgs).to(DEV))
+    assert not view.is_contiguous()
+    got_c, got_k = enc.encapsulate_torch(view, 4)
+    assert torch.equal(base_c, got_c) and torch.equal(base_k, got_k)
+
+
+def test_mixed_length_message_list_is_rejected():
+    ek = _h(_cases("ML-KEM-768")[0]["inputs"]["ek"])
+    with pytest.raises(ValueError, match="32 bytes"):
+        Encapsulator("ML-KEM-768", ek).encapsulate([b"a" * 31, b"b" * 33])
+
+
+@pytest.mark.parametrize("ps", PS)
+def test_non_canonical_ek_is_rejected(ps):
+    ek = bytearray(_h(_cases(ps)[0]["inputs"]["ek"]))
+    assert keyprep.parse_ek(ps, bytes(ek), validate=False) is not None
+    ek[:384] = b"\xff" * 384  # 12-bit coefficients of 4095 >= q
+    assert not refimpl.encaps_key_check(ps, bytes(ek))
+    with pytest.raises(ValueError, match="not canonical"):
+        Encapsulator(ps, bytes(ek))
+    # explicit escape hatch for formally-invalid test vectors
+    assert Encapsulator(ps, bytes(ek), validate=False) is not None

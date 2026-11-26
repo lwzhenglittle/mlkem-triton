@@ -112,7 +112,7 @@ def build_W_dec(s_coef: np.ndarray, k: int) -> np.ndarray:
     return W
 
 
-def parse_key(ps: str, dk: bytes, verify_hash: bool = True) -> KeyPrep:
+def parse_key(ps: str, dk: bytes, verify_hash: bool = True, validate: bool = True) -> KeyPrep:
     """Parse dk, expand Â, apply INTT, and build W_enc / W_dec.
 
     dk = dk_PKE(384k) ‖ ek(384k+32) ‖ H(ek)(32) ‖ z(32)
@@ -143,6 +143,10 @@ def parse_key(ps: str, dk: bytes, verify_hash: bool = True) -> KeyPrep:
 
     t_hat = np.stack([byte_decode(ek[384 * j : 384 * (j + 1)], 12) for j in range(k)])
     s_hat = np.stack([byte_decode(dk_pke[384 * j : 384 * (j + 1)], 12) for j in range(k)])
+    # FIPS 203 §7.3 (the modulus check on ek); dk_PKE gets the same treatment because a
+    # coefficient >= q would make the NTT arithmetic silently non-canonical as well.
+    if validate and ((t_hat >= Q).any() or (s_hat >= Q).any()):
+        raise ValueError(f"{ps}: private key is not canonical (a 12-bit coefficient is >= q)")
 
     A_hat = expand_matrix_hat(rho, k)
     A_coef = np.stack([[intt(A_hat[i, j]) for j in range(k)] for i in range(k)])
@@ -180,7 +184,7 @@ class EncKeyPrep:
     W_enc: np.ndarray = field(repr=False)  # [256(k+1), 256k] centered integers
 
 
-def parse_ek(ps: str, ek: bytes) -> EncKeyPrep:
+def parse_ek(ps: str, ek: bytes, validate: bool = True) -> EncKeyPrep:
     """Parse a public key, expand Â, and build the encapsulation `W_enc` (same
     formulas as the one in `parse_key`).
 
@@ -197,6 +201,10 @@ def parse_ek(ps: str, ek: bytes) -> EncKeyPrep:
     if len(ek) != p.ek_size:
         raise ValueError(f"{ps}: ek length should be {p.ek_size}, got {len(ek)}")
     t_hat = np.stack([byte_decode(ek[384 * j : 384 * (j + 1)], 12) for j in range(k)])
+    if validate and (t_hat >= Q).any():
+        # FIPS 203 §7.2: every 12-bit coefficient of t̂ must be < q. A non-canonical key would
+        # otherwise be accepted and silently produce a ciphertext no implementation agrees with.
+        raise ValueError(f"{ps}: ek is not canonical (a 12-bit coefficient is >= q)")
     rho = ek[384 * k :]
 
     A_hat = expand_matrix_hat(rho, k)
@@ -252,7 +260,9 @@ def to_fp16(W: np.ndarray) -> np.ndarray:
     import torch
 
     w = torch.from_numpy(np.ascontiguousarray(W))
-    assert w.abs().max().item() <= 2048, f"|W|max={w.abs().max().item()} out of fp16 integer range"
+    peak = w.abs().max().item()
+    if peak > 2048:
+        raise ValueError(f"|W|max={peak} is outside the fp16 exact-integer range (±2048)")
     return w.to(torch.float16)
 
 
@@ -261,8 +271,10 @@ def split_limb(W: np.ndarray):
     W = np.asarray(W, dtype=np.int64)
     hi = np.floor_divide(W + 32, 64)
     lo = W - 64 * hi
-    assert hi.min() >= -26 and hi.max() <= 26, (hi.min(), hi.max())
-    assert lo.min() >= -32 and lo.max() <= 31, (lo.min(), lo.max())
+    if hi.min() < -26 or hi.max() > 26:
+        raise ValueError(f"high limb out of range: [{hi.min()}, {hi.max()}]")
+    if lo.min() < -32 or lo.max() > 31:
+        raise ValueError(f"low limb out of range: [{lo.min()}, {lo.max()}]")
     return hi.astype(np.int8), lo.astype(np.int8)
 
 
