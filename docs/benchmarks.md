@@ -655,13 +655,28 @@ not four significant figures; and the 16P column is the sum of per-process rates
 while all sixteen run, which is why `scale` is 6x for ChaCha20 (memory-bound) and 15x for the
 signatures (register-bound).
 
-**A third caveat, and an unresolved one.** The scheme benchmarks print their *own* liboqs baseline
-in their own window, and for ML-DSA-44 the two disagree by a lot: this table (from
-`benchmarks/cpu_baseline.json`) has 1T 15.4 us / 16P 1.08 us, while `bench_mldsa.py`'s inline
-baseline reports 1T 16.3 us / **16P 3.67 us**. One of the two is not measuring what it claims --
-the 16P figures differ by 3.4x, which is too large for clock noise. Until that is resolved, quote
-the device number and the *same-window* ratio from whichever benchmark produced them, and do not
-mix the two. Recorded here rather than silently picking one.
+**A third caveat: the 16P column is an upper bound, not a measurement.** The scheme benchmarks and
+`bench_cpu.py` disagreed by 3.4-4.8x on liboqs ML-DSA-44's sixteen-process verify rate, so a third
+measurement was built: sixteen processes, corpora generated before the timed region, a real barrier
+so all sixteen start together, and only `verify` inside the clock. Three numbers for the same
+quantity, all measured this session:
+
+| method | aggregate |
+|---|---:|
+| `bench_cpu.py`: sum of per-child **minima** of three reps | 949 k ops/s |
+| `bench_mldsa_verify.py`: `pool.map` wall time / ops | 198 k ops/s |
+| **barrier + pre-generated corpora, verify only** | **370 k ops/s** |
+
+Both harnesses are wrong in opposite directions. The first sums minima taken at different moments --
+when one child finishes, the others speed up, so their later reps are cheaper and the sum
+over-counts. The second times `LibOQS(...)` construction (a `ctypes.CDLL` load, ~1 ms) inside the
+region, which for 256 verifies is a quarter of the work.
+
+**What follows**: every `16P` number in this document is an *upper bound* on the CPU, so every
+`vs 16P` ratio is a *lower bound* on the device's standing -- ML-DSA's 1.03x became ~1.4x under the
+clean method. Re-measuring the whole table with a barrier is a single session's work and would move
+the NTT and signature rows most (they have the fewest operations per timed region); it was not done
+here because it invalidates the seven snapshots' 16P columns and they must move together.
 
 ## 16. Falcon-512 verification (FIPS 206 draft)
 
