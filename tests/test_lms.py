@@ -9,10 +9,11 @@ import numpy as np
 import pytest
 import torch
 
-from triton_crypto.lms import params, ref
+from triton_crypto.lms import acvp, params, ref
 from triton_crypto.lms.verify import Verifier
 
 VECTORS = json.loads((Path(__file__).parent.parent / "data/lms-rfc8554/vectors.json").read_text())
+ACVP = acvp.cases()
 
 needs_gpu = pytest.mark.skipif(
     not (hasattr(torch, "xpu") and torch.xpu.is_available()) and not torch.cuda.is_available(),
@@ -101,3 +102,28 @@ def test_two_level_hss_on_device():
 def test_empty_batch():
     pub, _, _ = _case(VECTORS[0])
     assert Verifier(pub).verify([], []).size == 0
+
+
+@needs_gpu
+@pytest.mark.parametrize("case", ACVP, ids=lambda c: c.label)
+def test_acvp_sigver_on_device(case):
+    """ACVP LMS sigVer: SHA-256/192 sets, including the signature-header tampering cases."""
+    got = bool(Verifier(case.hss_pk).verify([case.message], [case.hss_sig])[0])
+    assert got is case.expected
+
+
+@needs_gpu
+def test_acvp_batched():
+    """A batch mixing the two ACVP parameter sets must agree case by case."""
+    by_set: dict[tuple[int, int], list] = {}
+    for c in ACVP:
+        by_set.setdefault((c.lms_type, c.ots_type), []).append(c)
+    for group in by_set.values():
+        pub = group[0].hss_pk
+        if any(c.hss_pk != pub for c in group):
+            continue
+        v = Verifier(pub)
+        msgs = [c.message for c in group]
+        sigs = np.stack([np.frombuffer(c.hss_sig, dtype=np.uint8) for c in group])
+        got = v.verify(msgs, sigs)
+        assert got.tolist() == [c.expected for c in group]

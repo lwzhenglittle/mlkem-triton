@@ -20,7 +20,7 @@ import torch
 from ..devices import resolve_device
 from ..primitives import sha2 as _sha2
 from . import kernels as _kernels
-from .params import LMSSet, M, N, get
+from .params import LMSSet, get
 
 D_PBLC = 0x8080
 D_MESG = 0x8181
@@ -66,8 +66,8 @@ class Verifier:
             raise ValueError(f"the level-0 LMS public key must be {self.set.pk_size} bytes")
 
     # ---------------- plumbing ----------------
-    def _hash(self, data: torch.Tensor) -> torch.Tensor:
-        """SHA-256 of each row of `data` (unpadded) -> [rows, 32] uint8."""
+    def _hash(self, data: torch.Tensor, nbytes: int = 32) -> torch.Tensor:
+        """SHA-256 of each row of `data` (unpadded), truncated to `nbytes` -> [rows, nbytes]."""
         rows, length = data.shape
         blocks = -(-(length + 9) // 64)
         body = torch.zeros((rows, blocks * 64), dtype=torch.uint8, device=self.device)
@@ -80,13 +80,14 @@ class Verifier:
         _sha2.sha_absorb(
             _sha2.iv_tensor(256, self.device), body.view(torch.int32), out, rows, 256, blocks
         )
-        return out.view(torch.uint8)
+        return out.view(torch.uint8)[:, :nbytes]
 
     def _chains(self, qint, ident, ys, s: LMSSet, starts) -> torch.Tensor:
-        """Run every LM-OTS chain to its end: [rows, p, 32] uint8."""
+        """Run every LM-OTS chain to its end: [rows, p, n] uint8."""
         rows = ys.shape[0]
         dev = self.device
-        words = ys.reshape(rows * s.p, N).contiguous().view(torch.int32)
+        nw = s.n // 4
+        words = ys.reshape(rows * s.p, s.n).contiguous().view(torch.int32)
         ident_words = (
             ident.contiguous().view(torch.int32).repeat_interleave(s.p, dim=0).contiguous()
         )
@@ -104,10 +105,27 @@ class Verifier:
             cidx[order].contiguous(),
             start_flat[order],
             s.w,
+            nw,
         )
         out = torch.empty_like(words)
         out[order] = sorted_words
-        return out.view(torch.uint8).reshape(rows, s.p, N)
+        return out.view(torch.uint8).reshape(rows, s.p, s.n)
+
+    def _header_ok(self, sigs: torch.Tensor, s: LMSSet) -> torch.Tensor:
+        """The type words and `q` must match the public key (ACVP's "modify header" cases)."""
+        rows = sigs.shape[0]
+        q = sigs[:, 0:4].to(torch.int64)
+        qint = q[:, 0] << 24 | q[:, 1] << 16 | q[:, 2] << 8 | q[:, 3]
+        ots = sigs[:, 4:8].to(torch.int64)
+        ots_type = ots[:, 0] << 24 | ots[:, 1] << 16 | ots[:, 2] << 8 | ots[:, 3]
+        off = 4 + s.ots_sig_size
+        lms = sigs[:, off : off + 4].to(torch.int64)
+        lms_type = lms[:, 0] << 24 | lms[:, 1] << 16 | lms[:, 2] << 8 | lms[:, 3]
+        ok = torch.ones(rows, dtype=torch.bool, device=self.device)
+        ok &= qint < (1 << s.h)
+        ok &= ots_type == s.ots_type
+        ok &= lms_type == s.lms_type
+        return ok
 
     # ---------------- one LMS level ----------------
     def _lms(
@@ -120,34 +138,36 @@ class Verifier:
         qbytes = sigs[:, 0:4].to(torch.int64)
         qint = qbytes[:, 0] << 24 | qbytes[:, 1] << 16 | qbytes[:, 2] << 8 | qbytes[:, 3]
         ots = sigs[:, 4 : 4 + s.ots_sig_size]
-        c = ots[:, 4 : 4 + N]
-        ys = ots[:, 4 + N :].reshape(rows, s.p, N)
-        path = sigs[:, 4 + s.ots_sig_size + 4 :].reshape(rows, s.h, M)
+        c = ots[:, 4 : 4 + s.n]
+        ys = ots[:, 4 + s.n :].reshape(rows, s.p, s.n)
+        path = sigs[:, 4 + s.ots_sig_size + 4 :].reshape(rows, s.h, s.m)
 
         # Q = H(I || u32(q) || u16(D_MESG) || C || msg)
         qh = self._hash(
-            torch.cat([ident, sigs[:, 0:4], _const_rows(rows, D_MESG, dev), c, msgs], dim=1)
+            torch.cat([ident, sigs[:, 0:4], _const_rows(rows, D_MESG, dev), c, msgs], dim=1), s.n
         )
         digits = torch.cat([qh, torch.zeros((rows, 2), dtype=torch.uint8, device=dev)], dim=1)
-        per = _coef_rows(qh, s.w, (N * 8) // s.w)
+        per = _coef_rows(qh, s.w, (s.n * 8) // s.w)
         cksm = ((1 << s.w) - 1 - per).sum(dim=1) << s.ls
-        digits[:, N] = (cksm >> 8).to(torch.uint8) & 0xFF
-        digits[:, N + 1] = (cksm & 0xFF).to(torch.uint8)
+        digits[:, s.n] = (cksm >> 8).to(torch.uint8) & 0xFF
+        digits[:, s.n + 1] = (cksm & 0xFF).to(torch.uint8)
 
         zs = self._chains(qint, ident, ys, s, _coef_rows(digits, s.w, s.p))
 
         # Kc = H(I || u32(q) || u16(D_PBLC) || z[0] || ... || z[p-1])
         kc = self._hash(
             torch.cat(
-                [ident, sigs[:, 0:4], _const_rows(rows, D_PBLC, dev), zs.reshape(rows, s.p * N)],
+                [ident, sigs[:, 0:4], _const_rows(rows, D_PBLC, dev), zs.reshape(rows, s.p * s.n)],
                 dim=1,
-            )
+            ),
+            s.n,
         )
 
         # the tree: leaf hash, then h interior hashes against the sibling in `path`
         node = (1 << s.h) + qint
         root = self._hash(
-            torch.cat([ident, _u32_rows(node, rows), _const_rows(rows, D_LEAF, dev), kc], dim=1)
+            torch.cat([ident, _u32_rows(node, rows), _const_rows(rows, D_LEAF, dev), kc], dim=1),
+            s.m,
         )
         for k in range(s.h):
             parent = node >> 1
@@ -159,7 +179,8 @@ class Verifier:
                 torch.cat(
                     [ident, _u32_rows(parent, rows), _const_rows(rows, D_INTR, dev), left, right],
                     dim=1,
-                )
+                ),
+                s.m,
             )
             node = parent
         return root
@@ -206,8 +227,9 @@ class Verifier:
             sig_t = all_sigs[:, sig_off : sig_off + s.sig_size]
             # the signed public key follows the LMS signature in the HSS blob
             next_pub = all_sigs[:, sig_off + s.sig_size : sig_off + s.sig_size + s.pk_size]
+            ok &= self._header_ok(sig_t, s)
             root = self._lms(cur_pub, next_pub, sig_t, s)
-            ok &= (root == cur_pub[:, 24 : 24 + M]).all(dim=1)
+            ok &= (root == cur_pub[:, 24 : 24 + s.m]).all(dim=1)
             cur_pub = next_pub
             sig_off += s.sig_size + s.pk_size
             if not bool(ok.any()):
@@ -215,6 +237,7 @@ class Verifier:
 
         s = get(*struct.unpack(">II", cur_pub[0, :8].cpu().numpy().tobytes()))
         sig_t = all_sigs[:, sig_off:]
+        ok &= self._header_ok(sig_t, s)
         root = self._lms(cur_pub, msg_t, sig_t, s)
-        ok &= (root == cur_pub[:, 24 : 24 + M]).all(dim=1)
+        ok &= (root == cur_pub[:, 24 : 24 + s.m]).all(dim=1)
         return ok.cpu().numpy()

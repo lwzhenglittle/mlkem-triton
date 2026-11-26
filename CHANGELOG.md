@@ -21,6 +21,18 @@ A new stateful-hash-based scheme next to SLH-DSA, verification only:
 Measured at batch 4096: **8.5 µs/signature** for RFC case 1 (2 levels, H5/W8) and **7.1 µs** for
 case 2, roughly 1 Ghash/s of SHA-256 compression.
 
+### Added — the SHA-256/192 family and the ACVP LMS vectors
+
+`params.py` now carries the second SP 800-208 family: `n = m = 24` (SHA-256 truncated to 192 bits),
+type codes 5–8 for LM-OTS and 10–14 for LMS, `p = 200/101/51/26` and `ls = 8/6/4/0`. The reference,
+the verifier and the chain kernel are parameterised by the set instead of assuming 32-byte values
+(the kernel assembles a 47-byte message block instead of 55).
+
+The NIST ACVP `LMS-sigVer` vectors (both the 1.0 and the SP 800-208 files) are bundled under
+`data/acvp-lms/` and pass **16/16 on the device and in the reference**. They include the
+"modify signature header" cases, which is what forced explicit validation of the two type words and
+of `q < 2^h` in the device path — those checks are now part of `_header_ok`.
+
 ### Tried and rejected — fusing the WOTS+ chain into one kernel
 
 The obvious next optimisation was to fuse SLH-DSA's 15 chain steps into one kernel (one launch per

@@ -220,14 +220,16 @@ LMS trees where each level signs the next level's public key. Verification has n
 rewind hazard — the statefulness that makes these schemes awkward to *sign* with does not touch the
 verifier.
 
-Implemented: **the RFC 8554 SHA-256 parameter sets** (heights H5–H25 × Winternitz factors W1/W2/W4/
-W8, 20 combinations) at any HSS depth up to 8, including hierarchies that mix parameter sets. The
+Implemented: **both SHA-256 families from SP 800-208** — SHA-256/256 (`n = m = 32`) and
+SHA-256/192 (`n = m = 24`), heights H5–H25 × Winternitz factors W1/W2/W4/W8, 40 combinations — at
+any HSS depth up to 8, including hierarchies that mix parameter sets. The
 SHAKE-256 variants from SP 800-208 are **not** implemented: the standard still lists their numeric
 type codes as TBD, so there is nothing interoperable to encode.
 
 | gate | result |
 |---|---|
 | RFC 8554 test vectors (two HSS cases, one of them mixed H5/W8 + H10/W4) | **2/2**, device and reference |
+| NIST ACVP `LMS-sigVer` vectors (SHA-256/192 sets, valid and header-tampered) | **16/16**, device and reference |
 | reference sign → device verify round-trips, all four Winternitz factors | **pass** |
 | device vs reference on fresh keys, two-level HSS, tamper and wrong-message cases | **pass** |
 

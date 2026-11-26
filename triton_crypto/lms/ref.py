@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import struct
 
-from .params import LMS_TYPES, OTS_TYPES, LMSSet, M, N, get
+from .params import LMS_TYPES, OTS_TYPES, LMSSet, get
 
 D_PBLC = 0x8080
 D_MESG = 0x8181
@@ -26,10 +26,19 @@ def u16(v: int) -> bytes:
 
 
 def _h(*parts: bytes) -> bytes:
+    """SHA-256, full length (32 bytes) — used where the set has n = m = 32."""
     h = hashlib.sha256()
     for part in parts:
         h.update(part)
     return h.digest()
+
+
+def _hn(nbytes: int, *parts: bytes) -> bytes:
+    """SHA-256 truncated to `nbytes` — the hash of the SHA-256/192 sets."""
+    h = hashlib.sha256()
+    for part in parts:
+        h.update(part)
+    return h.digest()[:nbytes]
 
 
 def coef(s: bytes, i: int, w: int) -> int:
@@ -47,49 +56,47 @@ def checksum(q: bytes, w: int, n: int, ls: int) -> int:
 
 
 # ---------------- LM-OTS (Alg. 4b) ----------------
-def ots_public_key(ots_type: int, ident: bytes, q: int, msg: bytes, sig: bytes) -> bytes | None:
+def ots_public_key(s: LMSSet, ident: bytes, q: int, msg: bytes, sig: bytes) -> bytes | None:
     """Recompute `Kc` from an LM-OTS signature; `sig` includes the 4-byte type word."""
-    if len(sig) < 4:
+    n, w, p, ls = s.n, s.w, s.p, s.ls
+    if len(sig) < 4 or struct.unpack(">I", sig[:4])[0] != s.ots_type:
         return None
-    if struct.unpack(">I", sig[:4])[0] != ots_type:
+    if len(sig) != 4 + n * (p + 1):
         return None
-    w, p, ls = OTS_TYPES[ots_type]
-    if len(sig) != 4 + N * (p + 1):
-        return None
-    c = sig[4 : 4 + N]
-    ys = sig[4 + N :]
+    c = sig[4 : 4 + n]
+    ys = sig[4 + n :]
     qb = u32(q)
-    q_digest = _h(ident, qb, u16(D_MESG), c, msg)
-    codes = q_digest + u16(checksum(q_digest, w, N, ls))
+    q_digest = _hn(n, ident, qb, u16(D_MESG), c, msg)
+    codes = q_digest + u16(checksum(q_digest, w, n, ls))
     zs = []
     for i in range(p):
         a = coef(codes, i, w)
-        tmp = ys[i * N : (i + 1) * N]
+        tmp = ys[i * n : (i + 1) * n]
         for j in range(a, (1 << w) - 1):
-            tmp = _h(ident, qb, u16(i), bytes([j]), tmp)
+            tmp = _hn(n, ident, qb, u16(i), bytes([j]), tmp)
         zs.append(tmp)
-    return _h(ident, qb, u16(D_PBLC), *zs)
+    return _hn(n, ident, qb, u16(D_PBLC), *zs)
 
 
 # ---------------- key generation from a seed (Appendix A) ----------------
-def ots_private(ident: bytes, q: int, seed: bytes, p: int) -> list[bytes]:
+def ots_private(s: LMSSet, ident: bytes, q: int, seed: bytes) -> list[bytes]:
     """`x_q[i] = H(I || u32(q) || u16(i) || 0xff || SEED)` — Appendix A."""
-    return [_h(ident, u32(q), u16(i), b"\xff", seed) for i in range(p)]
+    return [_hn(s.n, ident, u32(q), u16(i), b"\xff", seed) for i in range(s.p)]
 
 
-def ots_public_from_private(ident: bytes, q: int, xs: list[bytes], w: int) -> bytes:
+def ots_public_from_private(s: LMSSet, ident: bytes, q: int, xs: list[bytes]) -> bytes:
     qb = u32(q)
     zs = []
     for i, x in enumerate(xs):
         tmp = x
-        for j in range((1 << w) - 1):
-            tmp = _h(ident, qb, u16(i), bytes([j]), tmp)
+        for j in range((1 << s.w) - 1):
+            tmp = _hn(s.n, ident, qb, u16(i), bytes([j]), tmp)
         zs.append(tmp)
-    return _h(ident, qb, u16(D_PBLC), *zs)
+    return _hn(s.n, ident, qb, u16(D_PBLC), *zs)
 
 
 def leaf_from_seed(ident: bytes, q: int, seed: bytes, s: LMSSet) -> bytes:
-    return ots_public_from_private(ident, q, ots_private(ident, q, seed, s.p), s.w)
+    return ots_public_from_private(s, ident, q, ots_private(s, ident, q, seed))
 
 
 def keygen(seed: bytes, ident: bytes, s: LMSSet) -> tuple[bytes, list[bytes]]:
@@ -100,9 +107,9 @@ def keygen(seed: bytes, ident: bytes, s: LMSSet) -> tuple[bytes, list[bytes]]:
     for q in range(base):
         kc = leaf_from_seed(ident, q, seed, s)
         leaves.append(kc)
-        nodes[base + q] = _h(ident, u32(base + q), u16(D_LEAF), kc)
+        nodes[base + q] = _hn(s.m, ident, u32(base + q), u16(D_LEAF), kc)
     for node in range(base - 1, 0, -1):
-        nodes[node] = _h(ident, u32(node), u16(D_INTR), nodes[2 * node], nodes[2 * node + 1])
+        nodes[node] = _hn(s.m, ident, u32(node), u16(D_INTR), nodes[2 * node], nodes[2 * node + 1])
     return u32(s.lms_type) + u32(s.ots_type) + ident + nodes[1], leaves
 
 
@@ -112,19 +119,21 @@ def lms_sign(pub: bytes, seed: bytes, q: int, msg: bytes, s: LMSSet, alpha: byte
     base = 1 << s.h
     nodes = {}
     for j in range(base):
-        nodes[base + j] = _h(ident, u32(base + j), u16(D_LEAF), leaf_from_seed(ident, j, seed, s))
+        nodes[base + j] = _hn(
+            s.m, ident, u32(base + j), u16(D_LEAF), leaf_from_seed(ident, j, seed, s)
+        )
     for node in range(base - 1, 0, -1):
-        nodes[node] = _h(ident, u32(node), u16(D_INTR), nodes[2 * node], nodes[2 * node + 1])
-    xs = ots_private(ident, q, seed, s.p)
+        nodes[node] = _hn(s.m, ident, u32(node), u16(D_INTR), nodes[2 * node], nodes[2 * node + 1])
+    xs = ots_private(s, ident, q, seed)
     qb = u32(q)
-    digits = _h(ident, qb, u16(D_MESG), alpha, msg) + b"\x00\x00"
-    digits = digits[:-2] + u16(checksum(digits[:-2], s.w, N, s.ls))
+    qd = _hn(s.n, ident, qb, u16(D_MESG), alpha, msg)
+    digits = qd + u16(checksum(qd, s.w, s.n, s.ls))
     ys = []
     for i in range(s.p):
         a = coef(digits, i, s.w)
         tmp = xs[i]
         for j in range(a):
-            tmp = _h(ident, qb, u16(i), bytes([j]), tmp)
+            tmp = _hn(s.n, ident, qb, u16(i), bytes([j]), tmp)
         ys.append(tmp)
     # path[i] is the sibling of the node on the way up: ((base+q) >> i) ^ 1
     path = b"".join(nodes[((base + q) >> i) ^ 1] for i in range(s.h))
@@ -165,10 +174,13 @@ def lms_verify(pub: bytes, msg: bytes, sig: bytes) -> bool:
     lms_type, ots_type = struct.unpack(">II", pub[:8])
     if lms_type not in _LMS_H or ots_type not in _OTS_T:
         return False
-    s = get(lms_type, ots_type)
+    try:
+        s = get(lms_type, ots_type)
+    except ValueError:
+        return False
     if len(pub) != s.pk_size:
         return False
-    ident, t1 = pub[8:24], pub[24 : 24 + M]
+    ident, t1 = pub[8:24], pub[24 : 24 + s.m]
     if len(sig) < 8:
         return False
     q = struct.unpack(">I", sig[:4])[0]
@@ -187,18 +199,18 @@ def lms_verify(pub: bytes, msg: bytes, sig: bytes) -> bool:
     if q >= (1 << s.h) or len(sig) != s.sig_size:
         return False
     path = sig[end + 4 :]
-    kc = ots_public_key(ots_type, ident, q, msg, ots_sig)
+    kc = ots_public_key(s, ident, q, msg, ots_sig)
     if kc is None:
         return False
     node = (1 << s.h) + q
-    tmp = _h(ident, u32(node), u16(D_LEAF), kc)
+    tmp = _hn(s.m, ident, u32(node), u16(D_LEAF), kc)
     for i in range(s.h):
         parent = node // 2
-        auth = path[i * M : (i + 1) * M]
+        auth = path[i * s.m : (i + 1) * s.m]
         if node & 1:
-            tmp = _h(ident, u32(parent), u16(D_INTR), auth, tmp)
+            tmp = _hn(s.m, ident, u32(parent), u16(D_INTR), auth, tmp)
         else:
-            tmp = _h(ident, u32(parent), u16(D_INTR), tmp, auth)
+            tmp = _hn(s.m, ident, u32(parent), u16(D_INTR), tmp, auth)
         node = parent
     return tmp == t1
 

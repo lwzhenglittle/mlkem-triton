@@ -25,7 +25,9 @@ from ..primitives.sha2 import _k_tensor
 KERNELS: dict[int, object] = {}
 
 
-def gen_source(n_rows_hint: int = 0) -> str:
+def gen_source(nw: int = 8) -> str:
+    nbytes = 4 * nw
+    msglen = 16 + 4 + 2 + 1 + nbytes
     L = [
         "import triton",
         "import triton.language as tl",
@@ -42,7 +44,7 @@ def gen_source(n_rows_hint: int = 0) -> str:
         "",
         "@triton.jit",
         "def lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS,",
-        "                     BLOCK: tl.constexpr):",
+        "                     NW: tl.constexpr, BLOCK: tl.constexpr):",
         "    pid = tl.program_id(0)",
         "    row = pid * BLOCK + tl.arange(0, BLOCK)",
         "    m = row < rows",
@@ -55,9 +57,9 @@ def gen_source(n_rows_hint: int = 0) -> str:
             f"    iw{k} = _bs32(tl.load(IW + row * 4 + {k}, mask=m, other=0).to(tl.uint32,"
             f" bitcast=True))"
         )
-    for k in range(8):
+    for k in range(nw):
         L.append(
-            f"    v{k} = _bs32(tl.load(VALUE + row * 8 + {k}, mask=m, other=0).to(tl.uint32,"
+            f"    v{k} = _bs32(tl.load(VALUE + row * {nw} + {k}, mask=m, other=0).to(tl.uint32,"
             f" bitcast=True))"
         )
     L.append("    zero_v = tl.zeros((BLOCK,), dtype=tl.uint32)")
@@ -71,11 +73,12 @@ def gen_source(n_rows_hint: int = 0) -> str:
     L.append("        w3 = iw3")
     L.append("        w4 = qw")
     L.append("        w5 = (cidx << 16) | (jb << 8) | (v0 >> 24)")
-    for k in range(1, 8):
+    for k in range(1, nw):
         L.append(f"        w{5 + k} = (v{k - 1} << 8) | (v{k} >> 24)")
-    L.append("        w13 = (v7 << 8) | tl.full((BLOCK,), 0x80, tl.uint32)")
-    L.append("        w14 = tl.zeros((BLOCK,), dtype=tl.uint32)")
-    L.append("        w15 = tl.full((BLOCK,), 440, tl.uint32)")
+    L.append(f"        w{5 + nw} = (v{nw - 1} << 8) | tl.full((BLOCK,), 0x80, tl.uint32)")
+    for i in range(6 + nw, 15):
+        L.append(f"        w{i} = tl.zeros((BLOCK,), dtype=tl.uint32)")
+    L.append(f"        w15 = tl.full((BLOCK,), {msglen * 8}, tl.uint32)")
     L.append("        iv0 = tl.load(IV + 0).to(tl.uint32, bitcast=True) | zero_v")
     L.append("        a0 = iv0")
     L.append("        iv1 = tl.load(IV + 1).to(tl.uint32, bitcast=True) | zero_v")
@@ -110,20 +113,21 @@ def gen_source(n_rows_hint: int = 0) -> str:
     for i in range(15):
         L.append(f"            w{i} = w{i + 1}")
     L.append("            w15 = nw")
-    for k in range(8):
+    for k in range(nw):
         L.append(f"        v{k} = tl.where(active, a{k} + iv{k}, v{k})")  # feed-forward
     L.append("        j = j + 1")
-    for k in range(8):
+    for k in range(nw):
         L.append(
-            f"    tl.store(VALUE + row * 8 + {k}, _bs32(v{k}).to(tl.int32, bitcast=True), mask=m)"
+            f"    tl.store(VALUE + row * {nw} + {k}, _bs32(v{k}).to(tl.int32, bitcast=True),"
+            f" mask=m)"
         )
     return "\n".join(L) + "\n"
 
 
-def _compile():
-    if "k" in KERNELS:
-        return KERNELS["k"]
-    src = gen_source()
+def _compile(nw: int = 8):
+    if nw in KERNELS:
+        return KERNELS[nw]
+    src = gen_source(nw)
     tag = hashlib.sha256(src.encode()).hexdigest()[:16]
     path = Path(tempfile.gettempdir()) / f"_lms_chain_{tag}.py"
     if not path.exists():
@@ -131,11 +135,11 @@ def _compile():
     spec = importlib.util.spec_from_file_location(f"_lms_chain_{tag}", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    KERNELS["k"] = mod.lms_chain_kernel
+    KERNELS[nw] = mod.lms_chain_kernel
     return mod.lms_chain_kernel
 
 
-def chains(value, ident_words, q_words, cidx, start, w: int, block: int = 128):
+def chains(value, ident_words, q_words, cidx, start, w: int, nw: int = 8, block: int = 128):
     """Advance every (signature, chain) row from `start` to `w-1`, in place.
 
     `value` is [rows, 8] int32 (the LM-OTS `y[i]` words, updated in place), `ident_words` [rows, 4],
@@ -144,7 +148,7 @@ def chains(value, ident_words, q_words, cidx, start, w: int, block: int = 128):
     import triton
 
     rows = value.shape[0]
-    kern = _compile()
+    kern = _compile(nw)
     kern[(triton.cdiv(rows, block),)](
         value,
         ident_words,
@@ -155,6 +159,7 @@ def chains(value, ident_words, q_words, cidx, start, w: int, block: int = 128):
         _iv(value.device),
         rows,
         (1 << w) - 1,
+        NW=nw,
         BLOCK=block,
         num_warps=4,
     )
