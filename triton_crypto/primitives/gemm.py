@@ -129,3 +129,54 @@ def gemm_int8_torch(a, b, device=None, out=None, tile=None):
         num_stages=cfg["num_stages"],
     )
     return out
+
+
+def _reduce_mask(k: int) -> int:
+    """`x^k mod 0x11B` as a bit mask over `x^0..x^7`, for `0 <= k <= 14`."""
+    m = 1 << k
+    while m & ~0xFF:
+        top = m.bit_length() - 1
+        m ^= 1 << top
+        m ^= 0x1B << (top - 8)  # x^top = x^(top-8) * (x^4 + x^3 + x + 1)
+    return m
+
+
+def gf2_8_matmul_torch(a, b, device=None, planes=None):
+    """Product in `GF(2^8)` with the AES polynomial, assembled from bit-plane int8 GEMMs.
+
+    For binary operands an int8 GEMM *is* a `GF(2)` matrix product, so an `GF(2^8)` product is
+    64 of them -- one per pair of bit planes -- XOR-ed through the reduction masks. This is the
+    strategy `PLAN_ffgemm.md` is built on, and the point of exposing it here is to have an
+    end-to-end number: what an `GF(2^8)` multiply actually costs when the matrix unit does the
+    bit work.
+
+    `a` and `b` are `[M, K]` and `[K, N]` arrays of byte values. Pass `planes=1` to run only the
+    low bit plane, which is what a caller who knows its operands are binary would use.
+    """
+    import torch
+
+    from .. import devices as _devices
+
+    dev = _devices.resolve_device(device)
+    a = np.asarray(a, dtype=np.uint16)
+    b = np.asarray(b, dtype=np.uint16)
+    m, k = a.shape
+    k2, n = b.shape
+    if k != k2:
+        raise ValueError(f"shapes {a.shape} and {b.shape} are not a product")
+    nplanes = 8 if planes is None else planes
+    out = torch.zeros((m, n), dtype=torch.int32, device=dev)
+    a_planes = [torch.as_tensor(((a >> i) & 1).astype(np.int8), device=dev) for i in range(nplanes)]
+    b_planes = [torch.as_tensor(((b >> j) & 1).astype(np.int8), device=dev) for j in range(nplanes)]
+    for i in range(nplanes):
+        for j in range(nplanes):
+            prod = gemm_int8_torch(a_planes[i], b_planes[j], device=dev)
+            mask = _reduce_mask(i + j)
+            if mask == 0:
+                continue
+            # the mask is a set of bits of x^(i+j) shifted back into x^0..x^7, so the plane's
+            # entries are XOR-ed into every bit position the mask names
+            for bit in range(8):
+                if mask >> bit & 1:
+                    out ^= (prod & 1) << bit
+    return out

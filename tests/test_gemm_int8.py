@@ -11,7 +11,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from triton_crypto.primitives.gemm import gemm_int8_np, gemm_int8_torch
+from triton_crypto.primitives.gemm import (
+    gemm_int8_np,
+    gemm_int8_torch,
+    gf2_8_matmul_torch,
+)
 
 
 @pytest.mark.parametrize(
@@ -147,3 +151,31 @@ def test_bit_planes_match_the_reference_elementwise():
     a = rng.integers(0, 2, (16, 16)).astype(np.int8)
     b = rng.integers(0, 2, (16, 16)).astype(np.int8)
     assert np.array_equal(gemm_int8_torch(a, b).cpu().numpy(), gemm_int8_np(a, b))
+
+
+def test_gf2_8_matmul_agrees_with_the_bit_plane_reference():
+    """`gf2_8_matmul_torch` assembles 64 int8 GEMMs; this checks the assembly, not the GEMM.
+
+    The reference here is the same construction done in numpy, which is independent of the device
+    path (counts instead of XOR, one `@` per plane pair), and `test_bit_planes_compute_a_gf2_8_product`
+    independently pins the construction itself against a scalar `_gmul` at 8x8.
+    """
+    n = 32
+    rng = np.random.default_rng(11)
+    a = rng.integers(0, 256, (n, n), dtype=np.uint16)
+    b = rng.integers(0, 256, (n, n), dtype=np.uint16)
+    want = np.zeros((n, n), dtype=np.uint16)
+    for i in range(8):
+        for j in range(8):
+            prod = ((a >> i) & 1).astype(np.uint16) @ ((b >> j) & 1).astype(np.uint16)
+            mask = _reduce_mask(i + j)
+            for bit in range(8):
+                if mask >> bit & 1:
+                    want ^= ((prod & 1) << bit).astype(np.uint16)
+    got = gf2_8_matmul_torch(a, b).cpu().numpy().astype(np.uint16)
+    assert np.array_equal(got, want)
+
+
+def test_gf2_8_matmul_rejects_a_bad_inner_dimension():
+    with pytest.raises(ValueError, match="not a product"):
+        gf2_8_matmul_torch(np.zeros((4, 5), np.uint16), np.zeros((6, 3), np.uint16))

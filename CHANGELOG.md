@@ -346,6 +346,21 @@ with a fresh keypair and nonce per run, and this build offers no way to freeze i
 -1). The module docstring now says so, points at the hunting probe, and records what it found. A
 test that cannot reproduce its own failure should say so out loud rather than look green.
 
+### The GF(2^8) product gets a number: 15.3 GMAC/s, 1/55 of the int8 rate
+
+`PLAN_ffgemm.md` assumes the matrix unit can carry a finite-field product via bit planes. That
+assumption now has a measurement, because `primitives/gemm.py` exposes the construction as
+`gf2_8_matmul_torch` (64 int8 GEMMs XOR-ed through the reduction masks) and
+`probes/gf2-8-matmul-probe.py` times it end to end.
+
+At 512^3: one int8 GEMM 843 GMAC/s, the **GF(2^8) product 15.3 GMAC/s** (55x, not 64x -- the
+reduction masks fold some planes), and the same 64-plane recipe in numpy at 0.024 GMAC/s. The
+device is 636x faster than numpy there, which is an *upper bound* on its advantage rather than the
+advantage: numpy has no int8 GEMM at all, while a VNNI-tuned CPU library would be much closer.
+
+What it rules out is the optimistic reading of the 3.96 TMAC/s int8 figure: the field product costs
+about 55 int8 multiplies per field multiply, before any field-specific overhead.
+
 ### The NTT tail collapse is not expressible in Triton (measured, not assumed)
 
 `docs/benchmarks.md` §22 proposed collapsing the last stages (`m <= 64`) into one register-resident
