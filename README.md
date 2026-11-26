@@ -19,7 +19,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 |---|---|
 | `primitives.sponge` | Keccak-f[1600] and the sponge: SHA3-224/256/384/512, SHAKE128/256, any rate, batched |
 | `primitives.sha2` | SHA-256 / SHA-512 compression |
-| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`; in-register to N = 1024, multi-pass to 2^20 |
+| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`; in-register to N = 1024, multi-pass to 2^20 (**2.2 ms**, 2.4x sixteen CPU processes) |
 | `primitives.fields` | prime-field arithmetic: the 32-bit Montgomery product, shared by every modular primitive |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |

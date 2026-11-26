@@ -825,9 +825,33 @@ per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **10.81 ms** | 69.9 ms | 5.25 ms | **6.46x** | 0.49x |
+| 2^20 forward NTT | **2.22 ms** | 69.9 ms | 5.25 ms | **31.5x** | **2.37x** |
 | traffic (20 x 8 MB) | 160 MB | | | | |
-| achieved | 15.5 GB/s (7% of copy) | 2.4 GB/s | 30 GB/s | | |
+| achieved | 75.7 GB/s (35% of copy) | 2.4 GB/s | 30 GB/s | | |
+
+**This is the only row in the repository whose `vs 16P` is above 1.** Every other primitive is
+ALU-limited and loses to sixteen cores by 2-16x; this one moves 160 MB per transform
+(`≈copy 479 MB`, i.e. one transform costs as long as copying 479 MB) and the CPU cannot match
+that through 20 serial passes of its own.
+
+### 22.1 Getting from 10.8 ms to 2.2 ms (5x, three changes)
+
+The first correct version took 10.81 ms and was 7x off a naive "160 MB at copy bandwidth"
+roofline. Three fixes, in order of what they were worth:
+
+1. **The pre/post twiddle tables were rebuilt on every call** -- a 2^20-element numpy pass with a
+   `powmod`-style loop, costing several milliseconds, i.e. more than the transform it fed. They
+   are now built in log n passes and cached per instance and per device (1686 ms -> 10.8 ms
+   before this round's other fixes, then 7.8 -> 2.2).
+2. **The block/j split did an int64 division per element per pass** (`offs // half`, with `half`
+   a runtime value, so LLVM cannot strength-reduce it). `half` is always a power of two, so it is
+   a shift and a mask now. A `(block, tile)` grid was tried instead and was *much* worse: the
+   late stages have `half = 1`, so that grid degenerates into 524288 one-element programs.
+3. **Tile 1024, 8 warps** rather than 4096/4: the swept table runs 41 ms (2-D grid) / 3.55 ms
+   (2048/4) / **1.87 ms** (1024/8) for the pass sequence alone.
+
+What is left: 2.22 ms is 3x off the 0.74 ms traffic roofline, and 20 radix-2 passes are the
+reason. Radix-4 (10 passes) and radix-8 (7) are the next step and should land near 1.2-1.5 ms.
 
 The CPU rival is `benchmarks/ntt_large_cpu_rival.c`: the same Stockham algorithm in C with
 `gcc -O3 -march=native -fopenmp`, and 16P is sixteen *processes* with `OMP_NUM_THREADS=1` (one

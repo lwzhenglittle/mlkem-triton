@@ -94,6 +94,26 @@ GPU: ten rounds x four words x four lookups = 160 gathers per block, all into a 
 - FIPS-197 C.1, the all-zero vector, and `openssl enc -aes-128-ctr` are the three oracles; all
   three are in `tests/test_aes*.py`.
 
+### The 2^20-point NTT gets 5x faster, and becomes the one row that beats sixteen processes
+
+The first correct version took 10.81 ms. It now takes **2.22 ms**: **31.5x one CPU core and
+2.37x sixteen processes** -- the only `vs 16P` above 1 in the whole primitive table.
+
+Three fixes, each worth knowing:
+
+- **The pre/post twiddle tables were rebuilt on every call.** A 2^20-element numpy pass costing
+  several milliseconds -- more than the transform it fed. Built in log n passes and cached per
+  instance and per device.
+- **The block/j split did an int64 division per element per pass** (`offs // half`, `half` a
+  runtime value, so no strength reduction). `half` is a power of two: it is a shift and a mask
+  now. A `(block, tile)` grid was tried first and was *much* worse -- the late stages have
+  `half = 1`, so it degenerates into 524288 one-element programs.
+- **Tile 1024 with 8 warps**, swept: 3.55 ms at 2048/4, 1.87 ms at 1024/8 for the pass sequence.
+
+The result is the answer to the project's opening question. ALU-bound primitives lose to sixteen
+cores (0.06-0.5x); bandwidth-bound ones do not, because sixteen cores cannot match 160 MB of
+traffic per useful operation.
+
 ### The 2^20-point NTT: the first bandwidth-bound primitive
 
 `primitives/ntt/large.py` — a multi-pass Stockham transform, one launch per stage, for sizes the

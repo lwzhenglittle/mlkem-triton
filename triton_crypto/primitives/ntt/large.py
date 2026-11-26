@@ -29,19 +29,28 @@ import triton.language as tl
 
 __all__ = ["LargeNTT", "large_ntt_np", "large_ntt_torch"]
 
-STAGE_BLK = 4096
+STAGE_BLK = 1024
+STAGE_WARPS = 8
 
 
 @triton.jit
-def _stage_kernel(X, Y, N, M, W, Q: tl.constexpr, FORWARD: tl.constexpr, BLK: tl.constexpr):
-    """One Stockham pass. `M` is the block length of this stage (a runtime value)."""
+def _stage_kernel(
+    X, Y, M, TOTAL, LOG_HALF, W, Q: tl.constexpr, FORWARD: tl.constexpr, BLK: tl.constexpr
+):
+    """One Stockham pass over a flat butterfly grid.
+
+    `half` is always a power of two, so the block/j split is a shift and a mask rather than the
+    `offs // half` int64 division the first version did -- 2^19 divisions per pass, 20 passes,
+    with `half` a runtime value (LLVM cannot strength-reduce that). A `(block, tile)` grid was
+    tried instead: correct and much slower, because the late stages have half = 1 and the grid
+    becomes 524288 one-element programs.
+    """
     pid = tl.program_id(0)
     offs = pid * BLK + tl.arange(0, BLK)
-    half = M // 2
-    total = (N // M) * half  # butterflies in this stage
-    mask = offs < total
-    blk = offs // half
-    j = offs - blk * half
+    mask = offs < TOTAL
+    blk = offs >> LOG_HALF
+    j = offs & ((1 << LOG_HALF) - 1)
+    half = 1 << LOG_HALF
     base = blk * M
     u = tl.load(X + base + j, mask=mask, other=0).to(tl.int64)
     v = tl.load(X + base + half + j, mask=mask, other=0).to(tl.int64)
@@ -123,11 +132,18 @@ class LargeNTT:
         return pw[:n]
 
     def pre(self) -> np.ndarray:
-        return self._powers(self.psi, self.n, self.q)
+        """Cached: rebuilding it costs a 2^20-element numpy pass, several times the transform."""
+        cache = self.__dict__.setdefault("_pre_cache", {})
+        if "pre" not in cache:
+            cache["pre"] = self._powers(self.psi, self.n, self.q)
+        return cache["pre"]
 
     def post(self) -> np.ndarray:
-        inv_psi = pow(self.psi, -1, self.q)
-        return self._powers(inv_psi, self.n, self.q) * pow(self.n, -1, self.q) % self.q
+        cache = self.__dict__.setdefault("_pre_cache", {})
+        if "post" not in cache:
+            inv_psi = pow(self.psi, -1, self.q)
+            cache["post"] = self._powers(inv_psi, self.n, self.q) * pow(self.n, -1, self.q) % self.q
+        return cache["post"]
 
     # ------------------------------------------------------------------ numpy
 
@@ -173,10 +189,19 @@ class LargeNTT:
         tables = self.fwd_tables() if direction == "fwd" else self.inv_tables()
         for tw in tables:
             half = tw.size
-            total = (self.n // (2 * half)) * half
+            log_half = half.bit_length() - 1
             w = torch.as_tensor(tw, dtype=torch.int32, device=dev)
-            _stage_kernel[(triton.cdiv(total, STAGE_BLK),)](
-                x, buf, self.n, 2 * half, w, Q=q, FORWARD=(direction == "fwd"), BLK=STAGE_BLK
+            _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
+                x,
+                buf,
+                2 * half,
+                self.n // 2,
+                log_half,
+                w,
+                Q=q,
+                FORWARD=(direction == "fwd"),
+                BLK=STAGE_BLK,
+                num_warps=STAGE_WARPS,
             )
             x, buf = buf, x
         return x
@@ -198,17 +223,30 @@ class LargeNTT:
         buf = torch.empty_like(x)
         for w in self._device_tables(direction, dev):
             half = w.numel()
-            total = (self.n // (2 * half)) * half
-            _stage_kernel[(triton.cdiv(total, STAGE_BLK),)](
-                x, buf, self.n, 2 * half, w, Q=q, FORWARD=(direction == "fwd"), BLK=STAGE_BLK
+            log_half = half.bit_length() - 1
+            _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
+                x,
+                buf,
+                2 * half,
+                self.n // 2,
+                log_half,
+                w,
+                Q=q,
+                FORWARD=(direction == "fwd"),
+                BLK=STAGE_BLK,
+                num_warps=STAGE_WARPS,
             )
             x, buf = buf, x
         return x
 
-    def _mul_dev(self, x, p_np, dev, q):
+    def _mul_dev(self, x, p_np, dev, q, role: str):
         import torch
 
-        p = torch.as_tensor(p_np, dtype=torch.int32, device=dev)
+        key = ("mul", role, p_np.shape[0], str(dev))
+        cache = self.__dict__.setdefault("_tbl_cache", {})
+        if key not in cache:
+            cache[key] = torch.as_tensor(p_np, dtype=torch.int32, device=dev)
+        p = cache[key]
         out = torch.empty_like(x)
         _mul_kernel[(triton.cdiv(x.numel(), 65536),)](x, p, out, x.numel(), Q=q, BLK=65536)
         return out
@@ -224,7 +262,7 @@ class LargeNTT:
 
     def forward_tensor_torch(self, x, dev):
         """Device tensor in, device tensor out, tables cached: the timing entry point."""
-        x = self._mul_dev(x, self.pre(), dev, self.q)
+        x = self._mul_dev(x, self.pre(), dev, self.q, "pre")
         return self._run_cached(x, "fwd", dev)
 
     def inverse_torch(self, x, device=None):
@@ -238,7 +276,7 @@ class LargeNTT:
 
     def inverse_tensor_torch(self, t, dev):
         y = self._run_cached(t, "inv", dev)
-        return self._mul_dev(y, self.post(), dev, self.q)
+        return self._mul_dev(y, self.post(), dev, self.q, "post")
 
     @staticmethod
     def _mul(x, p, dev, q):
