@@ -638,8 +638,13 @@ concurrent **processes** (threads do not scale on this hybrid part), min-of-5:
 | Poly1305 (1 MiB per MAC) | 7.54 GB/s | **75.8 GB/s** | 10.1x | OpenSSL EVP_MAC |
 | SLH-DSA-SHA2-128f verify | 1 045 /s (957 µs) | 14.4 k/s (69 µs) | 13.8x | liboqs |
 
-Read the two orders of magnitude: **whether a GPU port can win is decided by whether the CPU
-has hardware support for that primitive**, far more than by anything about the GPU. AES-NI
+Read the two orders of magnitude: **what decides whether a port can win is how fast the CPU's best
+implementation is per core, and that is set by three things together, not by instruction support
+alone.** This section used to claim only the latter; the rows above refute it in both directions --
+**SHA-256 has SHA-NI and the device still wins 1.55x**, while **BLAKE3 has no x86 instruction and
+loses 0.18x** because its AVX-512 path does sixteen blocks at once. The dedicated instruction, the
+width of SIMD the shape admits, and the length of the serial dependency chain decide it together.
+`docs/patterns.md` §0 carries the corrected form with all nine rows. AES-NI
 makes AES a 166 GB/s wall (a bitsliced GPU AES at a predicted 20–40 GB/s is 0.12–0.23x);
 Keccak has no x86 instruction, so SHA3-256 is 0.72 GB/s per core and the device's 31.6 GB/s is
 **4.0x the whole 16-process CPU**.
@@ -649,6 +654,14 @@ identical verification work (clock state, min-of-3), so quote the 16P number or 
 not four significant figures; and the 16P column is the sum of per-process rates measured
 while all sixteen run, which is why `scale` is 6x for ChaCha20 (memory-bound) and 15x for the
 signatures (register-bound).
+
+**A third caveat, and an unresolved one.** The scheme benchmarks print their *own* liboqs baseline
+in their own window, and for ML-DSA-44 the two disagree by a lot: this table (from
+`benchmarks/cpu_baseline.json`) has 1T 15.4 us / 16P 1.08 us, while `bench_mldsa.py`'s inline
+baseline reports 1T 16.3 us / **16P 3.67 us**. One of the two is not measuring what it claims --
+the 16P figures differ by 3.4x, which is too large for clock noise. Until that is resolved, quote
+the device number and the *same-window* ratio from whichever benchmark produced them, and do not
+mix the two. Recorded here rather than silently picking one.
 
 ## 16. Falcon-512 verification (FIPS 206 draft)
 
