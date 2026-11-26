@@ -82,6 +82,7 @@ def mac_kernel(
     N: tl.constexpr,
     Q: tl.constexpr,
     BN: tl.constexpr,
+    ZERO_CH: tl.constexpr = False,
 ):
     """ŵ_i = Σ_j Â[i][j]·ẑ[j] − ĉ·t̂1_i (FIPS 204 Alg. 33/11), all mod q.
 
@@ -100,9 +101,12 @@ def mac_kernel(
         z = tl.load(Z + (rows * L + j)[:, None] * N + n[None, :], mask=m[:, None], other=0)
         a = tl.load(A + (i * L + j) * N + n)
         acc += z.to(tl.int64) * a.to(tl.int64)
-    ch = tl.load(CH + rows[:, None] * N + n[None, :], mask=m[:, None], other=0).to(tl.int64)
-    t1 = tl.load(T1 + i * N + n).to(tl.int64)
-    acc -= ch * t1
+    if not ZERO_CH:
+        # Signing's first pass has ĉ = 0. Guarding the load with a constexpr (instead of
+        # passing a 1-row tensor with expand()) keeps the kernel from reading past the row.
+        ch = tl.load(CH + rows[:, None] * N + n[None, :], mask=m[:, None], other=0).to(tl.int64)
+        t1 = tl.load(T1 + i * N + n).to(tl.int64)
+        acc -= ch * t1
     acc = acc % Q
     acc = tl.where(acc < 0, acc + Q, acc)
     tl.store(OUT + (rows * K + i)[:, None] * N + n[None, :], acc.to(tl.int32), mask=m[:, None])

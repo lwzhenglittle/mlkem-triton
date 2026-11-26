@@ -119,6 +119,24 @@ def test_batch_with_rejections():
 
 
 @needs_gpu
+def test_mixed_lengths_cross_block_boundary():
+    """Regression: μ rows whose pad10*1 spans a different number of SHAKE blocks.
+
+    0.7.1 padded every row to the longest block count and absorbed the extra all-zero blocks for
+    short rows, which changed μ; lengths within one block (e.g. 10 and 20) happened to pass.
+    """
+    ps = "ML-DSA-44"
+    m = MLDSA(ps)
+    pk, sk = m.keygen(bytes(range(32)))
+    signer = Signer(ps, sk)
+    msgs = [b"a" * 10, b"b" * 70, b"c" * 200, b"d" * 300]
+    sigs = signer.sign(msgs)
+    assert Verifier(ps, pk).verify(msgs, sigs).all()
+    for i, msg in enumerate(msgs):
+        assert sigs[i].tobytes() == m.sign(sk, msg, rnd=None), f"row {i} (len {len(msg)})"
+
+
+@needs_gpu
 def test_context_and_prehash():
     ps = "ML-DSA-65"
     m = MLDSA(ps)
@@ -137,3 +155,11 @@ def test_empty_batch():
     ps = "ML-DSA-44"
     _pk, sk = MLDSA(ps).keygen(bytes(range(32)))
     assert Signer(ps, sk).sign([]).size == 0
+
+
+@needs_gpu
+def test_context_length_is_checked():
+    ps = "ML-DSA-44"
+    _pk, sk = MLDSA(ps).keygen(bytes(range(32)))
+    with pytest.raises(ValueError, match="context"):
+        Signer(ps, sk).sign([b"m"], ctx=b"x" * 256)

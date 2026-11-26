@@ -30,6 +30,7 @@ import numpy as np
 import torch
 import triton
 
+from .._inputs import as_batch_bytes
 from ..devices import resolve_device
 from ..primitives.ntt import DILITHIUM, intt_torch, ntt_torch
 from ..primitives.sponge import DOMAIN_SHAKE, SHAKE256, padded_len, sponge_padded
@@ -124,6 +125,8 @@ class Verifier:
         end-to-end path (2 bytes more than a `bytes` object per row), so the uniform
         case — which is the normal one — is assembled with numpy instead.
         """
+        if len(ctx) > 255:
+            raise ValueError("context must be at most 255 bytes")
         if prehash is not None:
             rows = [self.ref.format_message(m, ctx, prehash) for m in _split_rows(msgs, self.p)]
             return _stack_or_list(rows)
@@ -152,21 +155,11 @@ class Verifier:
         """Normalise '[B, sig_size] array / list[bytes] / bytes / torch' to [B, sig_size]."""
         n0 = self.p.sig_size
         if isinstance(sigs, torch.Tensor):
-            t = sigs.reshape(-1, n0)
-            if t.dtype != torch.uint8:
-                raise TypeError(f"signatures must be uint8, got {t.dtype}")
+            if sigs.dtype != torch.uint8:
+                raise TypeError(f"signatures must be uint8, got {sigs.dtype}")
+            t = sigs.reshape(-1, n0).contiguous()
             return t if t.device == self.device else t.to(self.device)
-        if isinstance(sigs, np.ndarray):
-            arr = np.ascontiguousarray(sigs, dtype=np.uint8).reshape(-1, n0)
-        elif isinstance(sigs, (bytes, bytearray, memoryview)):
-            buf = bytes(sigs)
-            if len(buf) % n0:
-                raise ValueError(f"input length {len(buf)} is not a multiple of {n0}")
-            arr = np.frombuffer(buf, np.uint8).reshape(-1, n0)
-        else:
-            lst = list(sigs)
-            arr = np.frombuffer(b"".join(lst), np.uint8).reshape(len(lst), n0)
-        return _to_device(arr, self.device)
+        return _to_device(as_batch_bytes(sigs, n0, "signature"), self.device)
 
     # ---------------------------------------------------------------- device side
 
@@ -234,6 +227,7 @@ class Verifier:
             256,
             Q_VALUE,
             MAC_BN,
+            False,
             num_warps=MAC_WARPS,
         )
         w = intt_torch(w_hat.view(b * k, 256), DILITHIUM).view(b, k, 256)
@@ -302,7 +296,10 @@ class Verifier:
             bool ndarray ``[B]``.
         """
         sig = self._sigs_device(sigs)
-        mu_t = _as_device_uint8(mu, self.device).reshape(-1, 64)
+        mu_t = _as_device_uint8(mu, self.device)
+        if mu_t.numel() % 64:
+            raise ValueError(f"mu must be a multiple of 64 bytes, got {mu_t.numel()}")
+        mu_t = mu_t.reshape(-1, 64)
         if mu_t.shape[0] != sig.shape[0]:
             raise ValueError(f"mu has {mu_t.shape[0]} rows but there are {sig.shape[0]} signatures")
         return self._verify_device(mu_t, sig).cpu().numpy()

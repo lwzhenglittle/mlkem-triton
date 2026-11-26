@@ -1,8 +1,8 @@
 """Device SLH-DSA verification: ACVP agreement, batching, and the error paths.
 
-The device path covers the 6 SHAKE parameter sets; the SHA-2 sets are reference-only for now and
-must raise rather than return a wrong answer. Everything here is compared against the numpy
-reference (`triton_crypto.slhdsa.ref`), which is itself ACVP-checked in `test_slhdsa_ref.py`.
+The device path covers all twelve parameter sets (SHAKE and SHA-2). Everything here is compared
+against the numpy reference (`triton_crypto.slhdsa.ref`), which is itself ACVP-checked in
+`test_slhdsa_ref.py`.
 """
 
 from __future__ import annotations
@@ -206,3 +206,32 @@ def test_matches_liboqs_on_a_fresh_key(ps):
     tampered[len(tampered) // 3] ^= 0x01
     assert not bool(v.verify([msg], [bytes(tampered)])[0])
     assert not bool(v.verify([msg + b"!"], [sig])[0])
+
+
+def test_single_bytes_message_and_1d_signature():
+    """One bytes message is one item (not a sequence of ints), and a 1-D signature is one row."""
+    cases = [
+        c
+        for c in acvp.cases()
+        if c.ps == "SLH-DSA-SHAKE-128f" and c.expected and c.interface != "internal"
+    ]
+    c = cases[0]
+    v = Verifier("SLH-DSA-SHAKE-128f", c.pk)
+    sig = np.frombuffer(c.signature, dtype=np.uint8)
+    assert bool(v.verify(c.message, sig, c.context or b"", c.ph)[0])
+    assert bool(v.verify([c.message], [c.signature], c.context or b"", c.ph)[0])
+
+
+def test_malformed_signature_is_false_not_an_exception():
+    cases = [
+        c
+        for c in acvp.cases()
+        if c.ps == "SLH-DSA-SHAKE-128f" and c.expected and c.interface != "internal"
+    ]
+    c = cases[0]
+    v = Verifier("SLH-DSA-SHAKE-128f", c.pk)
+    assert v.verify([c.message], [c.signature[:-1]], c.context or b"", c.ph).tolist() == [False]
+    with pytest.raises(ValueError, match="signatures"):
+        v.verify([c.message, c.message], [c.signature], c.context or b"", c.ph)
+    with pytest.raises(ValueError, match="signatures"):
+        v.verify([c.message], [c.signature, c.signature], c.context or b"", c.ph)

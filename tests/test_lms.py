@@ -127,3 +127,13 @@ def test_acvp_batched():
         sigs = np.stack([np.frombuffer(c.hss_sig, dtype=np.uint8) for c in group])
         got = v.verify(msgs, sigs)
         assert got.tolist() == [c.expected for c in group]
+
+
+@needs_gpu
+def test_single_bytes_message_and_bad_lengths():
+    pub, msg, sig = _case(VECTORS[0])
+    v = Verifier(pub)
+    assert bool(v.verify(msg, [sig])[0])  # one bytes object is one message
+    assert v.verify(msg, [sig[:-1]]).tolist() == [False]
+    with pytest.raises(ValueError, match="signatures"):
+        v.verify([msg], [sig, sig])

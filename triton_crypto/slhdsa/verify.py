@@ -24,6 +24,7 @@ from collections import defaultdict
 import numpy as np
 import torch
 
+from .._inputs import as_bytes_list
 from ..devices import resolve_device
 from ..primitives import sha2 as _sha2
 from ..primitives import sponge as _sponge
@@ -91,14 +92,6 @@ def _bits_to_int(bits: torch.Tensor, width: int) -> torch.Tensor:
     return out
 
 
-def _bytes_to_int(b: torch.Tensor) -> torch.Tensor:
-    """[B, k] uint8 big-endian -> [B] int64."""
-    out = torch.zeros((b.shape[0],), dtype=torch.int64, device=b.device)
-    for j in range(b.shape[1]):
-        out = (out << 8) | b[:, j].to(torch.int64)
-    return out
-
-
 class Verifier:
     """Verify SLH-DSA signatures in batches, with one long-lived public key."""
 
@@ -142,27 +135,6 @@ class Verifier:
     # ---------------- device plumbing ----------------
     def _dev(self, b: bytes) -> torch.Tensor:
         return torch.frombuffer(bytearray(b), dtype=torch.uint8).to(self.device)
-
-    def _adrs(self, rows, *, layer=0, tree=0, typ=0, kp=None, h=None, index=None):
-        buf = torch.zeros((rows, 32), dtype=torch.uint8, device=self._dev_t())
-        _u32(buf, 0, layer)
-        if torch.is_tensor(tree) and tree.dim() == 2:
-            # [batch, 12] of already-encoded tree address bytes (needed when the value exceeds
-            # int64, which happens for 256f's full 64-bit tree index); repeat it to `rows`
-            t = tree.to(buf.device)
-            if t.shape[0] != rows:
-                t = t.repeat_interleave(rows // t.shape[0], dim=0)
-            buf[:, 4:16] = t
-        else:
-            _u64(buf, 8, tree)
-        _u32(buf, 16, typ)
-        if kp is not None:
-            _u32(buf, 20, kp)
-        if h is not None:
-            _u32(buf, 24, h)
-        if index is not None:
-            _u32(buf, 28, index)
-        return buf
 
     def _dev_t(self):
         return self.device
@@ -277,15 +249,13 @@ class Verifier:
         wide=False,
         out=None,
     ):
-        """
-
-        Single-block inputs (n + 32 + dn < 136: every F and H call) go through the fused kernel;
-        the ltree hashes (dn = len·n, several blocks) fall back to compose + sponge.
-        """
         """`H(PK.seed || ADRS || data)` for every row, in one fused launch.
 
         `data` is [rows, dn] uint8 with dn = n (F) or 2n (H); `kp`/`chain`/`index`/`tree` are
         [rows] int64 (the ADRS fields), `layer` and `typ` are scalars.
+
+        Single-block inputs (n + 32 + dn < 136: every F and H call) go through the fused kernel;
+        the ltree hashes (dn = len·n, several blocks) fall back to compose + sponge.
         """
         rows = data.shape[0]
         n = self.p.n
@@ -397,9 +367,13 @@ class Verifier:
         nib[:, 0::2] = msg >> 4
         nib[:, 1::2] = msg & 0x0F
         digits = nib[:, : p.len1]
-        csum = (p.w - 1 - digits).sum(dim=1) << ((8 - (p.len2 * p.lg_w) % 8) % 8)
-        extra = torch.stack([(csum >> 8) >> 4, ((csum >> 8) & 0xF), (csum & 0xFF) >> 4], dim=1)
-        return torch.cat([digits, extra[:, : p.len2]], dim=1)
+        # Alg. 5: left-align the checksum to a whole number of bytes, then take len2
+        # base-w digits from the top. (The old code hard-coded len2 = 3 and w = 16.)
+        total_bits = -(-(p.len2 * p.lg_w) // 8) * 8
+        csum = (p.w - 1 - digits).sum(dim=1) << (total_bits - p.len2 * p.lg_w)
+        shifts = [total_bits - (i + 1) * p.lg_w for i in range(p.len2)]
+        extra = torch.stack([(csum >> s) & (p.w - 1) for s in shifts], dim=1)
+        return torch.cat([digits, extra], dim=1)
 
     def _xmss(self, idx_leaf, sig_layer, msg, layer, idx_tree):
         p = self.p
@@ -510,16 +484,27 @@ class Verifier:
     def verify_mprime(self, mprimes, signatures) -> np.ndarray:
         """Verify against already-formatted M' (the "internal" interface); returns bool[B]."""
         p = self.p
-        sig = _as_u8(signatures)
-        mp = _as_bytes(mprimes)
-        B = len(mp)
+        mp_all = as_bytes_list(mprimes, "message")
+        sig_all = as_bytes_list(signatures, "signature")
+        B = len(mp_all)
         out = np.zeros((B,), dtype=bool)
-        if B == 0 or sig.shape[0] != B or sig.shape[1] != p.sig_size:
+        if B == 0:
             return out
+        if len(sig_all) != B:
+            raise ValueError(f"got {B} messages but {len(sig_all)} signatures")
+        # A signature of the wrong length is simply invalid (FIPS 205 returns false); it must
+        # not be dropped or reinterpreted, and it must not make the whole batch fail.
+        keep = [i for i, s in enumerate(sig_all) if len(s) == p.sig_size]
+        if not keep:
+            return out
+        mp = [mp_all[i] for i in keep]
+        sigs = [sig_all[i] for i in keep]
+        B = len(mp)
         self._seed_row = self._dev(self.seed_b)
         self._root_row = self._dev(self.root_b)
         self._seed_w = torch.frombuffer(bytearray(self.seed_b), dtype=torch.int64).to(self._dev_t())
-        sig_t = torch.frombuffer(bytearray(np.ascontiguousarray(sig).tobytes()), dtype=torch.uint8)
+        sig_np = np.frombuffer(b"".join(sigs), dtype=np.uint8).reshape(B, p.sig_size)
+        sig_t = torch.frombuffer(bytearray(sig_np.tobytes()), dtype=torch.uint8)
         sig_t = sig_t.to(self._dev_t()).reshape(B, p.sig_size)
 
         groups = defaultdict(list)
@@ -563,7 +548,7 @@ class Verifier:
             root = self._ht(node, sub_sig[:, p.n + p.fors_sig_size :], trees, leaves)
             ok = (root == self._root_row.expand_as(root)).all(dim=1).cpu().numpy()
             for j, b in enumerate(idxs):
-                out[b] = bool(ok[j])
+                out[keep[b]] = bool(ok[j])
         return out
 
     def _tree_tensor(self, values: list[int]) -> torch.Tensor:
@@ -615,34 +600,21 @@ class Verifier:
         """External interface: pure (`prehash=None`) or pre-hash (`prehash=<name>`)."""
         if len(ctx) > 255:
             raise ValueError("context must be at most 255 bytes")
-        sig = _as_u8(signatures)
-        if sig.shape[0] == 0:
-            return np.zeros((0,), dtype=bool)
+        msgs = as_bytes_list(messages, "message")
+        sigs = as_bytes_list(signatures, "signature")
+        if len(sigs) != len(msgs):
+            raise ValueError(f"got {len(msgs)} messages but {len(sigs)} signatures")
         use = self.p.ph_name if prehash is True else prehash
         mps = []
-        for m in _as_bytes(messages):
+        for m in msgs:
             if prehash is None:
                 mps.append(b"\x00" + bytes([len(ctx)]) + ctx + m)
             else:
                 mps.append(b"\x01" + bytes([len(ctx)]) + ctx + OID[use] + PH(use, m))
-        return self.verify_mprime(mps, sig)
+        return self.verify_mprime(mps, sigs)
 
 
 # ---------------- input plumbing ----------------
-
-
-def _as_u8(x) -> np.ndarray:
-    if isinstance(x, np.ndarray):
-        return np.ascontiguousarray(x, dtype=np.uint8)
-    if torch.is_tensor(x):
-        return x.detach().cpu().numpy().astype(np.uint8, copy=False).reshape(x.shape[0], -1)
-    return np.asarray([np.frombuffer(bytes(s), dtype=np.uint8) for s in x])
-
-
-def _as_bytes(x) -> list[bytes]:
-    if isinstance(x, np.ndarray):
-        return [row.tobytes() for row in x]
-    return [bytes(m) for m in x]
 
 
 def verify_batch(ps, pk, messages, signatures, ctx: bytes = b"", prehash=None, device=None):

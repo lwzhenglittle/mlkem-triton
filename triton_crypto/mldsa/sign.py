@@ -19,6 +19,7 @@ import numpy as np
 import torch
 import triton
 
+from .._inputs import as_bytes_list
 from ..devices import resolve_device
 from ..primitives.ntt import DILITHIUM, intt_torch, ntt_torch
 from ..primitives.sponge import DOMAIN_SHAKE, SHAKE256, padded_len, sponge_padded
@@ -125,29 +126,34 @@ class Signer:
     # ---------------------------------------------------------------- signing
     def sign(self, messages, ctx: bytes = b"", prehash: str | None = None, rnd=None) -> np.ndarray:
         """The external interface: M′ = 0x00 ‖ len(ctx) ‖ ctx ‖ M (or the pre-hash form)."""
-        rows = [
-            bytes(m)
-            for m in (messages if not isinstance(messages, (bytes, bytearray)) else [messages])
-        ]
+        if len(ctx) > 255:
+            raise ValueError("context must be at most 255 bytes")
+        rows = as_bytes_list(messages, "message")
         if not rows:
             return np.empty((0, 0), dtype=np.uint8)
         return self.sign_mprime([self.ref.format_message(m, ctx, prehash) for m in rows], rnd)
 
     def sign_mprime(self, mprimes, rnd=None) -> np.ndarray:
         """The internal interface: each message is already M′ (FIPS 204 Alg. 7's input)."""
-        mprime = [bytes(m) for m in mprimes]
+        mprime = as_bytes_list(mprimes, "message")
         if not mprime:
             return np.empty((0, 0), dtype=np.uint8)
         return self.sign_mu_rows(self._mu(mprime), rnd)
 
     def sign_mu(self, mus, rnd=None) -> np.ndarray:
         """The external-μ interface: each row is already μ (64 bytes)."""
-        arr = np.ascontiguousarray(
-            np.stack([np.frombuffer(bytes(m), dtype=np.uint8) for m in mus])
-            if not isinstance(mus, np.ndarray)
-            else mus,
-            dtype=np.uint8,
-        )
+        if isinstance(mus, np.ndarray):
+            arr = np.ascontiguousarray(mus, dtype=np.uint8)
+        else:
+            rows = as_bytes_list(mus, "mu")
+            for i, m in enumerate(rows):
+                if len(m) != 64:
+                    raise ValueError(f"mu[{i}] must be 64 bytes, got {len(m)}")
+            arr = np.frombuffer(b"".join(rows), dtype=np.uint8).reshape(-1, 64)
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        if arr.ndim != 2 or arr.shape[1] != 64:
+            raise ValueError(f"mu must be [B,64] uint8, got {arr.shape}")
         mu = torch.from_numpy(arr).to(self.device)
         return self.sign_mu_rows(mu, rnd)
 
@@ -248,6 +254,7 @@ class Signer:
             256,
             Q_VALUE,
             MAC_BN,
+            True,
             num_warps=MAC_WARPS,
         )
         w = intt_torch(w_hat.reshape(n * p.k, 256), DILITHIUM).reshape(n, p.k, 256)
@@ -290,24 +297,32 @@ class Signer:
 
     # ---------------------------------------------------------------- helpers
     def _mu(self, mprimes: list[bytes]) -> torch.Tensor:
-        """μ = SHAKE256(H(pk) ‖ M′, 64) for a batch of M′ of *any* lengths.
+        """μ = SHAKE256(H(pk) ‖ M′, 64) for a batch of M′.
 
-        A shorter message simply has its pad10*1 earlier inside the last block, so every row can be
-        padded to the same block count and absorbed in one launch — no grouping by length.
+        Rows are grouped by *padded* length. pad10*1 ends at a different offset inside the final
+        block for different message lengths, and the sponge absorbs a launch-wide block count, so
+        rows whose padding spans a different number of blocks cannot share one launch. Grouping by
+        `padded_len` (rather than exact length) keeps the usual batch to one launch while staying
+        byte-exact; the previous "pad everything to the longest block count" version absorbed extra
+        all-zero blocks for short rows and produced a wrong μ.
         """
         b = len(mprimes)
-        lens = np.fromiter((len(m) for m in mprimes), dtype=np.int64, count=b)
-        total = padded_len(64 + int(lens.max()), RATE_SHAKE)
-        buf = torch.zeros((b, total), dtype=torch.uint8, device=self.device)
+        totals = [padded_len(64 + len(m), RATE_SHAKE) for m in mprimes]
         tr = torch.frombuffer(bytearray(self.tr), dtype=torch.uint8).to(self.device)
-        buf[:, :64] = tr
-        host = buf.cpu().numpy()
-        for i, m in enumerate(mprimes):
-            host[i, 64 : 64 + len(m)] = np.frombuffer(m, dtype=np.uint8)
-            host[i, 64 + len(m)] = DOMAIN_SHAKE
-        buf = torch.from_numpy(host).to(self.device)
-        buf[:, total - 1] = buf[:, total - 1] | 0x80
-        return sponge_padded(buf, RATE_SHAKE, 64)
+        out = torch.empty((b, 64), dtype=torch.uint8, device=self.device)
+        for total in sorted(set(totals)):
+            rows = [i for i, t in enumerate(totals) if t == total]
+            buf = torch.zeros((len(rows), total), dtype=torch.uint8, device=self.device)
+            buf[:, :64] = tr
+            host = buf.cpu().numpy()
+            for j, i in enumerate(rows):
+                m = mprimes[i]
+                host[j, 64 : 64 + len(m)] = np.frombuffer(m, dtype=np.uint8)
+                host[j, 64 + len(m)] = DOMAIN_SHAKE
+            buf = torch.from_numpy(host).to(self.device)
+            buf[:, total - 1] = buf[:, total - 1] | 0x80
+            out[torch.tensor(rows, device=self.device)] = sponge_padded(buf, RATE_SHAKE, 64)
+        return out
 
     def _shake32(self, data: torch.Tensor, out: int) -> torch.Tensor:
         b, ln = data.shape
