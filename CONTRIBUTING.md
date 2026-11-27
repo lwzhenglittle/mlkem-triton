@@ -23,7 +23,10 @@ ninja -C build-mldsa             # -> lib/liboqs.so
 ```
 
 That library is also the CPU baseline in `benchmarks/bench_mldsa_verify.py`, and it is what makes
-the ML-DSA numbers in `docs/benchmarks.md` §11 cross-implementation rather than self-referential.
+the ML-DSA numbers in `docs/benchmarks.md` §3.2 cross-implementation rather than self-referential.
+For the full local benchmark suite (`benchmarks/bench_16p_barrier.py` and
+`benchmarks/bench_local_full.py`), a single unified `third_party/liboqs/build-bench` build can enable
+ML-KEM, ML-DSA, SLH-DSA and Falcon together (`OQS_BENCH_SO` overrides the path).
 
 SLH-DSA has the same arrangement under a different variable: `SLHDSA_LIBOQS_SO` points at a
 liboqs build compiled with SLH-DSA, and both `tests/_liboqs_slh.py` and
@@ -111,13 +114,13 @@ present) precisely because a dirty build directory is invisible in the source tr
 - Use the scripts in `benchmarks/`; they self-check fused against the fully-fallback path.
 - Every benchmark number must be accompanied by: hardware model, software versions, batch size,
   and timing convention (pure kernel vs host-included).
-- **Pair the device number with a CPU baseline measured in the same window.** `bench_cpu.py`
-  writes `benchmarks/cpu_baseline.json` (one thread and sixteen concurrent processes per rival) and
-  `bench_primitive.py` turns it into the `vs 1T` / `vs 16P` columns. A ratio whose two sides came
-  from different windows is not a ratio.
-- **`benchmarks/snapshot.py` runs everything in one window** (CPU rivals, the primitive table, the
-  four scheme benchmarks; about two minutes) and writes a timestamped markdown plus a JSON header.
-  Prefer one snapshot over a set of hand-collected numbers.
+- **Pair the device number with a CPU baseline measured in the same window.**
+  `benchmarks/bench_16p_barrier.py --all --json benchmarks/cpu_baseline_barrier.json` measures one
+  thread and sixteen barrier-synchronised processes per rival at matched message sizes, and
+  `bench_primitive.py` / `bench_local_full.py` join it into `vs 1T` / `vs 16P` columns. A ratio
+  whose two sides came from different windows is not a ratio.
+- **`benchmarks/snapshot.py` and `benchmarks/bench_local_full.py` run everything in one window**
+  and write timestamped markdown plus JSON metadata. Prefer one unified run over hand-collected numbers.
 - **Quote the traffic a row actually moves.** One number here was overstated by 2x for a while
   because the benchmark derived it from the radix-2 pass count after the transform had moved to
   radix-4; the traffic, the GB/s and the `%copy` were all wrong together. If a figure is computed,
@@ -134,7 +137,7 @@ present) precisely because a dirty build directory is invisible in the source tr
   `vs 16P` column and the rule that decides it (the CPU's instruction set, not the GPU's speed).
 - `docs/kernels.md` — one contract per kernel: tensors, dtypes, launch shape, and the Triton traps
   each one hit. A kernel that is not named there fails the suite.
-- `docs/benchmarks.md` — the measured record, including the ideas that lost (`§22` has two of them).
+- `docs/benchmarks.md` — the measured record, including Dev+E2E splits, breakeven curves and the ideas that lost (`§4.3` and `§5`).
 - `docs/support.md` — what runs on which backend, with "not run" marked as such.
 
 ## Commits

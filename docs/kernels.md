@@ -1,7 +1,9 @@
 # Kernel catalogue
 
 Every kernel the library launches, with its contract. This is the part of the repository that
-is meant to be reused: the schemes are thin, the kernels are not.
+is meant to be reused: the schemes are thin, the kernels are not. The layout below mirrors
+`triton_crypto/` package-for-package (`primitives/`, `mlkem/`, `mldsa/`, `slhdsa/`, `lms/`,
+`falcon/`).
 
 Conventions used below:
 
@@ -41,14 +43,10 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
-| `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 32),)` | `hash_to_point_batch_torch` |
-| `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
-| `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
-| `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
-| `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
-| `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
-| `padcat2_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat2` |
-| `padcat_sfx_kernel` | `mlkem/kernels/padcat.py` | generic | `(cdiv(n, BR),)` | `padcat_sfx` |
+| `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM / generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
+| `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM / generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
+| `padcat2_kernel` | `mlkem/kernels/padcat.py` | ML-KEM / generic | `(cdiv(n, BR),)` | `padcat2` |
+| `padcat_sfx_kernel` | `mlkem/kernels/padcat.py` | ML-KEM / generic | `(cdiv(n, BR),)` | `padcat_sfx` |
 | `encaps_kernel` | `mlkem/kernels/encaps.py` | ML-KEM | `(cdiv(M,BM)*cdiv(B,BN),)` | `fused_encaps` |
 | `pack_seg_kernel` | `mlkem/kernels/encaps.py` | ML-KEM | 2-D, `(nseg, cdiv(B,BLK))` | `pack_ciphertext` |
 | `fused_enc_kernel` | `mlkem/kernels/fused_gemm.py` | ML-KEM | `(npm*cdiv(B,BN),)` | `fused_enc_gemm` |
@@ -68,16 +66,20 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `mac_kernel` | `mldsa/kernels.py` | ML-DSA | `(cdiv(b,MAC_BN), k)` | `Verifier._verify_device` |
 | `sample_in_ball_kernel` | `mldsa/kernels.py` | ML-DSA | `(b,)` | `Verifier._verify_device` |
 | `hint_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, k)` | `Verifier._verify_device` |
-| `thash_kernel` | `slhdsa/kernels.py` | SLH-DSA | `(cdiv(rows, BLOCK),)` | `slhdsa/verify.py` |
 | `w1_pack_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, k, cdiv(polyw1_bytes, BC))` | `Verifier._verify_device` |
+| `thash_kernel` | `slhdsa/kernels.py` | SLH-DSA | `(cdiv(rows, BLOCK),)` | `slhdsa/verify.py` |
+| `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
+| `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 32),)` | `hash_to_point_batch_torch` |
+| `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
+| `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 
 ---
 
 ## The exported surface of `triton_crypto.primitives`
 
-Everything the package exports, in one place. A test asserts that every name here appears in this
-document, so an export cannot be added without a contract; the sections below give the arguments
-and the traps for the ones with a kernel behind them.
+Everything the package exports, in one place. `tests/test_primitives_contract.py` asserts that
+every name here appears in this document, so an export cannot be added without a contract; the
+sections below give the arguments and the traps for the ones with a kernel behind them.
 
 | export | what it is |
 |---|---|
@@ -96,7 +98,7 @@ and the traps for the ones with a kernel behind them.
 | `primitives.ntt.large.large_ntt_np` / `primitives.ntt.large.large_ntt_torch` | the 2^k multi-pass path, numpy and device (submodule; the class `LargeNTT` is the top-level entry) |
 | `poseidon2_permute_np` | the Plonky3-shaped reference permutation |
 | `gemm_int8_np` / `gemm_int8_torch` | exact int8 GEMM (the matrix-unit substrate) |
-| `gf2_8_matmul_torch` | **GF(2^8) product from 64 int8 GEMMs** — see its own entry below |
+| `gf2_8_matmul_torch` | **GF(2^8) product from 64 int8 GEMMs** — see Composite primitive wrappers below |
 | `aes128_expand_key_np` / `aes128_encrypt_block_np` / `aes128_ctr_np` / `aes128_ctr_torch` | AES reference and the T-table device path |
 | `primitives.aes.t_table` | the generated T-table itself (submodule) |
 | `chacha20_keystream_np` / `chacha20_keystream_torch` | ChaCha20 keystream, reference and device |
@@ -108,7 +110,9 @@ and the traps for the ones with a kernel behind them.
 | `compress_np` | the 7-round BLAKE3 compression primitive, exported at the top level |
 | `primitives.blake3.compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on (submodule) |
 
-## Primitives
+---
+
+## Primitives (`triton_crypto/primitives/`)
 
 ### `keccak_f_kernel(X, OUT, n, BLOCK)` — `primitives/keccak.py`
 
@@ -140,9 +144,8 @@ unrolled). Multi-block squeeze re-permutes between output blocks, which is how `
 and `SHAKE128(·, 168)` are produced. `n` rows per `BLOCK` lanes; each lane keeps its own 25-word
 state.
 
-**Measured**: 218 Mperm/s at ≥2¹⁸ rows on the Arc B390 (4.6 ns/permutation), 137 Mperm/s at 2¹⁶.
-See `docs/benchmarks.md`; this is the single number that decides whether a hash-based scheme is
-worth putting on the device.
+**Measured**: 210–218 Mperm/s at ≥2¹⁸ rows on the Arc B390 (~4.6–4.8 ns/permutation). See
+`docs/benchmarks.md` §4.1.
 
 ### `ntt_kernel(X, OUT, ZT, P, N, Q, SCALE, LOG_N, LAYERS, BR, INVERSE, WIDE, MONT, QINV)` — `primitives/ntt/kernel.py`
 
@@ -155,25 +158,56 @@ Negacyclic NTT over `Z_q[X]/(X^N+1)`, forward or inverse, standard or NTT domain
 | `OUT` | `[P, N]` | same | transformed rows |
 
 `N`, `Q`, `SCALE`, `LOG_N`, `LAYERS`, `BR`, `INVERSE`, `WIDE`, `MONT`, `QINV` are all `constexpr`,
-so every (domain, direction, arithmetic-width) combination is a separate specialisation that is
-compiled on first use. `LOG_N` layers are a runtime loop inside the kernel; within a layer the
-butterfly partner is `idx ^ L` (one `tl.gather`, not a shuffle pattern), and twiddles are indexed
-by `(iteration, row)`.
+so every (domain, direction, arithmetic-width) combination is a separate specialisation compiled on
+first use. `LOG_N` layers are a runtime loop inside the kernel; within a layer the butterfly
+partner is `idx ^ L` (one `tl.gather`, not a shuffle pattern), and twiddles are indexed by
+`(iteration, row)`.
 
 `WIDE=True` is the ML-DSA path (q ≈ 2²³, products do not fit int32): twiddles are stored in
 Montgomery form and the reduction is `primitives.fields.mont_mul` (`t = (a*b * QINV) mod 2³²;
 r = (a*b - t*Q) >> 32`, canonicalised to `[0, q)`), which is bit-identical to the reference and
 1.92× faster than the naive int64 modulo. `MONT=True` switches the same reduction on for a narrow
 `q` (1.66× on ML-KEM's q = 3329). The twiddle tables are built in `primitives/ntt/domain.py`;
-`NTTDomain` is generic in `(q, N, ζ, layers)`, so `BABYBEAR_NTT` (q = 2³¹−2²⁷+1) reuses the same
-kernel with no new code.
+`NTTDomain` is generic in `(q, N, ζ, layers)`, so `BABYBEAR_NTT` (q = 2³¹−2²⁷+1) and Falcon
+(q = 12289, N = 512) reuse the same kernel with no new code.
+
+### `_stage_kernel(X, Y, M, TOTAL, LOG_HALF, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
+
+One Stockham pass of a 2^20-point transform, i.e. one launch per stage with the data in global
+memory. `M` is the stage's block length: it halves for the forward DIF pass (N, N/2, ..., 2) and
+doubles for the inverse DIT pass (2, 4, ..., N). `W` holds that stage's `M/2` twiddles.
+
+- **`%` on a negative int64 is C's truncated remainder**, so `u - v` is normalised with an
+  explicit `tl.where(t < 0, t + Q, t)` rather than a modulo;
+- the twiddle table and the negacyclic pre/post tables are **built once and cached per device**
+  (avoiding a per-call 2^20 Python loop).
+
+Memory traffic is 8 MB per pass: **84 MB** per transform at the default radix-4 (ten passes),
+160 MB at radix-2 (`docs/benchmarks.md` §4.3).
+
+### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, PRE, MUL, Q, FUSE_PRE, FUSE_MUL, BLK)` — `primitives/ntt/large.py`
+
+Two radix-2 stages fused into one radix-4 pass, so ten passes instead of twenty and half the
+traffic. Bit-identical to the radix-2 sequence (verified 2^4..2^20, including the odd-`log2` case
+where one radix-2 pass is left over). **This is the default** (`LargeNTT(n, q, radix=4)`; pass
+`radix=2` for the older path).
+
+`FUSE_PRE` applies the negacyclic pre-twiddle on the way into the first pass. `FUSE_MUL` multiplies
+each store by a caller-supplied vector, which is where the negacyclic product's pointwise step
+happens at zero extra pass cost.
+
+### `_inv2x2_kernel(X, Y, M, TOTAL, LOG_H, WA, WB, POST, Q, FUSE_POST, BLK)` — `primitives/ntt/large.py`
+
+Two inverse DIT stages fused into one pass, the mirror of `_stage4_kernel` on the way back.
+Together with `FUSE_MUL`, this cuts a 2^20 negacyclic product from 42 passes (`mul_torch`, 3.36 ms)
+to 32 passes (`mul_fused_torch`, 2.41 ms, 1.40× faster; `docs/benchmarks.md` §4.3). Bit-identical
+to the stage-by-stage inverse for N = 2^4..2^14 (`tests/test_ntt_large.py`).
 
 ### `sha_kernel(HIN, KT, MSG, OUT, rows, NB, NW, NOUT, BLOCK)` — `primitives/sha2.py`
 
 SHA-256 / SHA-512 compression, absorbing `NB` fixed-size blocks from a given input state.
 Generated once per `bits`; `NB` is a runtime argument, so a new message length no longer compiles a
-new kernel. The round loop is rolled (one body, `KT` from a tensor) so the
-source stays short.
+new kernel. The round loop is rolled (one body, `KT` from a tensor).
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -182,16 +216,8 @@ source stays short.
 | `MSG` | `[rows, nblocks*16]` | same | pre-padded message, little-endian words (swapped on load) |
 | `OUT` | `[rows, 8]` | same | final state, byte-swapped back so a `uint8` view reads big-endian |
 
-The point of "start from a state" is that the first block of every SLH-DSA SHA-2 hash is
-`blockpad(PK.seed)`, constant per parameter set: its state is computed once on the host
-(`primitives.sha2.compress_np`) and the kernel only absorbs what changes. Same trick as the fused `thash`,
-different hash function.
-
-`sha_thash` (now `slhdsa/thash_sha2.py`; `primitives.sha2.sha_thash` remains as a deprecated
-alias) is the same idea specialised to SLH-DSA's shape: one block whose first 22 bytes are the
-compressed ADRS, built in registers, with the input value copied through for rows whose WOTS chain
-has finished. Both are used by the SHA-2 parameter sets (`slhdsa/verify.py`), and both are checked
-against numpy for every `(n, dn)` the scheme can produce (`tests/test_sha2.py`).
+Starting from a pre-absorbed state lets SLH-DSA SHA-2 absorb `blockpad(PK.seed)` once on the host
+(`primitives.sha2.compress_np`) and only run the variable blocks on the device (`slhdsa/thash_sha2.py`).
 
 ### `chacha20_kernel(KEY, NON, CTR, OUT, B, NBLK, BR)` — `primitives/chacha20.py`
 
@@ -204,21 +230,14 @@ ChaCha20 keystream (RFC 8439, 96-bit nonce): one program is `BR` streams × one 
 | `CTR` | `[B]` | `int32` | first block counter of each stream |
 | `OUT` | `[B, NBLK*16]` | `int32` | keystream words (little-endian in memory) |
 
-The state is sixteen scalars per lane, not a `[BR, 16]` tile: a tile cannot be sliced by a
-constant index, and the quarter round needs `x0, x4, x8, x12` as separate vectors. Output is
-serialised as four 3-D stores built from `tl.join(tl.join(a, b), tl.join(c, d))` — that lays out
-as `[a, b, c, d]` when the offset uses `2*last_axis + middle_axis`, which `tests/test_chacha20_gpu.py`
-pins.
-
-Rotation is `(x << r) | (x >> (32-r))` on **uint32**. On int32 the right shift is arithmetic and
-the result is silently wrong; LLVM folds the uint32 idiom into a funnel shift (one `shf` on
-NVIDIA, two to three instructions on Xe, where rotate is 2.2× the cost of an add).
+The state is sixteen scalars per lane, serialised via `tl.join(tl.join(a, b), tl.join(c, d))`.
+Rotation is `(x << r) | (x >> (32-r))` on **uint32** (on int32 the right shift is arithmetic and
+silently wrong).
 
 ### `_poseidon2_kernel(X, OUT, P, RC_INIT, RC_FINAL, RC_INT, DIAG, Q, BLK)` — `primitives/poseidon2.py`
 
-Poseidon2 over BabyBear, width 16, 8 full + 13 partial rounds. One program is `BLK`
-permutations; the 16 state words are 16 separate int64 vectors per lane (a `[BLK, 16]` tile
-cannot be sliced by a constant index, and every layer needs `state[i]` as its own vector).
+Poseidon2 over BabyBear, width 16, 8 full + 13 partial rounds. One program is `BLK` (128)
+permutations; the 16 state words are 16 separate int64 vectors per lane.
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -228,53 +247,16 @@ cannot be sliced by a constant index, and every layer needs `state[i]` as its ow
 | `RC_INT` | `[13]` | `int64` | partial-round constants |
 | `DIAG` | `[16]` | `int64` | internal matrix diagonal, loaded once per program |
 
-Three things this kernel exists to record:
-
-- **The external layer is applied before the first round.** Plonky3's
-  `external_initial_permute_state` starts with `mds_light_permutation`; leaving it out gives
-  wrong output for every input and looks like a constants bug. `data/vectors/poseidon2/bb16.json`
-  is Plonky3's own output and catches it.
-- **`% Q` is enough; no Montgomery form.** Operands are 31-bit, so `a*b < 2^62` fits int64
-  exactly. `mont_mul` would add a multiply-and-mask pair per field multiply; the kernel uses
-  plain `(a*b) % Q` with `Q` a constexpr, which LLVM strength-reduces to a multiply-high.
-- **`BLK = 128`.** Swept on an Arc B390 at B = 65536: 77.8 ns/permutation at 64, **41.5 at 128**,
-  48.5 at 256 (256 spills). Below B ≈ 2048 the grid stops filling the device (B = 1024 is
-  820 ns/permutation); the fix is a persistent grid, which is not written.
-
-### `_mul_ntt_kernel(A, B, OUT, P, Q, N, BLK)` and `_check_kernel(PROD, C, S2, SQN, OK, P, L2BOUND, Q, N)` — `falcon/kernels.py`
-
-Falcon-512 verification, the two launches that are not the transform. `ntt_torch`/`intt_torch`
-handle `q = 12289, N = 512` through the existing parameterisation; these do the rest.
-
-| tensor | shape | dtype | meaning |
-|---|---|---|---|
-| `A` | `[B, N]` | `int32` | `NTT(s2)` |
-| `B` | `[N]` | `int32` | `NTT(h)`, the public key's transform, one row reused by all |
-| `PROD` | `[B, N]` | `int32` | `INTT(NTT(s2) * NTT(h))` |
-| `C` | `[B, N]` | `int32` | `HashToPoint(nonce ‖ m)` |
-| `S2` | `[B, N]` | `int32` | decoded signature coefficients, signed |
-| `SQN`, `OK` | `[B]` | `int64`, `int8` | squared norm and the verdict |
-
-Two properties are load-bearing and both were found the hard way:
-
-- **`%` on signed integers in Triton is C's truncated remainder**, not numpy's floored modulo.
-  `(prod - c) % Q` leaves negative differences negative, which changes every norm -- the kernel
-  normalises with an explicit `where(t < 0, t + Q, t)` before folding into `[-Q/2, Q/2]`.
-- **An `expand`ed tensor is not contiguous.** `h.expand(B, N)` has stride 0 on the first axis,
-  so a kernel that indexes `offs` linearly reads past the end of the first row; `B` is indexed
-  as `offs % N` instead, which also avoids materialising `[B, N]`.
-
-The norm is computed in int64 and compared against `floor(beta^2) = 34034726`. With
-`|s1| <= q/2 = 6144` and `n = 512` the sum is below `2^33`, so the comparison is exact; the
-reference's saturation arithmetic exists only because it works in 32 bits.
+- **Initial external MDS layer precedes round 0** (matches Plonky3's
+  `external_initial_permute_state`, verified against `data/vectors/poseidon2/bb16.json`).
+- **`% Q` with constexpr `Q` suffices** (31-bit operands fit int64 products `< 2^62`; LLVM
+  strength-reduces to multiply-high).
 
 ### `_poly1305_kernel(KEY, MSG, TAG, B, NBLK, BLK)` — `primitives/poly1305.py`
 
-Poly1305 in the canonical 5 x 26-bit limb layout (poly1305-donna), one lane per key.
-`MSG` is `[B, NBLK*16]` uint8 and must be whole 16-byte blocks: every block carries the
-implicit `+2^128`, which is correct for a full block and wrong for a padded partial tail
-(there the `0x01` byte *is* the high bit). `poly1305_np` handles any length; the AEAD pads
-with zeros per RFC 8439's pad16 before calling this.
+Poly1305 in the canonical 5 × 26-bit limb layout (poly1305-donna), one lane per key. `MSG` is
+`[B, NBLK*16]` uint8 and must be whole 16-byte blocks (every block carries the implicit `+2^128`).
+`chacha20_poly1305_torch` handles arbitrary lengths via RFC 8439 `pad16`.
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -282,21 +264,12 @@ with zeros per RFC 8439's pad16 before calling this.
 | `MSG` | `[B, NBLK*16]` | `uint8` | message blocks |
 | `TAG` | `[B, 16]` | `uint8` | the tag |
 
-Three things this kernel pins down:
-
-- **A 26x26-bit product is 52 bits**, and five of them summed stay under 2^58: int64 carries
-  the whole computation, so no `umulhi` pair per multiply and no Montgomery form.
-- **`h + limb & MASK` is not what it looks like.** Python binds `+` tighter than `&`, so the
-  mask truncates the accumulator to 26 bits after every block. It has to be
-  `h + (limb & MASK)`. The degenerate keys (r = 1, s = 0) pass either way; only a real
-  multi-block message catches it.
-- **The key stride is 32, not 16.** Reading `lane * 16` works for lane 0 and for a batch of 1,
-  which is exactly the shape of a hand-written smoke test.
+Key invariants: 26×26-bit products sum under 2⁵⁸ in int64; write `h + (limb & MASK)` (not
+`h + limb & MASK`, because `+` binds tighter than `&`); key stride is 32, not 16.
 
 ### `_aes_ctr_kernel(RK, NONCE, OUT, TBL, B, COUNTER0, NBLK, BLK)` — `primitives/aes.py`
 
-AES-128-CTR through a T-table, and the repository's measurement of what a lookup-driven cipher
-costs on a GPU.
+AES-128-CTR through a T-table (a gather measurement rather than a fast path against AES-NI).
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -305,37 +278,19 @@ costs on a GPU.
 | `OUT` | `[B, NBLK*16]` | `uint8` | keystream |
 | `TBL` | `[5*256]` | `int32` | `Te0..Te3` then the S-box, 4.25 KiB, gathered from global memory |
 
-Two conventions this kernel is a trap for, both caught only by a known-answer vector:
-
-- **`Te0[x] = [2s, s, s, 3s]`** with `s = S[x]`. Building `[s, 2s, 4s, 8s]` is an easy
-  misreading of "the S-box column rotated through the xtime multiples", and it produces
-  plausible ciphertext for every input.
-- **`Rcon` is the round word's top byte**, so it is XORed as `rcon << 24`. XORing it low gives
-  a key schedule that is wrong in every round and still looks like a key schedule.
-
-The host key schedule is *not* in the kernel: expanding 4096 keys with numpy costs ~340 ms,
-which is 50x the kernel for a 4 MiB batch. `aes128_ctr_torch` therefore takes a precomputed
-`rk` and `bench_primitive.py` hoists it out of the timing.
+`Te0[x] = [2s, s, s, 3s]` and `Rcon` is XORed as `rcon << 24`. Host key expansion is hoisted out of
+the device path (`rk` argument).
 
 ### `_gemm_int8_kernel(A, B, OUT, M, N, K, sa_m, sa_k, sb_k, sb_n, so_m, so_n, BM, BN, BK)` — `primitives/gemm.py`
 
-Exact `int8 x int8 -> int32` matrix multiply, and nothing else: no modulus, no epilogue. It is
-the generic half of `mlkem/kernels/gemm_modq.py` (which is ML-KEM's, with `Q = 3329`, two
-epilogues and a float-assisted reduction). The 0.8.0 review pointed out that the docs called
-that one "generic" while it lived in ML-KEM's package; the generic piece now lives here, and
-`gemm_modq` stays where its semantics belong.
-
-Why a bare int8 dot is a primitive: XMX int8 accumulators are int32 and exact, which is what
-lets a GF(2^8) matrix product be assembled from per-bit-plane integer products XOR-ed through
-the polynomial's reduction masks (`tests/test_gemm_int8.py` does exactly that and checks it
-against a schoolbook GF(2^8) product). Whether that beats a bitsliced CUDA-core version is the
-question `PLAN_ffgemm.md` exists to answer; this kernel only guarantees the arithmetic.
+Exact `int8 × int8 → int32` matrix multiply with no modulus and no epilogue. Because XMX / Tensor
+Core int8 accumulators are exact int32, binary bit-plane GEMMs compute exact `GF(2)` products that
+compose into `GF(2^8)` via XOR reduction (`tests/test_gemm_int8.py`).
 
 ### `_block_kernel(...)` and `_pair_kernel(...)` — `primitives/blake3.py`
 
-BLAKE3's tree, one launch per block index and one per level. A lane holds one
-(message, chunk); the 8-word chaining value lives in a `[B * chunks, 8]` buffer between
-launches.
+BLAKE3's tree, one launch per block index and one per tree level. A lane holds one
+`(message, chunk)`; the 8-word chaining value lives in `[B * chunks, 8]` between launches.
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -343,137 +298,38 @@ launches.
 | `CVS` | `[B * chunks, 8]` | `int32` | chaining values, seeded with `BLAKE3_IV` |
 | `ROOT_CV`, `ROOT_XOF` | `[B, 8]` | `int32` | the digest halves when the root is reached |
 
-Four constraints shaped this, and the fourth cost four sessions:
+Key constraints: (1) chaining state lives in memory because Triton runtime loops cannot carry
+tuples; (2) block index is passed as a runtime argument; (3) CV stores are masked by
+`block < nblocks`; (4) the 64-bit chunk counter is split into `(low, high)` int32 arguments to
+avoid `uint32 >> 32` UB (which caused the Xe backend to fold kernel stores to zero).
 
-- a **runtime loop cannot carry a tuple** in Triton, so the chaining value has to live in memory
-  between block indices rather than in registers;
-- the block index is a **runtime** argument rather than a `constexpr`. A constexpr must be known at
-  compile time, and binding one to a loop variable was recorded as unreliable during this kernel's
-  development -- *re-tested on this build, `j: tl.constexpr = i` inside a runtime loop produced the
-  correct result*, so the original observation is not reproducible as stated. The runtime argument
-  stays because it is unambiguously correct, not because the alternative is known to be wrong;
-- the CV store is masked by `block < nblocks`: the last chunk of a message is usually partial and
-  the extra iterations would overwrite it with a compression of zero padding;
-- **never shift a 32-bit value by 32.** `counter >> 32` is undefined behaviour. The Xe backend
-  accepts it, prints a warning that any test log filters out, and folds the **entire kernel's
-  results to zero** -- with every input reading back correct from inside the same launch. The
-  counter is now an explicit `(low, high)` pair and the guard is a test: any message over 1 KiB
-  has a non-zero chunk counter, which is exactly the case a 64-byte KAT cannot see.
+---
 
-### `_hash_to_point_kernel(SAMPLES, OUT, OK, B, N, NSAMP, Q, BLK)` — `falcon/kernels.py`
-
-Falcon's `HashToPoint` tail: from `n + 205` candidate 16-bit samples, keep those below `5q`,
-reduce mod q, and take the first `n` **in order** — the reference's compaction is branch-free and
-order-preserving, so an exclusive prefix sum over the keep-mask gives every survivor its
-destination index.
-
-| tensor | shape | dtype | meaning |
-|---|---|---|---|
-| `SAMPLES` | `[B, NSAMP]` | `int32` | big-endian 16-bit candidates, assembled from the sponge stream |
-| `OUT` | `[B, n]` | `int32` | the first `n` accepted coefficients, in order |
-| `OK` | `[B]` | `bool` | false when a row had fewer than `n` survivors |
-
-0.47 µs per signature at B = 4096, against ~7 µs for the same filter in numpy — the tile is a
-contiguous `[BLK, NSAMP]` block with a prefix sum and a scatter, and that is why this shape is
-fast while the per-coefficient decoder (`comp_decode`) lost by 35x on the same data
-(`docs/benchmarks.md` §16).
-
-### `_stage_kernel(X, Y, M, TOTAL, LOG_HALF, W, Q, FORWARD, BLK)` — `primitives/ntt/large.py`
-
-One Stockham pass of a 2^20-point transform, i.e. one launch per stage with the data in global
-memory. `M` is the stage's block length: it halves for the forward DIF pass (N, N/2, ..., 2) and
-doubles for the inverse DIT pass (2, 4, ..., N). `W` holds that stage's `M/2` twiddles.
-
-Two things it has to get right, and both are the same two that bit other kernels here:
-
-- **`%` on a negative int64 is C's truncated remainder**, so `u - v` is normalised with an
-  explicit `tl.where(t < 0, t + Q, t)` rather than a modulo;
-- the twiddle table and the negacyclic pre/post tables are **built once and cached per device**.
-  The first version rebuilt them per call with a million-iteration Python loop, which cost more
-  than the transform it fed (1686 ms against 10.8 ms).
-
-Memory traffic is 8 MB per pass: **84 MB** per transform at the default radix-4 (ten passes),
-160 MB at radix-2. The transform as a whole is the only primitive here whose cost is dominated by
-traffic -- 84 MB in 0.85 ms is about 98 GB/s, 45% of the 217 GB/s copy bandwidth -- and it is
-*not* bandwidth-saturated: `_stage4_kernel` halves the traffic and buys 10-20%, so the remaining
-limit is pass latency plus the modular multiplies (`docs/benchmarks.md` §22.1-§22.2).
-
-### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, PRE, MUL, Q, FUSE_PRE, FUSE_MUL, BLK)` — `primitives/ntt/large.py`
-
-Two radix-2 stages fused into one radix-4 pass, so ten passes instead of twenty and half the
-traffic. Bit-identical to the radix-2 sequence (verified 2^4..2^20, including the odd-`log2` case
-where one radix-2 pass is left over), which also means the output ordering -- and therefore
-pointwise compatibility with the in-register kernel -- is unchanged. It needs the first stage's
-twiddles at positions `j` and `j + M/4` plus the second stage's at `j`, hence three tables.
-
-**This is the default** (`LargeNTT(n, q, radix=4)`; pass `radix=2` to get the old path). It was
-opt-in for one round because a cross-window comparison made it look neutral: measured correctly, in
-the same window, it is 11-19% faster and much steadier at the median -- that cross-window trap is
-`docs/benchmarks.md` §22.2.
-
-`FUSE_PRE` applies the negacyclic pre-twiddle on the way into the first pass. `FUSE_MUL` multiplies
-each store by a caller-supplied vector, which is where the negacyclic product's pointwise step
-happens: the second operand's last forward pass already reads and writes 8 MB, so folding the
-multiply in costs nothing and saves a whole pass.
-
-### `_inv2x2_kernel(X, Y, M, TOTAL, LOG_H, WA, WB, POST, Q, FUSE_POST, BLK)` — `primitives/ntt/large.py`
-
-Two inverse DIT stages fused into one pass, the mirror of `_stage4_kernel` on the way back. Without
-it a negacyclic product paid 19 radix-2 passes on the inverse against 10 on each forward: the
-product was 42 passes, and it is 32 with this kernel plus `FUSE_MUL`.
-
-The upper stage reads blocks of `4h` as four quarters; stage A pairs `(0,1)` and `(2,3)` with `WA`
-(indexed by position in `h`), stage B pairs `(0,2)` and `(1,3)` with `WB` -- and `WB` is indexed
-`j` for the second quarter and `h + j` for the fourth, which is the part that is easy to get wrong
-and is why the numpy reference exists. Every difference takes a conditional `+ Q` rather than `%`,
-because signed `%` truncates toward zero on this backend (`docs/patterns.md`).
-
-Bit-identical to the stage-by-stage inverse for N = 2^4..2^14 (`tests/test_ntt_large.py`), including
-the odd-`log2` case where one radix-2 stage is left to `_stage_kernel`. Product measured at
-2.41 ms against 3.36 ms, 1.40x (`docs/benchmarks.md` §22.3).
-
-### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
-
-Every LM-OTS chain of every signature in one launch. A row is one (signature, chain element); the
-kernel walks the chain in place, one *single-block* SHA-256 compression per step — the hashed string
-is `I(16) || u32(q) || u16(i) || u8(j) || value(32)`, 55 bytes, so the round function starts from
-the IV and no prefix state is needed.
-
-| tensor | shape | dtype | meaning |
-|---|---|---|---|
-| `VALUE` | `[rows, 8]` | `int32` | the LM-OTS `y[i]`, the eight big-endian words of the 32-byte value (updated in place) |
-| `IW` | `[rows, 4]` | `int32` | the key identifier `I`, four big-endian words |
-| `QW` / `CIDX` / `START` | `[rows]` | `int32` | leaf number `q`, chain index `i`, first step index `a` |
-| `STEPS` | scalar | `int64` | `2^w - 1` (255 for `w = 8`) |
-
-Two details make it fast rather than merely correct. The step count is data-dependent (`a` comes
-from the message digits), so a fixed 255-step loop would be ~2× the average work for `w = 8`; the
-rows are sorted by `START` on the host and the kernel exits per block once its rows are done. And
-the value starts at byte 23, i.e. three bytes into a word, so the block words are assembled with
-`(v[k] << 8) | (v[k+1] >> 24)` shifts — cheaper than loading the value as bytes.
+## Composite primitive wrappers
 
 ### `gf2_8_matmul_torch(a, b, device=None, planes=None)` — `primitives/gemm.py`
 
-A product in GF(2^8) with the AES polynomial `x^8 + x^4 + x^3 + x + 1`, assembled from int8 GEMMs.
-This is the construction `PLAN_ffgemm.md` rests on, exposed so the assumption has an end-to-end
-number (`probes/gf2-8-matmul-probe.py`, which lives in the workspace beside this repository
-rather than in it, and `docs/benchmarks.md` §19.3).
+A product in `GF(2^8)` with the AES polynomial `x^8 + x^4 + x^3 + x + 1`, assembled from bit-plane
+int8 GEMMs (`docs/benchmarks.md` §4.4).
 
 | argument | shape | dtype | meaning |
 |---|---|---|---|
 | `a` | `[M, K]` | anything `np.asarray` reads as `uint16` | byte values |
 | `b` | `[K, N]` | same | byte values |
-| `device` | -- | -- | resolved the same way as every launcher here |
-| `planes` | -- | -- | `8` (both operands full bytes) or `1` for binary operands |
+| `device` | — | — | resolved via `devices.resolve_device` |
+| `planes` | — | — | `8` (full bytes) or `1` for binary operands |
 
-Returns an `int32` tensor on the device. It is *not* a `@triton.jit` kernel: it issues
-`64` (or `planes**2`) `gemm_int8_torch` calls and XORs the reduction-masked results together, so its
-cost is that many GEMMs -- measured at **1/55-1/61 of the int8 rate** depending on size, which is
-the number that decides whether the matrix unit is worth it for a finite field.
+Returns an `int32` tensor on the device. It is not a `@triton.jit` kernel: it dispatches
+`planes²` (64 for full bytes) `gemm_int8_torch` calls and XORs the reduction-masked results
+together (~1/57 of the int8 GEMM rate at `1024³`). Raises `ValueError` when inner dimensions
+disagree.
 
-Raises `ValueError` when the inner dimensions disagree.
+---
 
-## Generic (scheme-agnostic)
+## ML-KEM (FIPS 203) (`triton_crypto/mlkem/`)
+
+These kernels hard-code `q = 3329` and the ML-KEM block sizes (plus the generic `gemm_modq` /
+`padcat` helpers housed under `mlkem/kernels/`); for another negacyclic ring use `primitives/ntt/`.
 
 ### `_gemm_modq_kernel(W, X, E, OUT, M, N, K, sw_m, sw_k, sx_k, sx_n, se_m, se_n, so_m, so_n, MODE, BM, BN, BK)` — `mlkem/kernels/gemm_modq.py`
 
@@ -486,195 +342,148 @@ Raises `ValueError` when the inner dimensions disagree.
 | `E` | `[M, N]` | `int16` | addend (`MODE=0`, "enc") or subtrahend (`MODE=1`, "dec") |
 | `OUT` | `[M, N]` | `int16` | centred residue in `[0, q)` |
 
-All six strides are runtime arguments, so `W` can be a transposed or interleaved view. `MODE` is a
-`constexpr` branch, not a runtime one.
-
-Exactness constraint (this is what makes it legal to do modular arithmetic in fp16): entries are
-bounded so that every partial sum is `< 2²⁴` and therefore exactly representable in the fp32
-accumulator. `docs/design.md` §2 proves the bound for ML-KEM's use; any new user of this kernel
-must reproduce that argument.
+All six strides are runtime arguments; `MODE` is a `constexpr` branch. Entries are bounded so every
+partial sum stays `< 2²⁴` and is exact in fp32 (`docs/design.md` §2).
 
 ### `_gemm_modq_i8_kernel(HI, LO, X, E, OUT, …)` — `mlkem/kernels/gemm_modq.py`
 
-Same contract, but `W = 64*HI + LO` is split into two `int8` matrices so the int8 tensor cores can
-be used, and the two accumulators are recombined as `64*acc_hi + acc_lo`. Used when the fp16
-exactness bound does not hold for a given tile.
+Same contract, splitting `W = 64*HI + LO` into two `int8` matrices and recombining
+`64*acc_hi + acc_lo` when fp16 exactness bounds do not hold.
 
 ### `padcat2_kernel(A, B, OUT, n, BR)` — `mlkem/kernels/padcat.py`
 
-`OUT[row] = pad10*1(A[row] ‖ B[row], domain)`, one launch. `A`, `B`, `OUT` are byte views of
-`int64` words; the segment lengths, `domain` and the two broadcast flags are baked into the
-generated source, so each distinct message shape is a separate compilation. Used by ML-KEM where
-two byte strings must be absorbed as one sponge input (e.g. `G(m ‖ H(ek))`).
+`OUT[row] = pad10*1(A[row] ‖ B[row], domain)`, one launch. Generated per `(lenA, lenB, domain,
+broadcast)` shape for ML-KEM multi-segment sponge inputs (e.g. `G(m ‖ H(ek))`).
 
 ### `padcat_sfx_kernel(A, OUT, n, MOD, OFF, BR)` — `mlkem/kernels/padcat.py`
 
-`OUT[row] = pad10*1(A[row // MOD] ‖ bytes[row % MOD + OFF], domain)` — a prefix shared by `MOD`
-rows plus a per-row suffix. This is the ML-KEM rejection-sampling pattern (`rho ‖ j ‖ i`), where
-`A` is the 32-byte `rho` and the suffix is two bytes of indices.
-
-## ML-KEM (FIPS 203)
-
-These kernels hard-code `q = 3329` and the ML-KEM block sizes; for another negacyclic ring use
-`primitives/ntt/`, which is parameterised by `(q, N, ζ, layers)`.
+`OUT[row] = pad10*1(A[row // MOD] ‖ bytes[row % MOD + OFF], domain)` — shared prefix plus per-row
+suffix (`rho ‖ j ‖ i` rejection-sampling pattern).
 
 ### `encaps_kernel(W, Y, E, OUT, M, K, N, PIVOT, DU, DV, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/encaps.py`
 
 `[u; v] = W @ Y + E`, then `Compress_du`/`Compress_dv` in the epilogue; writes `comp [M, B] int16`.
-`W` is the Toeplitz-expanded re-encryption matrix (`[M, K]` fp16), `Y [K, B]` fp16, `E [M, B] int16`.
-`PIVOT` selects where the `du` segment ends and the `dv` segment starts; `MASK_N` keeps the tail of
-a `BN` tile from reading past `B`. Bit packing is deliberately **not** fused here (a byte can span
-three coefficients at `dv=5`, which needs a reorder across tile rows) — see `pack_seg_kernel`.
+Uses `_fused_cfg` (`num_stages=1` on Intel `xpu`) and `MASK_N=True` (see `fused_enc_kernel` below).
+Bit packing is kept in `pack_seg_kernel` because `dv=5` spans three coefficients per byte.
 
 ### `pack_seg_kernel(COMP, OUT, B, CTLEN, OUTOFF, NSEG, D, BLK, OBLK)` — `mlkem/kernels/encaps.py`
 
-`COMP [NSEG*256, B] int16` → `OUT [B, CTLEN]` uint8, `D*32` bytes per polynomial. A byte may span
-**three** coefficients (`D=5`); the kernel always unrolls three terms and masks by the shift.
+`COMP [NSEG*256, B] int16` → `OUT [B, CTLEN]` uint8, `D*32` bytes per polynomial. Unrolls three
+terms and masks by shift for `D=5`.
 
 ### `fused_enc_kernel(…)` — `mlkem/kernels/fused_gemm.py`
 
-The decapsulation re-encryption pass with its epilogue fused: GEMM → `mod q` → `Compress` →
-compare against the reference ciphertext → column-reduce into `parts [npm, B] int32`. The
-`[1024, B]` fp32 intermediate never reaches memory; `_combine_parts` (an inline helper) atomically
-sums the partials afterwards. `npm = M/BM`.
+Decapsulation re-encryption pass with fused epilogue: GEMM → `mod q` → `Compress` → compare
+against reference ciphertext → column-reduce into `parts [npm, B] int32` (summed by
+`_combine_parts`).
 
-**This kernel runs with `num_stages=1` and a masked epilogue, and neither is a shape guard.**
-With `num_stages >= 2` it faults on this backend: the GPU dereferences virtual address `0x0`,
-`xe` cannot resolve it, raises *Engine memory CAT error* and resets the CCS engine, and every
-later call in that process dies with `UR_RESULT_ERROR_DEVICE_LOST`. Bisected 2026-11-27:
+**This kernel (along with `fused_dec_kernel` and `encaps_kernel`) runs with `num_stages=1` on Intel
+`xpu` and a masked epilogue (`MASK_N=True`).** With `num_stages >= 2` on `triton-xpu 3.9` / Xe3,
+pipelined epilogue loads dereference VA `0x0`, triggering an *Engine memory CAT error* and
+`UR_RESULT_ERROR_DEVICE_LOST`:
 
 | configuration | M=1024 B=512 | M=1280 B=256 |
 |---|---|---|
-| `num_stages=2`, unmasked epilogue (the default) | 5/5 fault | fault |
+| `num_stages=2`, unmasked epilogue | 5/5 fault | fault |
 | `num_stages=2`, masked epilogue | 0/5 | **still faults** |
 | `num_stages=1` | clean | clean |
 
-So the mask alone was not enough: it fixes the M=1024 shapes and leaves M=1280 broken, which is
-why `_fused_cfg` forces `num_stages=1` on `xpu` (leaving CUDA/ROCm at `_pick_cfg`'s stages) for
-`fused_enc_kernel`, `fused_dec_kernel`, and `encaps_kernel` (the latter hit the same
-`UR_RESULT_ERROR_DEVICE_LOST` at `M=1024, B=4096` with `MASK_N=False, num_stages=2` and now uses
-`_fused_cfg` + `MASK_N=True` as well). The mask is kept because it is free (always true when
-`B % BN == 0`) and removes one of the two triggers. A bare pipelined matmul with no epilogue never
-faulted at the same shape, so this is the epilogue's interaction with the pipeliner, not `tl.dot`.
-**Measured 2026-11-27 on Arc B390 (`B=4096`, ML-KEM-768)**: `bench_kernels.py` total GPU time is
-`0.916 ms` (`fused_enc_kernel` `0.309 ms`, `fused_dec_kernel` `0.084 ms`) vs `0.972 ms` (`0.290` /
-`0.093 ms`) previously, `bench_e2e.py` device-side `1.129 ms` (`0.276 µs/op`) vs `1.237 ms`
-previously, and `bench_encaps.py` device-side `0.191 µs/op` (B=4096) / `0.162 µs/op` (B=8192) — so
-`num_stages=1` adds no measurable penalty on Xe3. Regression:
+`_fused_cfg` forces `num_stages=1` on `xpu` only (CUDA/ROCm keep `_pick_cfg`'s stages) with zero
+measurable slowdown on Xe3 (`docs/benchmarks.md` §3.1). Regressions:
 `tests/test_fused_gemm.py::test_the_epilogue_mask_keeps_the_pipelined_kernel_safe` and
 `tests/test_cpu_only.py::test_fused_cfg_disables_pipelining_only_on_xpu`.
 
 ### `fused_dec_kernel(W, U, V, MB, M, K, N, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/fused_gemm.py`
 
-`mod q (V − W·U)` → `Compress_1` → pack 8 rows into a byte → `MB [B, 32] uint8`. Same skeleton as
-`fused_enc_kernel`, different epilogue.
+`mod q (V − W·U)` → `Compress_1` → pack 8 rows into a byte → `MB [B, 32] uint8`.
 
 ### `compress_pack_kernel(acc, V, mbytes, B, BN)` — `mlkem/kernels/glue.py`
 
-Fallback for the DEC epilogue when the fused kernel's constraints are not met: `acc [256, B] fp32`,
-`V [256, B] int16` → `mbytes [B, 32] uint8`, with eight rows bit-OR'ed into one byte per column
-(no `m_bits` intermediate, no transpose).
+Fallback DEC epilogue when fused GEMM constraints are unmet: `acc [256, B] fp32`, `V [256, B] int16`
+→ `mbytes [B, 32] uint8`.
 
 ### `build_ye_kernel(y, e, mbytes, Y, E, B, K, BN, CHUNK)` — `mlkem/kernels/glue.py`
 
-The `Y`/`E` layout conversion for the next GEMM: `y [B,K,256]`, `e [B,K+1,256]`, `mbytes [B,32]` →
-`Y [K*256, B] fp16`, `E [(K+1)*256, B] int16`, with `E2 += 1665 * bit` folded in. Replaces a
-`permute + reshape + cat` chain that cost more than the GEMM.
+Layout conversion `y [B,K,256]`, `e [B,K+1,256]`, `mbytes [B,32]` → `Y [K*256, B] fp16`,
+`E [(K+1)*256, B] int16`, folding `E2 += 1665 * bit`.
 
 ### `cbd_ye_kernel(bufs, mbytes, OUT, B, K, RSTRIDE, BN, ETA, F16, E2)` — `mlkem/kernels/glue.py`
 
-Centred binomial distribution, straight from bytes into the fp16/int16 GEMM operand layout. Two
-personalities: `F16=True` produces `Y [K*256, B] fp16` from `y_buf`; `F16=False, E2=True` produces
-`E [(K+1)*256, B] int16` from `e_buf`, with the `1665·bit` term added on the `pid_r == K` segment.
-For `eta=2` one byte holds exactly two coefficients, so it is a single read and a single write.
+Centred binomial distribution straight from bytes into fp16 `Y` or int16 `E` (with `1665·bit` on
+the `pid_r == K` segment).
 
 ### `pow_mac_kernel(A, S, E, OUT, GAM, P, K, N, HALF, BR)` — `mlkem/kernels/ntt.py`
 
-`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]` (FIPS 203 Alg. 11/12). `∘` is the **base-case** multiply in
-`Z_q[X]/(X²−γ)`, so even and odd coefficients form two independent channels; the kernel loads them
-with `stride=2` instead of gathering, which is why there is no `tl.gather` here at all. `GAM` is the
-128-entry `γ` table. Rows are independent; `BR` rows per program.
+`t̂[i] = Σ_j Â[i][j] ∘ ŝ[j] + ê[i]` (FIPS 203 Alg. 11/12) in `Z_q[X]/(X²−γ)` using `stride=2` loads
+(no `tl.gather`).
 
 ### `encode12_kernel(V, OUT, N, BYTES, OBLK)` — `mlkem/kernels/ntt.py`
 
-`ByteEncode_12`: `[P, 256] int32` in `[0, 4096)` → `[P, 384] uint8`. `D=12` means a byte spans at
-most two coefficients, so two loads suffice (contrast `pack_seg_kernel`, where `D=5` spans three).
+`ByteEncode_12`: `[P, 256] int32` in `[0, 4096)` → `[P, 384] uint8`.
 
 ### `_sample_ntt_kernel(BUF, OUT, NB, N, QL, NCAND)` — `mlkem/kernels/rebuild.py`
 
-FIPS 203 Alg. 7 (rejection sampling of `Â`) from a sponge output: one program per message,
-`tl.cumsum` over the acceptance mask to find prefix positions, then a scatter that keeps the first
-256 legal values. 840-byte input → 256 NTT-domain coefficients.
+FIPS 203 Alg. 7 rejection sampling of `Â` via `tl.cumsum` prefix positions + scatter: 840-byte
+input → 256 NTT-domain coefficients.
 
 ### `_toeplitz_kernel(A, META, OUT, K, N, BR)` — `mlkem/kernels/rebuild.py`
 
-Expands a centred polynomial `a` into a 256×256 negacyclic Toeplitz block
-(`T(a)[i][j] = a[(i-j) mod N] · (±1)`), writing into the fp16 GEMM operand `W`. `META [n_blocks, 3]`
-holds `(source row of the coefficient, W row block, W column block)`. Triton's `%` truncates toward
-zero, so the index is normalised explicitly.
+Expands centred polynomial `a` into a 256×256 negacyclic Toeplitz block (`T(a)[i][j] = a[(i-j) mod
+N] · (±1)`) in fp16 `W`. Normalises negative indices explicitly against Triton's truncated `%`.
 
 ### `_unpack_kernel(buf, out, B, STRIDE, COUNT, D, BR, BC)` — `mlkem/pipeline.py`
 
-Ciphertext bytes → `int16` coefficients for one `D`-bit segment, `COUNT` values per row.
+Ciphertext bytes → `int16` coefficients for one `D`-bit segment.
 
 ### `_pre_kernel(ct, out, ref, B, CTLEN, BYTE0, COUNT, D, CENTER, BC, JT)` — `mlkem/pipeline.py`
 
-Unpack + decompress (+ centre) + transpose in one pass, while keeping an `int16` reference copy for
-the compare kernel. `COUNT ∈ {256, 512, 768, 1024}` is not a power of two, so it is tiled by
-`JT=256`.
+Unpack + decompress (+ centre) + transpose in one pass, keeping an `int16` reference copy for the
+compare kernel (`JT=256`).
 
 ### `_cmp_kernel(acc2, E, ref, cnt, B, ROW0, ROWS, D, BM, BN)` — `mlkem/pipeline.py`
 
-`mod q` → compress → compare against the reference → accumulate per-column equality counts. This is
-the fallback path for `fused_enc_kernel` (used when the fused kernel's tiling does not apply).
+Fallback for `fused_enc_kernel`: `mod q` → compress → compare → accumulate per-column counts.
 
 ### `_cbd2_kernel(buf, out, n, BLOCK)` — `mlkem/pipeline.py`
 
-CBD for `eta=2` over `[n, 128]` bytes; replaces six chained PyTorch ops.
+CBD for `eta=2` over `[n, 128]` bytes.
 
-## ML-DSA (FIPS 204)
+---
+
+## ML-DSA (FIPS 204) (`triton_crypto/mldsa/`)
 
 ### `unpack_z_kernel(SIG, OUT, SIGSTRIDE, SIGROWS, ZOFF, POLYBYTES, D, GAMMA1, N, NL)` — `mldsa/kernels.py`
 
-`[B, SIG] uint8` → `[B*l, N] int32`. `z` is stored as `γ1 − z` in `D`-bit little-endian fields
-(`D ∈ {18, 20}`), so unpacking is a subtract from `γ1`; a field never straddles more than three
-bytes, so three loads per field suffice. One program per (signature, polynomial).
+`[B, SIG] uint8` → `[B*l, N] int32`. Unpacks `γ1 − z` from `D`-bit little-endian fields
+(`D ∈ {18, 20}`), three byte loads per field.
 
 ### `mac_kernel(Z, A, CH, T1, OUT, B, K, L, N, Q, BN, ZERO_CH)` — `mldsa/kernels.py`
 
-`ŵ_i = Σ_j Â[i][j]·ẑ[j] − ĉ·t̂1_i` (FIPS 204 Alg. 33/11). `Â` and `t̂1` are resident (they are part
-of the public key), so only `ẑ` and the output stream through. Products reach `q² ≈ 7·10¹³` and are
-computed in `int64`; `BN` batch rows per program, one program per `(row block, i)`.
-`ZERO_CH=True` skips the `ĉ·t̂1` load entirely (signing's first pass has `ĉ = 0`); passing a
-one-row tensor with `expand()` instead made the kernel read past that row.
+`ŵ_i = Σ_j Â[i][j]·ẑ[j] − ĉ·t̂1_i` (FIPS 204 Alg. 33/11) in `int64`. `ZERO_CH=True` skips the
+`ĉ·t̂1` load during signing's first pass (avoiding non-contiguous `expand()` reads).
 
 ### `sample_in_ball_kernel(BUF, OUT, N, TAU, RATE)` — `mldsa/kernels.py`
 
-SampleInBall (FIPS 204 Alg. 29), one program per signature. The algorithm is inherently sequential
-(`c[i] ← c[j]`, then `c[j] ← ±1` with a rejection-sampled `j`), so the kernel keeps the 256
-coefficients as one vector and uses masked selects instead of scatters, and a `while` loop for the
-rejection (a fixed unroll would have to assume a bound the standard does not give).
+SampleInBall (FIPS 204 Alg. 29), one program per signature: 256 coefficients in one register
+vector, masked selects + `while` rejection loop.
 
 ### `hint_kernel(SIG, H, OK, SIGSTRIDE, HOFF, OMEGA, OMEGA_P2, K, N)` — `mldsa/kernels.py`
 
-HintBitUnpack (FIPS 204 Alg. 20), one program per `(signature, i)`: writes a dense 0/1 row and one
-validity bit per row (counts monotone and ≤ ω, indices strictly increasing, tail of the last row
-zero). `OMEGA` (55/75/80) is not a power of two, hence the padded `OMEGA_P2` and the store mask.
+HintBitUnpack (FIPS 204 Alg. 20), one program per `(signature, i)`: writes a dense 0/1 row and a
+validity bit (monotone counts ≤ ω, strictly increasing indices, zero tail).
 
 ### `w1_pack_kernel(W, H, OUT, B, K, N, MB, TWO_G2, G2, M, POLYB, BC)` — `mldsa/kernels.py`
 
-`Decompose → UseHint → BitPack` (FIPS 204 Alg. 36/37/23) in one pass, `BC` output bytes per
-program. An `MB`-bit field (`MB ∈ {4, 6}`) spans at most two coefficients, so two loads suffice.
-`POLYB` masks the last, partially filled byte block.
+`Decompose → UseHint → BitPack` (FIPS 204 Alg. 36/37/23) in one pass (`MB ∈ {4, 6}`).
 
-## SLH-DSA (FIPS 205)
+---
+
+## SLH-DSA (FIPS 205) (`triton_crypto/slhdsa/`)
 
 ### `thash_kernel(SEED, OUT, DATA, RCP, KP, CHAIN, INDEX, TREE, rows, LAYER, TYPE, BLOCK)` — `slhdsa/kernels.py`
 
-`T_l` / `F` / `H` of FIPS 205 — that is, `SHAKE256(PK.seed ‖ ADRS ‖ data)` — with the absorption
-and the permutation in one launch. Generated per `(n, dn)`: for `n ∈ {16,24,32}` and
-`dn ∈ {n, 2n}` there are six kernels, each specialised on both sizes, so the padding offset is a
-compile-time constant.
+`T_l` / `F` / `H` of FIPS 205 (`SHAKE256(PK.seed ‖ ADRS ‖ data)`) with absorption and permutation in
+one launch. Generated per `(n, dn)` for `n ∈ {16, 24, 32}` and `dn ∈ {n, 2n}` (six kernels).
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
@@ -684,30 +493,71 @@ compile-time constant.
 | `KP`, `CHAIN`, `INDEX`, `TREE` | `[rows]` | `int64` | the four variable ADRS fields |
 | `LAYER`, `TYPE` | scalar | `int64` | constant within a call |
 
-The ADRS is 32 bytes and every piece of the message starts on an 8-byte boundary (`n` is a
-multiple of 8, the ADRS is 32), so the 17 state words can be assembled arithmetically instead of
-building a byte buffer: `PK.seed ‖ ADRS ‖ data` is words `0..n/8-1`, `n/8..n/8+3`, `n/8+4..`. Each
-32-bit ADRS field is written big-endian by the scheme and read little-endian by the sponge, hence
-the byte swaps. `pad10*1` lands at a constant word/shift (`0x1F` after the message, `0x80` in byte
-135), so it is an OR against a constant.
+Assembles the 17 state words arithmetically with big-to-little endian swaps on ADRS and constant
+`pad10*1` ORs. Cut 128f verification from `172 → 71 µs/sig` (before chain compaction took it to
+`48–50 µs/sig`). Multi-block `T_l` calls go through `verify._thash_multi` + `sponge_padded`.
 
-Why this exists: composing the buffer on the host and calling the sponge kernel costs several
-tensor writes per hash, and a 128f verification makes ~400 of them; the fused kernel took the
-128f cost from 172 µs to 71 µs per signature at B = 4096.
+---
 
-`TREE` is passed as the int64 *bit pattern* (`torch` has no uint64): 256f's tree index is a full
-64 bits, and a signed shift would sign-extend it.
+## LMS / HSS (SP 800-208) (`triton_crypto/lms/`)
 
-Messages longer than one block (`T_l` over `len·n` bytes, at the top of each WOTS+ layer) go
-through `verify._thash_multi`, which composes the buffer and calls `sponge_padded` — a handful of
-launches per signature, not worth a second kernel.
+### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
+
+Walks every LM-OTS chain of every signature in one launch, one single-block SHA-256 compression
+per step over `I(16) ‖ u32(q) ‖ u16(i) ‖ u8(j) ‖ value(32)` (55 bytes, fresh IV).
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `VALUE` | `[rows, 8]` | `int32` | LM-OTS `y[i]`, eight big-endian words (updated in place) |
+| `IW` | `[rows, 4]` | `int32` | key identifier `I`, four big-endian words |
+| `QW` / `CIDX` / `START` | `[rows]` | `int32` | leaf number `q`, chain index `i`, first step index `a` |
+| `STEPS` | scalar | `int64` | `2^w - 1` (255 for `w = 8`) |
+
+Rows are sorted by `START` on the host so blocks exit early once their chains finish (~2× less
+work for `w = 8`), and the 3-byte-unaligned value words are assembled with word shifts
+`(v[k] << 8) | (v[k+1] >> 24)`.
+
+---
+
+## Falcon (FIPS 206 draft) (`triton_crypto/falcon/`)
+
+`primitives/ntt` handles the `q = 12289, N = 512` forward and inverse transforms with no new
+kernel; the three Falcon-specific launches live in `falcon/kernels.py`.
+
+### `_hash_to_point_kernel(SAMPLES, OUT, OK, B, N, NSAMP, Q, BLK)` — `falcon/kernels.py`
+
+Falcon's `HashToPoint` tail: from `n + 205` candidate 16-bit big-endian samples, keeps values
+`< 5q`, reduces mod `q`, and compacts the first `n` survivors **in order** via an exclusive prefix
+sum (`0.47 µs/sig` at B=4096 vs ~7 µs in NumPy; `docs/benchmarks.md` §3.5).
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `SAMPLES` | `[B, NSAMP]` | `int32` | big-endian 16-bit candidates assembled from SHAKE256 |
+| `OUT` | `[B, n]` | `int32` | first `n` accepted coefficients, in order |
+| `OK` | `[B]` | `bool` | false if a row had fewer than `n` survivors |
+
+### `_mul_ntt_kernel(A, B, OUT, P, Q, N, BLK)` and `_check_kernel(PROD, C, S2, SQN, OK, P, L2BOUND, Q, N)` — `falcon/kernels.py`
+
+Pointwise product `s2_hat * h_hat mod q` and L2 norm check `‖(c − s2·h, s2)‖² ≤ floor(β²)`.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `A` | `[B, N]` | `int32` | `NTT(s2)` |
+| `B` | `[N]` | `int32` | `NTT(h)`, single public-key row indexed as `offs % N` (avoids non-contiguous `expand`) |
+| `PROD` | `[B, N]` | `int32` | `INTT(NTT(s2) * NTT(h))` |
+| `C` | `[B, N]` | `int32` | `HashToPoint(nonce ‖ m)` |
+| `S2` | `[B, N]` | `int32` | decoded signature coefficients, signed |
+| `SQN`, `OK` | `[B]` | `int64`, `int8` | squared norm (exact in int64, `< 2^33`) and verdict |
+
+Normalises `(prod - c) % Q` with explicit `where(t < 0, t + Q, t)` because Triton's signed `%`
+truncates toward zero.
 
 ---
 
 ## Inline helpers (not launched)
 
-These are `@triton.jit` functions called from inside other kernels; they exist to keep the
-epilogues readable and are inlined by the compiler. They have no grid and no contract of their own.
+These are `@triton.jit` functions called from inside other kernels; they have no grid and no
+contract of their own.
 
 | helper | file | used by |
 |---|---|---|
@@ -720,7 +570,5 @@ epilogues readable and are inlined by the compiler. They have no grid and no con
 | `_rotl`, `_qr` | `primitives/chacha20.py` | `chacha20_kernel` |
 | `_use_hint` | `mldsa/kernels.py` | `w1_pack_kernel` |
 
-One constraint worth repeating because it has bitten: **a `@triton.jit` helper whose body never
-mentions `tl` loses the closure** and fails at compile time with `NameError: tl is not defined`.
-That is why the Montgomery reduction is written out at each of its three call sites instead of being
-factored into a helper.
+Constraint: **a `@triton.jit` helper whose body never mentions `tl` loses the closure** and fails
+at compile time with `NameError: tl is not defined`.

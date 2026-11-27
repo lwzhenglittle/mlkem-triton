@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1214 passed + 1 skipped** of 1215 collected |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1221 tests** (cold cache: 1221 passed, 0 skipped; warm cache: 1220 passed + 1 compile-cache skip) |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -41,11 +41,14 @@ from the code and is not claimed as working.
 Every measurement in this project is paired with a CPU baseline taken **on the same machine**
 (`benchmarks/bench_16p_barrier.py`, `vs 1T` / `vs 16P` columns, barrier-measured at matched 1 KiB
 message sizes). On this machine the honest summary is:
-**seven primitive rows beat sixteen x86 cores** -- the sponge/SHA-2 family at 2.80-8.10x and the
-2^20 NTT at 3.83-7.28x (clock-dependent) -- while the ALU-bound primitives stay at 0.11-0.74x
-(ChaCha20-Poly1305 near parity at 0.90-1.00x). At the scheme level, ML-DSA-44 verify wins ~1.6x
-and Falcon's *core* wins 5.8x (its end-to-end is ~4.5x slower because 81% of it is host-side
-decode). `docs/benchmarks.md` §15.1 and `benchmarks/snapshot-20261127T140302Z.md` have the tables.
+**eight primitive rows beat sixteen x86 cores device-side** — exact int8 GEMM (9.0–9.3×), the
+sponge/SHA-2 family (2.4–7.8×) and the 2^20 NTT (5.9–6.1× in the current window, 3.8–7.3× across
+clock states) — while the ALU-bound primitives stay at 0.10–0.64× (ChaCha20-Poly1305 near parity at
+0.94–0.96×). At the scheme level, ML-KEM-512/768/1024 encaps & decaps (1.5–8.6× dev, 1.1–3.8× e2e),
+ML-DSA-44/65/87 verify (1.6–2.0× dev, 1.1–1.5× e2e), SLH-DSA SHAKE/SHA2-128f verify (3.4× / 4.0×),
+and Falcon-512's *core* (5.6–5.7× dev, 0.20–0.22× e2e due to host decode) beat sixteen processes.
+`docs/benchmarks.md` §1, `benchmarks/local-gpu-vs-cpu-20261127.md`, and
+`benchmarks/snapshot-20261127T150247Z.md` have the full tables.
 
 With no GPU at all, `pytest tests` skips the device-dependent cases centrally, so a CPU-only
 machine can still smoke-test the maths and reference paths.
@@ -121,7 +124,7 @@ usable CPU target, so with no accelerator present `resolve_device` raises.
    verifies the fp16 exactness bound on the actual hardware rather than trusting it.
 3. Run `python benchmarks/bench_kernels.py --batch 4096` to see which kernel is out of line.
    A backend whose `fused_enc_kernel` share differs wildly from the numbers in
-   [docs/benchmarks.md](benchmarks.md) §5 usually means a tile configuration problem.
+   [docs/benchmarks.md](benchmarks.md) §3.1 usually means a tile configuration problem.
 4. Only then sweep tiles. Report both the device-side and end-to-end figures, and state the
    clock conditions — see [CONTRIBUTING.md](../CONTRIBUTING.md) for the measurement discipline
    this project requires.

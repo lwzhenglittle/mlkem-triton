@@ -7,10 +7,10 @@ carries, modular arithmetic, the matrix unit, irregular memory access — and th
 would be a table saying which patterns are easy and which are hard.
 
 This is that table, as of 1.1.0. Every device number is from `benchmarks/snapshot.py` (one
-window, `benchmarks/snapshot-20261127T140302Z.md`); every CPU number is from
-`benchmarks/cpu_baseline_barrier.json` (OpenSSL / liboqs / Plonky3, same machine, 16 concurrent
-processes measured with a barrier at matched 1 KiB message sizes). Sections in `docs/benchmarks.md`
-are cited where the detail lives.
+window, `benchmarks/snapshot-20261127T150247Z.md`) and `benchmarks/local-gpu-vs-cpu-20261127.md`;
+every CPU number is from `benchmarks/cpu_baseline_barrier.json` (OpenSSL / liboqs / Plonky3 /
+exact CPU GEMM, same machine, 16 concurrent processes measured with a barrier at matched 1 KiB
+message sizes). Sections in `docs/benchmarks.md` are cited where the detail lives.
 
 ## 0. The rule, corrected: it is three factors, not one
 
@@ -34,20 +34,22 @@ that is set by three factors together.**
 
 | primitive | device | CPU 1T | CPU 16P (barrier) | vs 16P | instruction | SIMD width | chain |
 |---|---:|---:|---:|---:|---|---|---|
-| SHA3-256 | 31.4 GB/s | 0.61 GB/s | 6.09 GB/s | **5.15x** | none | 4 lanes | 24 rounds |
-| SHA-256 | 78.6 GB/s | 3.13 GB/s | 28.0 GB/s | **2.80x** | **SHA-NI** | serial | 64 rounds |
-| SHA-512 | 44.9 GB/s | 0.87 GB/s | 6.46 GB/s | **6.94x** | none here | serial | 80 rounds |
-| ChaCha20 | 14.2 GB/s | 4.23 GB/s | 21.8 GB/s | 0.65x | none | 8-16 lanes | short |
-| Poly1305 | 11.9 GB/s | 5.64 GB/s | 36.8 GB/s | 0.32x | **PCLMUL** | 26-bit limbs | short |
-| AES-128-CTR | 10.6 GB/s | 11.8 GB/s | 94.7 GB/s | 0.11x | **AES-NI** | VAES 8-16 | short |
-| BLAKE3 | 9.7 GB/s | 1.31 GB/s | 13.2 GB/s | 0.74x | none | **16 lanes** | short |
-| Poseidon2 | 3.2 GB/s | 9.08M/s | 43.8M/s | 0.58x | none | Plonky3 asm | long |
-| 2^20 NTT | 1.64 ms (0.85 ms fast, radix-4) | 19.2/s | 159/s | **3.83x** | none | memory-bound | n/a |
+| SHA3-256 | 31.3 GB/s | 0.62 GB/s | 6.32 GB/s | **4.95x** | none | 4 lanes | 24 rounds |
+| SHA-256 | 78.8 GB/s | 3.14 GB/s | 32.3 GB/s | **2.44x** | **SHA-NI** | serial | 64 rounds |
+| SHA-512 | 45.0 GB/s | 0.90 GB/s | 6.96 GB/s | **6.47x** | none here | serial | 80 rounds |
+| ChaCha20 | 14.3 GB/s | 4.28 GB/s | 23.3 GB/s | 0.61x | none | 8-16 lanes | short |
+| Poly1305 | 12.0 GB/s | 5.92 GB/s | 39.4 GB/s | 0.30x | **PCLMUL** | 26-bit limbs | short |
+| AES-128-CTR | 10.9 GB/s | 11.8 GB/s | 101 GB/s | 0.11x | **AES-NI** | VAES 8-16 | short |
+| BLAKE3 | 10.1 GB/s | 1.35 GB/s | 15.9 GB/s | 0.64x | none | **16 lanes** | short |
+| Poseidon2 | 3.3 GB/s | 9.31M/s | 46.0M/s | 0.57x | none | Plonky3 asm | long |
+| 2^20 NTT | 0.90 ms (0.85-1.64 ms, radix-4) | 19.1/s | 188/s | **5.91x** | none | memory-bound | n/a |
+| exact int8 GEMM | 3.82 TMAC/s (1024^3) | 66.5 GMAC/s | 409 GMAC/s | **9.33x** | FMA/AVX2 | matrix unit | n/a |
 
-(Device and CPU columns are from `benchmarks/snapshot-20261127T140302Z.md` and
-`benchmarks/cpu_baseline_barrier.json`; at top iGPU clock, the 2^20 NTT reaches 0.86 ms / **7.28x**
-in `benchmarks/table-16p-20261127.md`. Poseidon2 and the NTT are counted in permutations and
-transforms, not bytes.)
+(Device and CPU columns are from `benchmarks/snapshot-20261127T150247Z.md` and
+`benchmarks/cpu_baseline_barrier.json`; across clock states, the 2^20 NTT spans `3.83–7.28x`.
+Poseidon2, the NTT and GEMM are counted in permutations, transforms and MACs, not bytes.
+See `docs/benchmarks.md` §1.2 for the companion Host→Device→Host E2E column — notably `sha256`
+flips from `2.51x` device-only to `0.48x` end-to-end when paying a single 64 MiB H2D copy.)
 
 **The device's ALU-bound throughput barely varies** (10-31 GB/s across every row). The 100x spread
 in the last column is entirely the CPU side -- which is why "can the GPU do this pattern" and "is
@@ -56,9 +58,10 @@ the GPU worth it" have different answers.
 Two corollaries that still hold:
 
 - **A single iGPU core-equivalent is not the competition.** Against one CPU thread every port looks
-  3-10x better. `eval-next-steps-1.0.0.md` §2 has the numbers: a baseline taken during a build (or
-  on a `powersave` governor at 400 MHz) is 3x slower than the same code measured idle, which is how
-  "5.6x vs CPU" became "1.0-1.8x" without touching the device code (`docs/benchmarks.md` §11).
+  3-10x better. A CPU baseline taken during a build (or under a throttled `powersave` governor at
+  400–900 MHz) reads 3–4.6× slower than the same code measured idle under `performance`, which is
+  why `bench_16p_barrier.py` now refuses to write baselines from a throttled power state
+  (`docs/benchmarks.md` §5).
 - **The interesting GPU shapes are the ones the CPU cannot vectorise**: batched independent small
   objects (signature verification), hot small tables, and the matrix unit.
 

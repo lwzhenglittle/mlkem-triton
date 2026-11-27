@@ -48,12 +48,33 @@ def test_mldsa_block():
     assert "rnd" in _params(Signer.sign)
 
 
-@pytest.mark.parametrize(("module", "cls"), [("slhdsa", "Verifier"), ("lms", "Verifier")])
+@pytest.mark.parametrize(
+    ("module", "cls"),
+    [("slhdsa", "Verifier"), ("lms", "Verifier"), ("falcon", "Verifier")],
+)
 def test_other_scheme_blocks(module, cls):
-    """README blocks 2 and 3: the two verifiers the snippets import."""
+    """README scheme blocks: SLH-DSA, LMS and Falcon verifiers."""
     mod = __import__(f"triton_crypto.{module}", fromlist=[cls])
     target = getattr(mod, cls)
     assert hasattr(target, "verify")
+
+
+def test_benchmarks_section_numbering_is_monotonic():
+    """`docs/benchmarks.md` once drifted into out-of-order sections (§14.5, §22.2 -> §15.2 -> §19.3).
+    Assert numbered headings stay unique and strictly monotonic in reading order.
+    """
+    import itertools
+    import re
+
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "benchmarks.md").read_text()
+    nums = []
+    for m in re.finditer(r"^#{2,4}\s+(\d+(?:\.\d+)*)\b", text, re.M):
+        nums.append((m.group(1), tuple(int(p) for p in m.group(1).split("."))))
+    assert nums, "expected numbered sections in docs/benchmarks.md"
+    raw = [s for s, _ in nums]
+    assert len(raw) == len(set(raw)), f"duplicate section numbers: {raw}"
+    for (a_str, a), (b_str, b) in itertools.pairwise(nums):
+        assert b > a, f"out-of-order section in docs/benchmarks.md: {a_str} -> {b_str}"
 
 
 def test_primitives_block():
