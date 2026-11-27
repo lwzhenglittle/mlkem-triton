@@ -614,13 +614,22 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
             f"{r['rate'] + ' ' + r['unit'] + '/s':>10s} {r['gbs']:6.1f} {r['share']:5.0f}% "
             f"{_bytes_fmt(r['copy_equiv']):>8s} {r['vs1t']:>7s} {r['vs16p']:>7s}"
         )
+    baseline_label = (
+        f"benchmarks/{args.baseline.name}"
+        if args.baseline
+        else (
+            "benchmarks/cpu_baseline_barrier.json"
+            if CPU_BASELINE_BARRIER.exists()
+            else "benchmarks/cpu_baseline.json"
+        )
+    )
     print(
         "\n# the GB/s column is traffic (read+write) over device time; for a hash it is the\n"
         "# absorbed message, not the digest. `%copy` is meaningless for perm/poly rows and is\n"
         "# printed anyway so the table has one shape.\n"
         "# `≈B copy` is the time one operation takes, expressed as bytes of copy bandwidth --\n"
         "# the only column here that does not move with the iGPU's clock state.\n"
-        "# `vs 1T`/`vs 16P` compare against benchmarks/cpu_baseline.json (16P = 16 processes);\n"
+        f"# `vs 1T`/`vs 16P` compare against {baseline_label} (16P = 16 processes);\n"
         "# `n/a` means no CPU reference exists for that row, not that the row is fast."
     )
     return 0
