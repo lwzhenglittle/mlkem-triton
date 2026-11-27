@@ -9,13 +9,16 @@ batch. Tiling keeps the distribution of WOTS digit values — and therefore the 
 representative, which is worth stating because a signature's cost does vary with its digits.
 
 `--cpu` adds the liboqs single-thread baseline on the same machine and the same signatures, so the
-printed speed-up means something.
+printed speed-up means something. The library is found through `SLHDSA_LIBOQS_SO` (the variable
+`tests/_liboqs_slh.py` reads) or through a vendored `third_party/liboqs/build*/`; when neither
+exists `--cpu` says so on stderr instead of printing a table with the column quietly missing.
 """
 
 from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import sys
 import time
 from pathlib import Path
@@ -27,10 +30,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from triton_crypto.slhdsa import acvp
 from triton_crypto.slhdsa.verify import Verifier
 
-LIBS = (
-    Path(__file__).resolve().parent.parent.parent / "third_party/liboqs/build-multi/lib/liboqs.so",
-    Path("/home/lwzheng/文档/crypto-accl-work/third_party/liboqs/build-multi/lib/liboqs.so"),
-)
+_HERE = Path(__file__).resolve()
+_REPO = _HERE.parents[1]  # mlkem-triton/
+_WORKSPACE = _REPO.parent  # the directory that vendors third_party/
+
+
+def _liboqs_candidates() -> tuple[Path, ...]:
+    """Where a liboqs build with SLH-DSA might be, most specific first.
+
+    The environment override wins. The two vendored layouts cover "third_party beside the
+    checkout" and "third_party inside it", because the two live in different places on different
+    machines. `build*` is globbed rather than named: the directory is a local choice
+    (`build-multi`, `build-all`), and a build without the SLH-DSA symbols is rejected by the
+    symbol check in `_liboqs`, which is a better question than the directory name.
+    """
+    override = os.environ.get("SLHDSA_LIBOQS_SO")
+    found = [Path(override)] if override else []
+    for base in (_WORKSPACE / "third_party/liboqs", _REPO / "third_party/liboqs"):
+        found.extend(sorted(base.glob("build*/lib/liboqs.so")))
+    return tuple(found)
+
+
+LIBS = _liboqs_candidates()
 
 
 def _corpus(ps: str):
@@ -47,24 +68,38 @@ def _corpus(ps: str):
 
 
 def _liboqs(ps: str):
-    lib_path = next((p for p in LIBS if p.exists()), None)
-    if lib_path is None:
-        return None
-    lib = ctypes.CDLL(str(lib_path))
+    """The liboqs SLH-DSA verify for `ps`, or `None` if no candidate build can do it.
+
+    Candidates are tried in order and the first one that actually exports the symbol wins.
+    `third_party/liboqs` on this machine holds several builds and only some of them were compiled
+    with SLH-DSA, so "the file exists" and "this build can verify SLH-DSA" are different
+    questions -- the symbol is the one worth asking about.
+    """
     base = ps.replace("SLH-DSA-", "").lower().replace("-", "_")
     sym = f"OQS_SIG_slh_dsa_pure_{base}_verify"
-    if not hasattr(lib, sym):
-        return None
-    fn = getattr(lib, sym)
-    P = ctypes.POINTER(ctypes.c_ubyte)
-    fn.argtypes = [P, ctypes.c_size_t, P, ctypes.c_size_t, P]
-    fn.restype = ctypes.c_int
-    to = lambda b: (ctypes.c_ubyte * max(1, len(b))).from_buffer_copy(b or b"\0")  # noqa: E731
+    pointer = ctypes.POINTER(ctypes.c_ubyte)
 
-    def verify(msg: bytes, sig: bytes, pk: bytes) -> bool:
-        return fn(to(msg), len(msg), to(sig), len(sig), to(pk)) == 0
+    def to(b: bytes):
+        return (ctypes.c_ubyte * max(1, len(b))).from_buffer_copy(b or b"\0")
 
-    return verify
+    for lib_path in LIBS:
+        if not lib_path.exists():
+            continue
+        try:
+            lib = ctypes.CDLL(str(lib_path))
+        except OSError:
+            continue
+        fn = getattr(lib, sym, None)
+        if fn is None:
+            continue
+        fn.argtypes = [pointer, ctypes.c_size_t, pointer, ctypes.c_size_t, pointer]
+        fn.restype = ctypes.c_int
+
+        def verify(msg: bytes, sig: bytes, pk: bytes, _fn=fn) -> bool:
+            return _fn(to(msg), len(msg), to(sig), len(sig), to(pk)) == 0
+
+        return verify
+    return None
 
 
 def _worker(args):
@@ -136,6 +171,12 @@ def main() -> int:
     cpu = _cpu_baseline(pk, msgs, sigs) if args.cpu else None
     if cpu:
         print(f"# liboqs : {cpu:.1f} µs/sig single-thread")
+    elif args.cpu:
+        print(
+            f"# liboqs : not found (set SLHDSA_LIBOQS_SO, or build third_party/liboqs); "
+            f"tried {', '.join(str(p) for p in LIBS) or 'nothing'}",
+            file=sys.stderr,
+        )
     cpu_n = None
     if args.cpu_processes:
         big_msgs = [msgs[i % len(msgs)] for i in range(4096)]
