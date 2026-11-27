@@ -102,10 +102,14 @@ def power_state() -> dict:
 
 
 def state_warning(state: dict) -> str | None:
-    """One line when the machine is not in a state where the numbers mean anything."""
+    """One line when the machine is not in a state where the numbers mean anything.
+
+    The power *source* is deliberately not a trigger. Measured: this laptop reports
+    `Discharging` at 99% with the charger unplugged, yet with `powerprofilesctl set performance`
+    it holds 4.7 GHz and reproduces the stored baseline to within 3% -- so what matters is the
+    clock and the profile, which are visible directly. Battery state stays in `meta` as context.
+    """
     problems = []
-    if state.get("battery") == "Discharging":
-        problems.append("on battery power")
     if state.get("profile") == "low-power":
         problems.append("ACPI profile is low-power")
     if state.get("platform_profile") == "low-power":

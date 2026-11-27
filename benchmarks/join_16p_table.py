@@ -36,9 +36,57 @@ def _fmt(rate: float, unit: str) -> str:
     return f"{rate:6.1f}/s"
 
 
+def _repro_section(old: dict, path: Path) -> list[str]:
+    """Cells of a second run over the cells of the baseline, with the one number that matters.
+
+    The 1T column is what tells you the machine is in a comparable state; the 16P column is the
+    one that moves, because a fixed pile of work split sixteen ways waits for the slowest core and
+    which core that is changes between runs.
+    """
+    repro = json.loads(path.read_text())
+    cells = []
+    for name, row in old.items():
+        other = repro["rivals"].get(name)
+        if not other:
+            continue
+        cells.append((name, "1T", other["one_thread"] / row["one_thread"]))
+        cells.append((name, "16P", other["procs16"] / row["procs16"]))
+    if not cells:
+        return []
+    vals = sorted(c[2] for c in cells)
+    ones = [v for _, k, v in cells if k == "1T"]
+    sixteens = [v for _, k, v in cells if k == "16P"]
+    lines = [
+        "## Reproduction: the same column, measured again",
+        "",
+        f"Re-measured at {repro.get('meta', {}).get('timestamp', '?')} against the baseline above.",
+        f"All {len(cells)} cells, second run / first run:",
+        "",
+        f"- median **{vals[len(vals) // 2]:.3f}**, range {vals[0]:.3f}..{vals[-1]:.3f}",
+        f"- 1T column: {min(ones):.3f}..{max(ones):.3f} -- this is the one that says whether the",
+        "  machine is in a comparable state, and it is the reason the first column can be trusted",
+        f"- 16P column: {min(sixteens):.3f}..{max(sixteens):.3f} -- a fixed pile of work split",
+        "  sixteen ways waits for the slowest core, and which core that is moves between runs.",
+        "  **Per-row ratios on this column carry that band**; the 1T ratios do not.",
+        "",
+        "| rival | 1T second/first | 16P second/first |",
+        "|---|---:|---:|",
+    ]
+    for name in sorted({c[0] for c in cells}):
+        pair = {k: v for n, k, v in cells if n == name}
+        lines.append(f"| `{name}` | {pair['1T']:.3f} | {pair['16P']:.3f} |")
+    lines.append("")
+    return lines
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--device", type=Path, required=True)
+    ap.add_argument(
+        "--device",
+        type=Path,
+        default=None,
+        help="device JSON from bench_primitive.py --json (not needed with --repro-out)",
+    )
     ap.add_argument(
         "--cpu",
         type=Path,
@@ -46,7 +94,27 @@ def main() -> int:
         required=True,
         help="one or more bench_16p_barrier JSON files (repeatable, later wins)",
     )
-    ap.add_argument("--baseline", type=Path, default=ROOT / "cpu_baseline.json")
+    ap.add_argument(
+        "--baseline",
+        type=Path,
+        default=None,
+        help="the 'old' column to compare against (default: cpu_baseline_barrier.json when it "
+        "exists, else cpu_baseline.json) -- the wrong default here silently reports the "
+        "correction as a 32%% regression",
+    )
+    ap.add_argument(
+        "--repro",
+        type=Path,
+        default=None,
+        help="a second bench_16p_barrier JSON of the same machine: adds a reproduction section "
+        "comparing it with the baseline cell by cell",
+    )
+    ap.add_argument(
+        "--repro-out",
+        type=Path,
+        default=None,
+        help="write only the reproduction section (needs --repro); survives losing the device JSON",
+    )
     ap.add_argument(
         "--snapshot",
         type=Path,
@@ -55,14 +123,21 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    dev = json.loads(args.device.read_text())
+    if args.device is None and args.repro_out is None:
+        ap.error("--device is required unless --repro-out is given")
+    dev = json.loads(args.device.read_text()) if args.device else {"meta": {}, "rows": []}
     new = {}
     new_meta = {}
     for path in args.cpu:
         blob = json.loads(path.read_text())
         new.update(blob["rivals"])
         new_meta = blob.get("meta", {})
-    old = json.loads(args.baseline.read_text())["rivals"]
+    baseline = args.baseline or (
+        ROOT / "cpu_baseline_barrier.json"
+        if (ROOT / "cpu_baseline_barrier.json").exists()
+        else ROOT / "cpu_baseline.json"
+    )
+    old = json.loads(baseline.read_text())["rivals"]
 
     regen = [
         "python benchmarks/bench_16p_barrier.py --all --reps 2 "
@@ -71,9 +146,11 @@ def main() -> int:
         "python benchmarks/join_16p_table.py --device /tmp/dev.json "
         "--cpu benchmarks/cpu_baseline_barrier.json --snapshot benchmarks/table-16p-20261127.md",
     ]
-    print(
-        f"device batch {dev['meta']['batch']}, size {dev['meta']['size']}, reps {dev['meta']['reps']}"
-    )
+    if args.device:
+        print(
+            f"device batch {dev['meta']['batch']}, size {dev['meta']['size']}, "
+            f"reps {dev['meta']['reps']}"
+        )
     print()
     table_lines = [
         "| primitive | device | rival | 16P old (sum-of-minima) | 16P new (barrier) "
@@ -110,6 +187,16 @@ def main() -> int:
             f"| {_fmt(new16, unit)} | {r_old:.2f}x | {r_new:.2f}x | {change:.2f}x{mark} |"
         )
         print(table_lines[-1])
+
+    if args.repro_out:
+        if not args.repro:
+            print("error: --repro-out needs --repro", file=sys.stderr)
+            return 2
+        args.repro_out.write_text(
+            "# `vs 16P`: did the CPU column reproduce?\n\n"
+            + "\n".join(_repro_section(old, args.repro))
+        )
+        print(f"wrote {args.repro_out}", file=sys.stderr)
 
     if args.snapshot:
         lines = ["# Corrected `vs 16P` snapshot — 2026-11-27", ""]
@@ -148,6 +235,8 @@ def main() -> int:
             unit = new[rival_name]["unit"] if rival_name in new else "B/s"
             rate = row["bytes"] if unit == "B/s" else row["ops"]
             lines.append(f"| `{row['name']}` | {_fmt(rate, unit)} |")
+        if args.repro:
+            lines += _repro_section(old, args.repro)
         lines += ["", "## Regenerate", "", "```", *regen, "```", ""]
         changes_all = sorted(
             (device_rate / new[r]["procs16"]) / (device_rate / old[r]["procs16"])

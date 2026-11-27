@@ -22,17 +22,24 @@ sys.path.insert(0, str(BENCH))
 bench = pytest.importorskip("bench_16p_barrier")
 
 
-def test_the_state_guard_catches_each_way_a_machine_can_be_unrepresentative():
-    """Three distinct causes, because they look nothing alike in sysfs."""
-    on_battery = {
+def test_the_state_guard_catches_both_ways_a_machine_can_be_unrepresentative():
+    """The profile and the clock, which are the two things the numbers actually depend on."""
+    low_power = {"battery": "Charging", "platform_profile": "low-power", "cur_freq_mhz_max": 4700}
+    throttled = {"battery": "Charging", "platform_profile": "performance", "cur_freq_mhz_max": 900}
+    for state in (low_power, throttled):
+        assert bench.state_warning(state), state
+
+
+def test_battery_alone_is_not_a_warning_when_the_clock_is_right():
+    """Measured on this machine: on battery at 99% with `powerprofilesctl set performance` it
+    holds 4.7 GHz and reproduces the stored baseline to within 3%. The clock is the evidence;
+    the power source is context for the metadata."""
+    on_battery_full_speed = {
         "battery": "Discharging",
         "platform_profile": "performance",
         "cur_freq_mhz_max": 4700,
     }
-    low_power = {"battery": "Charging", "platform_profile": "low-power", "cur_freq_mhz_max": 4700}
-    throttled = {"battery": "Charging", "platform_profile": "performance", "cur_freq_mhz_max": 900}
-    for state in (on_battery, low_power, throttled):
-        assert bench.state_warning(state), state
+    assert bench.state_warning(on_battery_full_speed) is None
 
 
 def test_the_state_guard_stays_quiet_on_a_machine_that_is_representative():

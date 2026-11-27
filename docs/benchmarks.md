@@ -705,6 +705,15 @@ One row changed side: **ML-DSA-44 verify, 0.57x -> 1.66x**. Falcon-512's device 
 prints which method it used; `benchmarks/cpu_baseline.json` is kept unchanged, as the record of the
 sum-of-minima method, because the seven snapshots above were produced against it.
 
+**Did the column reproduce?** Yes, and it matters which half did. Re-measured after a reboot
+against the same baseline, with the platform profile forced to `performance`
+(`powerprofilesctl set performance`, without which the CPU sits near 0.9 GHz): **34 cells, median
+0.997**. The 1T column lands within 0.87-1.04 of the first run -- the 0.87 is Poly1305, every other
+row is within 4%. The 16P column spans 0.91-1.52, because a fixed pile of work split sixteen ways
+waits for the slowest core and which core that is moves between runs. So the ratios in this
+document inherit a band from their denominator: about 10% typically, up to 50% on `sha3-512`. The
+per-cell table is `benchmarks/table-16p-repro.md`.
+
 **A fourth bias, found the same day: the power source.** This laptop reports
 `/sys/class/power_supply/BAT0/status = Discharging` on battery and drops the ACPI platform profile
 to `low-power`, which caps the CPU near 0.9 GHz against 3.4 GHz on mains -- a **4.6x** swing that
