@@ -273,3 +273,32 @@ def test_dec_gemm_mod_q_matches_definition():
     bits = comp.T.reshape(B, 32, 8)  # byte j = rows 8j..8j+7
     want = (bits * (1 << torch.arange(8, device=DEV, dtype=torch.int32))).sum(-1)
     assert torch.equal(got.to(torch.int32), want)
+
+
+def test_the_epilogue_mask_keeps_the_pipelined_kernel_safe():
+    """Three repeats of the shape that used to wedge the GPU.
+
+    With `num_stages=2` (the default) and both epilogue loads unmasked, this launch made the
+    device read virtual address 0x0; `xe` could not resolve the fault, raised "Engine memory CAT
+    error" and reset the CCS engine, after which every call in the process failed with
+    UR_RESULT_ERROR_DEVICE_LOST. Bisected to the two unmasked loads in `_epi_enc`: masking either
+    one (or dropping either) took the failure rate from 5/5 to 0/5, while `num_stages=1` and a
+    bare pipelined matmul with no epilogue never faulted at the same shape.
+
+    Three repeats on purpose -- the fault is probabilistic at `num_stages=1`, so a single run
+    proves little -- and no bigger, because a test that wedges the device takes the rest of the
+    process with it.
+    """
+    from triton_crypto.mlkem.kernels.fused_gemm import fused_enc_gemm
+
+    M, B, du, dv = 1024, 256, 10, 4
+    pivot = M - 256
+    W, Y, E = _data(M, B, pivot)
+    ref1 = torch.randint(0, 1 << du, (pivot, B), device=DEV, dtype=torch.int16)
+    ref2 = torch.randint(0, 1 << dv, (M - pivot, B), device=DEV, dtype=torch.int16)
+    want = _ref(W, Y, E, B, pivot, du, dv, ref1, ref2)
+    for i in range(3):
+        cnt = torch.zeros(B, device=DEV, dtype=torch.int32)
+        assert fused_enc_gemm(W, Y, E, (ref1, ref2), cnt, B, du, dv) is True
+        torch.xpu.synchronize()
+        assert torch.equal(cnt, want), f"repeat {i} disagreed with the reference"

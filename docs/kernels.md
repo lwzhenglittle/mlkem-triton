@@ -538,6 +538,25 @@ compare against the reference ciphertext → column-reduce into `parts [npm, B] 
 `[1024, B]` fp32 intermediate never reaches memory; `_combine_parts` (an inline helper) atomically
 sums the partials afterwards. `npm = M/BM`.
 
+**This kernel runs with `num_stages=1` and a masked epilogue, and neither is a shape guard.**
+With `num_stages >= 2` it faults on this backend: the GPU dereferences virtual address `0x0`,
+`xe` cannot resolve it, raises *Engine memory CAT error* and resets the CCS engine, and every
+later call in that process dies with `UR_RESULT_ERROR_DEVICE_LOST`. Bisected 2026-11-27:
+
+| configuration | M=1024 B=512 | M=1280 B=256 |
+|---|---|---|
+| `num_stages=2`, unmasked epilogue (the default) | 5/5 fault | fault |
+| `num_stages=2`, masked epilogue | 0/5 | **still faults** |
+| `num_stages=1` | clean | clean |
+
+So the mask alone was not enough: it fixes the M=1024 shapes and leaves M=1280 broken, which is
+why `_fused_cfg` now forces `num_stages=1` for both fused kernels. The mask is kept because it is
+free (always true when `B % BN == 0`) and it removes one of the two triggers. A bare pipelined
+matmul with no epilogue never faulted at the same shape, so this is the epilogue's interaction
+with the pipeliner, not `tl.dot`. **The cost of `num_stages=1` here has not been measured yet** --
+it has to be, before any ML-KEM number is quoted again. Regression:
+`tests/test_fused_gemm.py::test_the_epilogue_mask_keeps_the_pipelined_kernel_safe`.
+
 ### `fused_dec_kernel(W, U, V, MB, M, K, N, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/fused_gemm.py`
 
 `mod q (V − W·U)` → `Compress_1` → pack 8 rows into a byte → `MB [B, 32] uint8`. Same skeleton as

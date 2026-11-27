@@ -266,6 +266,26 @@ def _pick_cfg(M: int, dev) -> dict:
 
 
 # --------------------------------------------------------------- ENC entry point
+def _fused_cfg(M: int, dev) -> dict:
+    """`_pick_cfg` with pipelining switched off, for the two fused kernels only.
+
+    `num_stages >= 2` makes these kernels fault on this backend for a range of shapes: the GPU
+    dereferences virtual address 0x0, `xe` raises *Engine memory CAT error*, resets the CCS engine
+    and the process loses the device. Measured 2026-11-27 on Arc B390 / triton-xpu 3.9:
+
+        M=1024 B=512   stages=2  5/5 fault     stages=1  5/5 clean
+        M=1280 B=256   stages=2  fault         stages=1  clean
+
+    Masking the epilogue loads (see `mask_n` below) fixes the M=1024 shapes but not M=1280, so the
+    mask is kept *and* pipelining is off. `encaps.py` keeps its own config: its epilogue is
+    different and it was not the one that faulted. The cost of `num_stages=1` here is not measured
+    yet -- it has to be, before any ML-KEM number is quoted again.
+    """
+    cfg = _pick_cfg(M, dev)
+    cfg["num_stages"] = 1
+    return cfg
+
+
 def fused_enc_gemm(W, Y, E, ref, cnt, B: int, du: int, dv: int, pivot: int | None = None) -> bool:
     """ENC re-encryption GEMM + mod q + compress + compare + column sum, one kernel.
 
@@ -320,7 +340,7 @@ def fused_enc_gemm(W, Y, E, ref, cnt, B: int, du: int, dv: int, pivot: int | Non
             return False
         ref1, ref2 = ref[:pivot], ref[pivot:]
 
-    cfg = _pick_cfg(M, W.device)
+    cfg = _fused_cfg(M, W.device)
     BM, BN, BK = cfg["BM"], cfg["BN"], cfg["BK"]
     if K % BK or M % BM or pivot % BM:
         return False
@@ -331,7 +351,16 @@ def fused_enc_gemm(W, Y, E, ref, cnt, B: int, du: int, dv: int, pivot: int | Non
 
     npm = M // BM
     grid = (npm * triton.cdiv(B, BN),)
-    mask_n = (B % BN) != 0
+    # Both epilogue loads are masked unconditionally, even when `B` is a multiple of `BN` and
+    # the mask is therefore always true. That is a workaround for a miscompile, not a shape
+    # guard: with `num_stages >= 2` and *both* epilogue loads unmasked, the Intel backend emits
+    # an access to virtual address 0x0, `xe` cannot resolve the fault, raises "Engine memory CAT
+    # error" and resets the CCS engine -- every later call in that process then fails with
+    # UR_RESULT_ERROR_DEVICE_LOST. Bisected on 2026-11-27: 5/5 runs faulted with the unmasked
+    # loads and 0/5 with either mask back, dropping either load alone also fixed it, `num_stages=1`
+    # never faulted, and a bare pipelined matmul with no epilogue never faulted at the same shape.
+    # Regression: tests/test_fused_gemm.py::test_the_epilogue_mask_keeps_the_pipelined_kernel_safe.
+    mask_n = True
     parts = torch.empty((npm, B), dtype=torch.int32, device=cnt.device)
 
     fused_enc_kernel[grid](
@@ -387,7 +416,7 @@ def fused_dec_gemm(W, U, V, B: int):
     if not (W.device == U.device == V.device):
         return None
 
-    cfg = _pick_cfg(M, W.device)
+    cfg = _fused_cfg(M, W.device)
     BM, BN, BK = cfg["BM"], cfg["BN"], cfg["BK"]
     if K % BK or M % BM:
         return None
