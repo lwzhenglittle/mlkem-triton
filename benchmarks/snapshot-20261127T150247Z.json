@@ -1,16 +1,16 @@
 {
-  "timestamp_utc": "2026-11-27T14:03:02+00:00",
+  "timestamp_utc": "2026-11-27T15:02:47+00:00",
   "host": "lwzheng-TB14-AOSC",
   "python": "3.14.10",
-  "git_head": "9dfabe9",
-  "git_dirty": false,
+  "git_head": "24b7e33",
+  "git_dirty": true,
   "cpu_baseline": "reused",
   "sections": [
     {
       "section": "primitive",
       "command": "bench_primitive.py --batch 65536 --md",
       "rc": 0,
-      "seconds": 9.6,
+      "seconds": 9.4,
       "stderr": ""
     },
     {
@@ -31,7 +31,7 @@
       "section": "mlkem",
       "command": "bench_encaps.py --ps ML-KEM-768 --batch 4096",
       "rc": 0,
-      "seconds": 3.1,
+      "seconds": 2.3,
       "stderr": ""
     },
     {
