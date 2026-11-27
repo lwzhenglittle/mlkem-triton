@@ -46,6 +46,31 @@ fn bench(nbytes: usize, reps: usize) {
     println!("{{\"bytes\":{},\"secs\":{:.9},\"gbs\":{:.4}}}", nbytes, best, nbytes as f64 / best / 1e9);
 }
 
+/// One continuous timing window around all `reps` hashes, with no per-rep minimum.
+///
+/// A multi-process benchmark wants the exact total work and the exact wall window for one
+/// uninterrupted run: min-of-reps would under-report the elapsed time and inflate the rate.
+/// The window starts after the buffer is allocated, so spawn/setup time stays outside it.
+fn bench_total(nbytes: usize, reps: usize) {
+    let data = fill(nbytes);
+    let t0 = Instant::now();
+    for _ in 0..reps {
+        let h = blake3::hash(&data);
+        std::hint::black_box(h);
+    }
+    let total = t0.elapsed();
+    let secs = total.as_secs_f64();
+    let units = reps as f64 * nbytes as f64;
+    println!(
+        "{{\"bytes_per_hash\":{},\"hashes\":{},\"units\":{},\"secs\":{},\"gbs\":{:.4}}}",
+        nbytes,
+        reps,
+        units,
+        secs,
+        units / secs / 1e9
+    );
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_else(|| "kat".into());
     match mode.as_str() {
@@ -55,6 +80,13 @@ fn main() {
             let reps: usize = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(5);
             bench(n, reps);
         }
-        other => eprintln!("unknown mode {other:?}: use `kat` or `bench [bytes] [reps]`"),
+        "bench-total" => {
+            let n: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1 << 20);
+            let reps: usize = std::env::args().nth(3).and_then(|s| s.parse().ok()).unwrap_or(5);
+            bench_total(n, reps);
+        }
+        other => eprintln!(
+            "unknown mode {other:?}: use `kat`, `bench [bytes] [reps]`, or `bench-total [bytes] [reps]`"
+        ),
     }
 }

@@ -137,6 +137,36 @@ fn bench_packed(n: usize) {
     );
 }
 
+/// One continuous timing window around all `n` packed permutations, with no min over reps.
+///
+/// A multi-process benchmark wants the exact total work and the exact wall window for one
+/// uninterrupted run. `mperm_per_s` is the same unit as `bench_packed` (millions of
+/// packed-lane permutations per second), but taken from the one window instead of a minimum.
+fn bench_packed_total(n: usize) {
+    let perm = default_babybear_poseidon2_16();
+    type P = <BabyBear as Field>::Packing;
+    let lanes = P::WIDTH;
+    let mut state: [P; 16] = std::array::from_fn(|i| P::from(BabyBear::new(i as u32 + 1)));
+    for _ in 0..10_000 {
+        perm.permute_mut(&mut state);
+    }
+    let t0 = Instant::now();
+    for _ in 0..n {
+        perm.permute_mut(&mut state);
+    }
+    let total = t0.elapsed();
+    let secs = total.as_secs_f64();
+    let units = n as f64 * lanes as f64;
+    println!(
+        "{{\"lanes\":{},\"units\":{},\"perms\":{},\"secs\":{},\"mperm_per_s\":{:.2}}}",
+        lanes,
+        units,
+        n,
+        secs,
+        units / secs / 1e6
+    );
+}
+
 fn main() {
     match std::env::args().nth(1).as_deref() {
         Some("bench") => {
@@ -153,9 +183,16 @@ fn main() {
                 .unwrap_or(1_000_000);
             bench_packed(n);
         }
+        Some("bench-packed-total") => {
+            let n = std::env::args()
+                .nth(2)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1_000_000);
+            bench_packed_total(n);
+        }
         Some("kat") | None => kat(),
         Some(other) => {
-            eprintln!("unknown mode {other:?}: use `kat` or `bench [n]`");
+            eprintln!("unknown mode {other:?}: use `kat`, `bench [n]`, `bench-packed [n]`, or `bench-packed-total [n]`");
             std::process::exit(2);
         }
     }

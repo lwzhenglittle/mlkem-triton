@@ -1,0 +1,203 @@
+{
+  "meta": {
+    "host": "lwzheng-TB14-AOSC",
+    "cpu": "Intel(R) Core(TM) Ultra X7 358H",
+    "nproc": 16,
+    "method": "barrier (one timed round per process, sum of units over the union window)",
+    "procs": 16,
+    "msgsize": 1024,
+    "reps": 2,
+    "timestamp": "2026-11-27T12:34:00+0800",
+    "python": "3.14.10",
+    "note": "one window, all 17 rivals; `procs16` is the batch estimator (total units over the union window), `procs16_steady` sums each process's own rate"
+  },
+  "rivals": {
+    "sha3-256": {
+      "unit": "B/s",
+      "one_thread": 613947033.6037279,
+      "procs16": 6090417220.921251,
+      "procs16_steady": 6883346320.836731,
+      "scale": 9.920102040679149,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:29:27+0800"
+    },
+    "sha3-512": {
+      "unit": "B/s",
+      "one_thread": 341948526.92267644,
+      "procs16": 2247971911.5050225,
+      "procs16_steady": 2484151566.4355206,
+      "scale": 6.574006713043534,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:30:09+0800"
+    },
+    "shake128": {
+      "unit": "B/s",
+      "one_thread": 704334895.2021706,
+      "procs16": 4648097668.728139,
+      "procs16_steady": 5094195696.687682,
+      "scale": 6.599272164974816,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:30:30+0800"
+    },
+    "shake256": {
+      "unit": "B/s",
+      "one_thread": 612412904.8683199,
+      "procs16": 4043429959.896826,
+      "procs16_steady": 4487443134.93452,
+      "scale": 6.602457145749138,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:30:54+0800"
+    },
+    "sha256": {
+      "unit": "B/s",
+      "one_thread": 3125219628.095197,
+      "procs16": 28013643583.07903,
+      "procs16_steady": 33120975933.325043,
+      "scale": 8.963735966343325,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:30:57+0800"
+    },
+    "sha512": {
+      "unit": "B/s",
+      "one_thread": 867610069.6001747,
+      "procs16": 6459223122.593023,
+      "procs16_steady": 7195179051.125896,
+      "scale": 7.444845730720554,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:12+0800"
+    },
+    "aes-128-ctr": {
+      "unit": "B/s",
+      "one_thread": 11777158881.942093,
+      "procs16": 94722181597.94824,
+      "procs16_steady": 105247773853.26213,
+      "scale": 8.042872015863324,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:16+0800"
+    },
+    "chacha20": {
+      "unit": "B/s",
+      "one_thread": 4226935313.180414,
+      "procs16": 21821385947.09566,
+      "procs16_steady": 28564461796.63046,
+      "scale": 5.162460347820392,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:33+0800"
+    },
+    "poly1305": {
+      "unit": "B/s",
+      "one_thread": 5635364272.842715,
+      "procs16": 36831229045.28642,
+      "procs16_steady": 48415858475.92712,
+      "scale": 6.535731722397991,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:35+0800"
+    },
+    "chacha20-poly1305": {
+      "unit": "B/s",
+      "one_thread": 1547031022.5351965,
+      "procs16": 9242114588.043472,
+      "procs16_steady": 11343214173.159618,
+      "scale": 5.974097774004532,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:45+0800"
+    },
+    "blake3": {
+      "unit": "B/s",
+      "one_thread": 1308162581.9311688,
+      "procs16": 13177603173.542343,
+      "procs16_steady": 16232483492.0276,
+      "scale": 10.073368062621826,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:31:51+0800"
+    },
+    "poseidon2": {
+      "unit": "op/s",
+      "one_thread": 9081720.557203073,
+      "procs16": 43812451.62491543,
+      "procs16_steady": 62704794.8448296,
+      "scale": 4.824245730635924,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:32:05+0800"
+    },
+    "ntt-2^20": {
+      "unit": "op/s",
+      "one_thread": 19.19109560789059,
+      "procs16": 159.39883625996026,
+      "procs16_steady": 186.628023098378,
+      "scale": 8.305874740909635,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:32:10+0800"
+    },
+    "mldsa-44-verify": {
+      "unit": "op/s",
+      "one_thread": 63498.32946579916,
+      "procs16": 331339.7871183306,
+      "procs16_steady": 448169.6945354508,
+      "scale": 5.21808667890694,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:32:29+0800"
+    },
+    "falcon-512-verify": {
+      "unit": "op/s",
+      "one_thread": 42035.947648034,
+      "procs16": 272334.1282329721,
+      "procs16_steady": 332408.836747596,
+      "scale": 6.478600899240321,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:32:39+0800"
+    },
+    "falcon-padded-512-verify": {
+      "unit": "op/s",
+      "one_thread": 42342.06875240002,
+      "procs16": 272778.9763598731,
+      "procs16_steady": 350700.4216830553,
+      "scale": 6.442268514440772,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:32:49+0800"
+    },
+    "slhdsa-128f-verify": {
+      "unit": "op/s",
+      "one_thread": 1063.099095669928,
+      "procs16": 8063.002713748649,
+      "procs16_steady": 10252.35751429485,
+      "scale": 7.584431918519906,
+      "procs": 16,
+      "msgsize": 1024,
+      "rounds": 2,
+      "measured_at": "2026-11-27T12:33:28+0800"
+    }
+  }
+}

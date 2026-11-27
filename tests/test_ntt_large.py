@@ -206,6 +206,62 @@ def test_device_product_matches_the_numpy_product():
     assert np.array_equal(got, t.mul_np(a, b))
 
 
+@pytest.mark.parametrize("logn", [4, 5, 7, 10, 12])
+def test_fused_inverse_is_bit_identical_to_the_stage_by_stage_one(logn):
+    """Two inverse stages per pass instead of one: same integers, half the traffic.
+
+    The fused pass has to reproduce the radix-2 sequence exactly, including the odd-`log2(n)` case
+    where one stage is left over on its own.
+    """
+    t = LargeNTT(1 << logn, Q)
+    a = np.random.default_rng(logn + 500).integers(0, Q, 1 << logn)
+    fa = t.forward_torch(a)
+    want = t.inverse_tensor_torch(fa.clone(), fa.device)
+    got = t.inverse_fused_tensor_torch(fa, fa.device)
+    assert np.array_equal(got.cpu().numpy(), want.cpu().numpy())
+
+
+@pytest.mark.parametrize("logn", [4, 8, 10])
+def test_fused_product_matches_the_numpy_product(logn):
+    """The pointwise multiply rides along in the last forward pass; the inverse is fused."""
+    t = LargeNTT(1 << logn, Q)
+    rng = np.random.default_rng(logn + 600)
+    a = rng.integers(0, Q, 1 << logn)
+    b = rng.integers(0, Q, 1 << logn)
+    got = t.mul_fused_torch(a, b).cpu().numpy().astype(np.int64)
+    assert np.array_equal(got, t.mul_np(a, b))
+
+
+def test_fused_product_refuses_the_same_shapes_the_plain_one_does():
+    """A fused path must not be a second, laxer door into the kernels."""
+    t = LargeNTT(1 << 8, Q)
+    with pytest.raises(ValueError):
+        t.mul_fused_torch(np.zeros(4, dtype=np.int64), np.zeros(8, dtype=np.int64))
+    with pytest.raises(ValueError):
+        t.mul_fused_torch(np.zeros(8, dtype=np.int64), np.zeros(16, dtype=np.int64))
+
+
+@pytest.mark.slow
+def test_fused_product_of_monomials_at_2_20():
+    """The 2^20 closed form again, through the fused path: same answer, fewer passes."""
+    logn = 20
+    n = 1 << logn
+    t = LargeNTT(n, Q)
+    for i, j in ((1, 1), (n // 3, (2 * n) // 3 + 7), (n - 1, 1)):
+        a = np.zeros(n, dtype=np.int64)
+        b = np.zeros(n, dtype=np.int64)
+        a[i] = 5
+        b[j] = 7
+        got = t.mul_fused_torch(a, b).cpu().numpy().astype(np.int64)
+        want = np.zeros(n, dtype=np.int64)
+        k = i + j
+        if k < n:
+            want[k] = 35
+        else:
+            want[k - n] = Q - 35
+        assert np.array_equal(got, want), f"X^{i} * X^{j}"
+
+
 @pytest.mark.slow
 def test_product_of_monomials_at_2_20():
     """A closed form at full scale: `X^i * X^j` is `X^(i+j)` or `-X^(i+j-n)`.

@@ -401,10 +401,16 @@ CPU_RIVAL = {
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"
+# The barrier measurement supersedes the sum-of-minima one: the latter over-counts the CPU by
+# 1.25x to 4.25x depending on the row (docs/benchmarks.md §15), and every `vs 16P` ratio inherits
+# that error. Preferred when present; `--baseline` picks one explicitly.
+CPU_BASELINE_BARRIER = Path(__file__).resolve().parent / "cpu_baseline_barrier.json"
 
 
-def load_cpu(path: Path = CPU_BASELINE) -> dict | None:
+def load_cpu(path: Path | None = None) -> dict | None:
     """The CPU baseline, if it exists and was taken on this machine."""
+    if path is None:
+        path = CPU_BASELINE_BARRIER if CPU_BASELINE_BARRIER.exists() else CPU_BASELINE
     try:
         data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
@@ -460,6 +466,18 @@ def main() -> int:
     ap.add_argument("--list", action="store_true", help="list the primitives and exit")
     ap.add_argument("--device", default=None)
     ap.add_argument("--md", action="store_true", help="emit a markdown table")
+    ap.add_argument(
+        "--baseline",
+        default=None,
+        help="CPU baseline JSON (default: cpu_baseline_barrier.json, falling back to "
+        "cpu_baseline.json)",
+    )
+    ap.add_argument(
+        "--json",
+        default=None,
+        help="also write every measured row as JSON (the join for bench_16p_barrier.py needs the "
+        "numeric rate, not the formatted one)",
+    )
     ap.add_argument(
         "--no-cpu",
         action="store_true",
@@ -534,7 +552,7 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
             }
         )
 
-    cpu = None if args.no_cpu else load_cpu()
+    cpu = None if args.no_cpu else load_cpu(Path(args.baseline) if args.baseline else None)
     for r in rows:
         rival_name = CPU_RIVAL.get(r["name"])
         rival = (cpu or {}).get("rivals", {}).get(rival_name) if rival_name else None
@@ -546,11 +564,31 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
         r["vs1t"] = _speedup(device_rate, rival["one_thread"])
         r["vs16p"] = _speedup(device_rate, rival["procs16"])
 
+    if args.json and str(batch) == str(args.batch).split(",")[0]:
+        # only the first batch of a list: the file is meant to be joined, and a list would need a
+        # schema the join does not have
+        Path(args.json).write_text(
+            json.dumps(
+                {
+                    "meta": {
+                        "batch": batch,
+                        "size": args.size,
+                        "reps": args.reps,
+                        "cpu_baseline": None if cpu is None else cpu.get("meta"),
+                    },
+                    "rows": rows,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
     if cpu:
         meta = cpu.get("meta", {})
         print(
             f"# CPU baseline: {meta.get('cpu')} from {meta.get('timestamp')} "
-            f"({len(cpu['rivals'])} rivals, 16P = 16 processes)"
+            f"({len(cpu['rivals'])} rivals, 16P = 16 processes, "
+            f"{meta.get('method', 'method not recorded -- sum of per-child minima, an upper bound')})"
         )
 
     if args.md:

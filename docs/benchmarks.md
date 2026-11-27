@@ -662,40 +662,55 @@ not four significant figures; and the 16P column is the sum of per-process rates
 while all sixteen run, which is why `scale` is 6x for ChaCha20 (memory-bound) and 15x for the
 signatures (register-bound).
 
-**A third caveat: the 16P column is an upper bound, not a measurement.** The scheme benchmarks and
-`bench_cpu.py` disagreed by 3.4-4.8x on liboqs ML-DSA-44's sixteen-process verify rate, so a third
-measurement was built: sixteen processes, corpora generated before the timed region, a real barrier
-so all sixteen start together, and only `verify` inside the clock. Three numbers for the same
-quantity, all measured this session:
+**The 16P column was an upper bound, and as of 2026-11-27 it has been re-measured.** Recorded
+here so the history is not lost: the scheme benchmarks and `bench_cpu.py` disagreed by 3.4-4.8x on
+liboqs ML-DSA-44's sixteen-process verify rate, and a third measurement settled it --
 
 | method | aggregate |
 |---|---:|
 | `bench_cpu.py`: sum of per-child **minima** of three reps | 949 k ops/s |
-| `bench_mldsa_verify.py`: `pool.map` wall time / ops | 198 k ops/s |
-| **barrier + pre-generated corpora, verify only** | **370 k ops/s** |
+| `bench_mldsa_verify.py`: `pool.map` wall time / ops (charged the `CDLL` load inside the region) | 198 k ops/s |
+| barrier + pre-generated corpora, verify only | 370 k ops/s |
 
-The same probe on Falcon-512 (the other scheme with a liboqs rival, `benchmarks/probe_16p_method.py
---tag falcon_512 --n 64`) gives **278 k ops/s** against `bench_cpu.py`'s 449 k -- the same
-direction, a factor of 1.6. So the bias is not an ML-DSA artefact: the upper bound is 1.6-2.6x
-depending on how many operations fit in one timed region.
+The `scale` column already gave the bias away: sixteen processes on sixteen cores cannot exceed
+16x, and BLAKE3 (19.2x), Falcon-512 (18.1x) and Falcon-padded (19.2x) all did.
 
-**And the bias is visible without any probe, in the baseline file itself**: the `scale` column is
-`16P / 1T`, and sixteen processes on sixteen cores cannot exceed 16x. Three rivals do -- BLAKE3
-19.2x, Falcon-512 18.1x, Falcon-padded 19.2x -- which is a proof that those 16P figures over-count.
-`bench_cpu.py` now prints a warning when a measured scale exceeds `NPROC`. The rows that stay at
-10.5-14x (SHA-3, SHA-2, AES, ChaCha20, Poly1305, the 2^20 NTT) are not provably wrong, but the same
-mechanism applies weakly to them too.
+`benchmarks/probe_16p_method.py` fixed that one row and left the table alone, because re-measuring
+invalidates all seven snapshots at once. `benchmarks/bench_16p_barrier.py` now does the whole
+column: one timed round per process behind a barrier, unit counts fixed by the caller, aggregate =
+units over the union of the window. It also fixed a second, independent error -- the device hashes
+**1024-byte** messages while the CPU rival was pointed at 16 KiB (digests) and 1 MiB (BLAKE3,
+Poly1305), so per-message init/final was charged to the device only.
 
-Both harnesses are wrong in opposite directions. The first sums minima taken at different moments --
-when one child finishes, the others speed up, so their later reps are cheaper and the sum
-over-counts. The second times `LibOQS(...)` construction (a `ctypes.CDLL` load, ~1 ms) inside the
-region, which for 256 verifies is a quarter of the work.
+Result, in `benchmarks/table-16p-20261127.md`: the old column over-counted the CPU by **1.25x to
+4.25x depending on the row, median 1.94x**. No primitive changed side of 1.0x, but the magnitudes
+did, and the worst offenders were the small-message rows the size mismatch had penalised:
 
-**What follows**: every `16P` number in this document is an *upper bound* on the CPU, so every
-`vs 16P` ratio is a *lower bound* on the device's standing -- ML-DSA's 1.03x became ~1.4x under the
-clean method. Re-measuring the whole table with a barrier is a single session's work and would move
-the NTT and signature rows most (they have the fewest operations per timed region); it was not done
-here because it invalidates the seven snapshots' 16P columns and they must move together.
+| | old `vs 16P` | corrected |
+|---|---:|---:|
+| SHA-3/512, SHAKE-128/256 | 4.0x | **7.7-8.1x** |
+| SHA-512 | 3.4x | **6.97x** |
+| 2^20 NTT (one transform) | 4.0x | **7.28x** |
+| SHA-256 | 1.56x | **2.80x** |
+| SHA-3-256 | 4.10x | **5.15x** |
+| BLAKE3 | 0.17x | **0.72x** |
+| ChaCha20-Poly1305 | 0.37x | **0.90x** |
+| Poly1305 | 0.13x | **0.32x** |
+| AES-128-CTR | 0.07x | **0.11x** |
+| Poseidon2 | 0.17x | **0.59x** |
+| ChaCha20 | 0.45x | **0.65x** |
+
+One row changed side: **ML-DSA-44 verify, 0.57x -> 1.66x**. Falcon-512's device core goes 3.72x ->
+5.9x on the same correction. `bench_primitive.py` now prefers `cpu_baseline_barrier.json` and
+prints which method it used; `benchmarks/cpu_baseline.json` is kept unchanged, as the record of the
+sum-of-minima method, because the seven snapshots above were produced against it.
+
+**What this does not fix.** The device's clock state still moves 2-4x between runs, and it moved
+2x *within* the session that produced the table (the same 2^20 transform read 810, 1160 and 602
+transforms/s twenty minutes apart). Absolute GB/s in a snapshot is worth less than the ratio
+measured beside it. And `16P` itself has two defensible definitions that differ by 1.10-1.43x on
+this 4P+8E+4LP part (batch completion versus summed steady rates); the table quotes the batch one,
+which is the conservative choice for the device.
 
 ## 16. Falcon-512 verification (FIPS 206 draft)
 
@@ -924,14 +939,15 @@ That is the sixth entry for the "Triton 表达缺口" table, and it is the only 
 
 ## 22. The 2^20-point NTT: the one primitive whose cost is memory traffic
 
-`python benchmarks/bench_primitive.py --only ntt-2^20`. BabyBear, 20 Stockham passes, one launch
+`python benchmarks/bench_primitive.py --only ntt-2^20`. BabyBear, 10 radix-4 passes (20 radix-2
+stages fused two at a time), one launch
 per pass, data in global memory.
 
 | | device | CPU 1T | CPU 16P | vs 1T | vs 16P |
 |---|---:|---:|---:|---:|---:|
-| 2^20 forward NTT | **0.85–1.2 ms** | **48.3 ms** | **3.45 ms** | **40–57x** | **2.9–4.1x** |
+| 2^20 forward NTT | **0.85–1.2 ms** | **49 ms** | **6.27 ms amortised** | **40–57x** | **4.0–7.3x** |
 | traffic (10 passes x 8 MB, radix-4) | 84 MB | | | | |
-| last window measured | 1.36 ms -> 38.9x / 2.92x | | | | |
+| last window measured | 0.862 ms -> 56.1x / **7.28x** | | | | |
 | achieved (fast clock) | 95 GB/s (**44%** of copy) | 2.4 GB/s | 30 GB/s | | |
 
 > The `% of copy` figure here was **44%, not 72/88%**: the benchmark's advertised traffic was
@@ -1091,9 +1107,25 @@ runtime, so it is safe) and for `benchmarks/ntt_cpu` (a plain `gcc -O3 -march=na
 ### 22.3 The product, which is what a prover actually calls
 
 `LargeNTT.mul_torch(a, b)` is the negacyclic product in `Z_q[X]/(X^n+1)`: forward both operands,
-multiply pointwise, inverse once. At 2^20 that is **9.3-11.9 ms** (min/median of five, one
-process) -- three transforms and a pointwise pass, so it tracks the single-transform row at the
-same ratio: roughly **22x one CPU core and 1.7x sixteen processes**.
+multiply pointwise, inverse once. At 2^20 that is **3.36 ms** (radix-4 default; 42 passes, because
+the inverse was still 19 radix-2 passes against the forward's 10).
+
+**The published ratio for this row was wrong by a factor of three, in the CPU's favour.** An
+earlier revision said "13x one core, 0.94x sixteen processes"; both numbers divided the device's
+**products per second** by the CPU's **transforms per second**. A product is three transforms, so
+the CPU side needed a `/3`. In products per second the device wins by **3.96x sixteen processes**
+and 45.7x one core (same window: device 297.8 products/s, CPU 225.7 transforms/s = 75.2
+products/s). The consistency check that would have caught it: the product ratio has to land near
+the single-transform ratio (4.0x here), because both sides do the same three transforms -- and it
+does, once the units match. `benchmarks/probe_ntt_product.py` now prints both conventions side by
+side so the error cannot come back invisibly.
+
+`mul_fused_torch` is the same product in **32 passes**: the inverse is fused two stages per pass
+(`_inv2x2_kernel`, verified bit-identical to the stage-by-stage inverse for N = 2^4..2^14) and the
+pointwise multiply rides in the last forward pass's epilogue instead of a separate 8 MB pass. That
+is **2.41 ms against 3.36 ms, 1.40x**, and **5.53x sixteen processes**. It is not the default yet:
+the fusion changes no result, but the default path is what every published number was measured on,
+so switching it is a separate decision.
 
 Verification is in two layers, because a 2^20 schoolbook product does not exist:
 

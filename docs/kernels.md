@@ -36,6 +36,7 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
 | `_stage_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/2, 1024),)` | `LargeNTT`, one launch per radix-2 pass |
 | `_stage4_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/4, 1024),)` | `LargeNTT(radix=4)`, two stages per pass |
+| `_inv2x2_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/4, 1024),)` | inverse transform, two stages per pass (`mul_fused_torch`) |
 | `_mul_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N, 65536),)` | the negacyclic pre/post twiddle |
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
@@ -397,7 +398,7 @@ traffic -- 84 MB in 0.85 ms is about 98 GB/s, 45% of the 217 GB/s copy bandwidth
 *not* bandwidth-saturated: `_stage4_kernel` halves the traffic and buys 10-20%, so the remaining
 limit is pass latency plus the modular multiplies (`docs/benchmarks.md` §22.1-§22.2).
 
-### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, Q, BLK)` — `primitives/ntt/large.py`
+### `_stage4_kernel(X, Y, M, TOTAL, LOG_Q, W1A, W1B, W2, PRE, MUL, Q, FUSE_PRE, FUSE_MUL, BLK)` — `primitives/ntt/large.py`
 
 Two radix-2 stages fused into one radix-4 pass, so ten passes instead of twenty and half the
 traffic. Bit-identical to the radix-2 sequence (verified 2^4..2^20, including the odd-`log2` case
@@ -409,6 +410,27 @@ twiddles at positions `j` and `j + M/4` plus the second stage's at `j`, hence th
 opt-in for one round because a cross-window comparison made it look neutral: measured correctly, in
 the same window, it is 11-19% faster and much steadier at the median -- that cross-window trap is
 `docs/benchmarks.md` §22.2.
+
+`FUSE_PRE` applies the negacyclic pre-twiddle on the way into the first pass. `FUSE_MUL` multiplies
+each store by a caller-supplied vector, which is where the negacyclic product's pointwise step
+happens: the second operand's last forward pass already reads and writes 8 MB, so folding the
+multiply in costs nothing and saves a whole pass.
+
+### `_inv2x2_kernel(X, Y, M, TOTAL, LOG_H, WA, WB, POST, Q, FUSE_POST, BLK)` — `primitives/ntt/large.py`
+
+Two inverse DIT stages fused into one pass, the mirror of `_stage4_kernel` on the way back. Without
+it a negacyclic product paid 19 radix-2 passes on the inverse against 10 on each forward: the
+product was 42 passes, and it is 32 with this kernel plus `FUSE_MUL`.
+
+The upper stage reads blocks of `4h` as four quarters; stage A pairs `(0,1)` and `(2,3)` with `WA`
+(indexed by position in `h`), stage B pairs `(0,2)` and `(1,3)` with `WB` -- and `WB` is indexed
+`j` for the second quarter and `h + j` for the fourth, which is the part that is easy to get wrong
+and is why the numpy reference exists. Every difference takes a conditional `+ Q` rather than `%`,
+because signed `%` truncates toward zero on this backend (`docs/patterns.md`).
+
+Bit-identical to the stage-by-stage inverse for N = 2^4..2^14 (`tests/test_ntt_large.py`), including
+the odd-`log2` case where one radix-2 stage is left to `_stage_kernel`. Product measured at
+2.41 ms against 3.36 ms, 1.40x (`docs/benchmarks.md` §22.3).
 
 ### `lms_chain_kernel(VALUE, IW, QW, CIDX, START, KT, IV, rows, STEPS, BLOCK)` — `lms/kernels.py`
 

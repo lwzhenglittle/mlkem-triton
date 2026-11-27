@@ -276,7 +276,14 @@ class LargeNTT:
             cache[key] = passes
         return cache[key]
 
-    def _run4(self, x, dev):
+    def _run4(self, x, dev, mul=None):
+        """Forward radix-4 passes; `mul` folds a pointwise operand into the last pass's stores.
+
+        The negacyclic product needs one elementwise multiply after the second forward transform.
+        Doing it in the last pass's epilogue costs nothing extra: those stores are already reading
+        and writing 8 MB, and a separate kernel would spend another 8 MB plus a launch to do the
+        same multiply.
+        """
         import torch
 
         q = self.q
@@ -284,7 +291,9 @@ class LargeNTT:
         # caller's tensor, which is what a single `buf` did (see `_run_cached` below).
         buf = torch.empty_like(x)
         alt = torch.empty_like(x)
-        for i, p in enumerate(self._passes4_cached(dev)):
+        passes = self._passes4_cached(dev)
+        last = len(passes) - 1
+        for i, p in enumerate(passes):
             if p[0] == 4:
                 _, m, w1a, w1b, w2 = p
                 quarter = w1a.numel()
@@ -299,8 +308,10 @@ class LargeNTT:
                     w1b,
                     w2,
                     self._device_pre(dev),
+                    mul if mul is not None else self._device_pre(dev),
                     Q=q,
                     FUSE_PRE=(i == 0),
+                    FUSE_MUL=(mul is not None and i == last),
                     BLK=STAGE_BLK,
                     num_warps=STAGE_WARPS,
                 )
@@ -357,6 +368,86 @@ class LargeNTT:
             )
             x, buf, alt = buf, alt, buf
         return x
+
+    def inv_passes2(self):
+        """Inverse stages paired for `_inv2x2_kernel`, plus a lone tail when `log2(n)` is odd."""
+        tabs = self.inv_tables()
+        pairs, i = [], 0
+        while i + 1 < len(tabs):
+            pairs.append((tabs[i], tabs[i + 1]))
+            i += 2
+        return pairs, (tabs[i] if i < len(tabs) else None)
+
+    def _passes2_cached(self, dev):
+        key = ("pass2", str(dev))
+        cache = self.__dict__.setdefault("_tbl_cache", {})
+        if key not in cache:
+            import torch
+
+            pairs, tail = self.inv_passes2()
+            cache[key] = (
+                [
+                    (
+                        torch.as_tensor(a, dtype=torch.int32, device=dev),
+                        torch.as_tensor(b, dtype=torch.int32, device=dev),
+                    )
+                    for a, b in pairs
+                ],
+                None if tail is None else torch.as_tensor(tail, dtype=torch.int32, device=dev),
+            )
+        return cache[key]
+
+    def _run_inv2(self, x, dev):
+        """Inverse transform in half the passes: fused stage pairs, post-twiddle in the last."""
+        import torch
+
+        q = self.q
+        buf = torch.empty_like(x)
+        alt = torch.empty_like(x)
+        pairs, tail = self._passes2_cached(dev)
+        post = self._device_post(dev)
+        last = len(pairs) - 1
+        for i, (wa, wb) in enumerate(pairs):
+            h = wa.numel()
+            _inv2x2_kernel[(triton.cdiv(self.n // 4, STAGE_BLK),)](
+                x,
+                buf,
+                4 * h,
+                self.n // 4,
+                h.bit_length() - 1,
+                wa,
+                wb,
+                post,
+                Q=q,
+                FUSE_POST=(i == last and tail is None),
+                BLK=STAGE_BLK,
+                num_warps=STAGE_WARPS,
+            )
+            x, buf, alt = buf, alt, buf
+        if tail is not None:
+            half = tail.numel()
+            _stage_kernel[(triton.cdiv(self.n // 2, STAGE_BLK),)](
+                x,
+                buf,
+                2 * half,
+                self.n // 2,
+                half.bit_length() - 1,
+                tail,
+                post,
+                Q=q,
+                FORWARD=False,
+                FUSE_PRE=False,
+                FUSE_POST=True,
+                BLK=STAGE_BLK,
+                num_warps=STAGE_WARPS,
+            )
+            x, buf, alt = buf, alt, buf
+        return x
+
+    def inverse_fused_tensor_torch(self, t, dev):
+        """The inverse with two stages per pass; bit-identical to `inverse_tensor_torch`."""
+        self._check_tensor(t, "input")
+        return self._run_inv2(t, dev)
 
     def _device_post(self, dev):
         import torch
@@ -487,6 +578,49 @@ class LargeNTT:
         prod = self._mul_dev(fa, fb, dev, self.q, "pointwise")
         return self.inverse_tensor_torch(prod, dev)
 
+    def mul_fused_torch(self, a, b, device=None):
+        """Negacyclic product with the inverse at half the passes and the pointwise folded in.
+
+        `mul_torch` spends 11 passes forward, 11 forward, 1 pointwise and 19 inverse: 42. This runs
+        11 + 11 (pointwise in the last one's epilogue) + 10 inverse: 32, and every pass is the same
+        8 MB read plus 8 MB write, so the saving is traffic rather than arithmetic.
+        """
+        import torch
+
+        from ... import devices as _devices
+
+        dev = _devices.resolve_device(device)
+        operands = []
+        for operand, name in ((a, "a"), (b, "b")):
+            shape = (
+                tuple(operand.shape)
+                if hasattr(operand, "shape") and hasattr(operand, "device")
+                else np.asarray(operand).shape
+            )
+            if len(shape) != 1 or shape[0] != self.n:
+                raise ValueError(f"{name} must be 1-D of length {self.n}, got {shape}")
+            if hasattr(operand, "to") and hasattr(operand, "device"):
+                operands.append(operand.to(device=dev, dtype=torch.int32).contiguous())
+            else:
+                operands.append(
+                    torch.as_tensor(
+                        np.asarray(operand, dtype=np.int64) % self.q,
+                        dtype=torch.int32,
+                        device=dev,
+                    )
+                )
+        fa, fb_in = operands
+        fa = self.forward_tensor_torch(fa, dev)
+        passes = self._passes4_cached(dev)
+        if self.radix == 4 and passes and passes[-1][0] == 4:
+            # the multiply rides along in the last forward pass of the second operand
+            prod = self._run4(fb_in, dev, mul=fa)
+        else:
+            prod = self._mul_dev(
+                fa, self.forward_tensor_torch(fb_in, dev), dev, self.q, "pointwise"
+            )
+        return self._run_inv2(prod, dev)
+
     def mul_np(self, a, b) -> np.ndarray:
         """The same product through the numpy path, as the oracle."""
         fa = self.ntt(a)
@@ -505,8 +639,10 @@ def _stage4_kernel(
     W1B,
     W2,
     PRE,
+    MUL,
     Q: tl.constexpr,
     FUSE_PRE: tl.constexpr,
+    FUSE_MUL: tl.constexpr,
     BLK: tl.constexpr,
 ):
     """Two radix-2 DIF stages fused into one radix-4 pass: ten passes instead of twenty.
@@ -556,10 +692,94 @@ def _stage4_kernel(
     s2 = tl.where(s2 >= Q, s2 - Q, s2)
     s3 = d - d2
     s3 = tl.where(s3 < 0, s3 + Q, s3)
+    s1 = s1 * w2 % Q
+    s3 = s3 * w2 % Q
+    if FUSE_MUL:
+        # the pointwise multiply of the second forward transform, riding on stores that were
+        # already happening -- see `_run4(..., mul=...)`
+        s0 = s0 * tl.load(MUL + base + j, mask=mask, other=1).to(tl.int64) % Q
+        s1 = s1 * tl.load(MUL + base + quarter + j, mask=mask, other=1).to(tl.int64) % Q
+        s2 = s2 * tl.load(MUL + base + 2 * quarter + j, mask=mask, other=1).to(tl.int64) % Q
+        s3 = s3 * tl.load(MUL + base + 3 * quarter + j, mask=mask, other=1).to(tl.int64) % Q
     tl.store(Y + base + j, s0, mask=mask)
-    tl.store(Y + base + quarter + j, s1 * w2 % Q, mask=mask)
+    tl.store(Y + base + quarter + j, s1, mask=mask)
     tl.store(Y + base + 2 * quarter + j, s2, mask=mask)
-    tl.store(Y + base + 3 * quarter + j, s3 * w2 % Q, mask=mask)
+    tl.store(Y + base + 3 * quarter + j, s3, mask=mask)
+
+
+@triton.jit
+def _inv2x2_kernel(
+    X,
+    Y,
+    M,
+    TOTAL,
+    LOG_H,
+    WA,
+    WB,
+    POST,
+    Q: tl.constexpr,
+    FUSE_POST: tl.constexpr,
+    BLK: tl.constexpr,
+):
+    """Two inverse DIT stages fused into one pass, halving the inverse's traffic.
+
+    The forward direction has had this since `_stage4_kernel`; the inverse did not, so a negacyclic
+    product paid 19 radix-2 passes on the way back against 10 on the way out. The fusion is exact:
+    stage A runs on blocks of `2h` (pairs `(0,1)` and `(2,3)` of each quarter), stage B on blocks of
+    `4h` (pairs `(0,2)` and `(1,3)`), and every subtraction is repaired with a conditional add
+    rather than a `%`, because signed `%` truncates toward zero here (`docs/patterns.md`).
+
+    Verified bit-identical against `intt()` in numpy for N = 2^4 .. 2^12 before being written here,
+    and against `mul_np` for the product at 2^10.
+    """
+    pid = tl.program_id(0)
+    offs = pid * BLK + tl.arange(0, BLK)
+    mask = offs < TOTAL
+    h = 1 << LOG_H
+    blk = offs >> LOG_H
+    j = offs & (h - 1)
+    base = blk * M
+
+    a0 = tl.load(X + base + j, mask=mask, other=0).to(tl.int64)
+    a1 = tl.load(X + base + h + j, mask=mask, other=0).to(tl.int64)
+    a2 = tl.load(X + base + 2 * h + j, mask=mask, other=0).to(tl.int64)
+    a3 = tl.load(X + base + 3 * h + j, mask=mask, other=0).to(tl.int64)
+    wa = tl.load(WA + j, mask=mask, other=1).to(tl.int64)
+    wb0 = tl.load(WB + j, mask=mask, other=1).to(tl.int64)
+    wb1 = tl.load(WB + h + j, mask=mask, other=1).to(tl.int64)
+
+    t1 = a1 * wa % Q
+    b0 = a0 + t1
+    b0 = tl.where(b0 >= Q, b0 - Q, b0)
+    b1 = a0 - t1
+    b1 = tl.where(b1 < 0, b1 + Q, b1)
+    t3 = a3 * wa % Q
+    b2 = a2 + t3
+    b2 = tl.where(b2 >= Q, b2 - Q, b2)
+    b3 = a2 - t3
+    b3 = tl.where(b3 < 0, b3 + Q, b3)
+
+    u2 = b2 * wb0 % Q
+    c0 = b0 + u2
+    c0 = tl.where(c0 >= Q, c0 - Q, c0)
+    c2 = b0 - u2
+    c2 = tl.where(c2 < 0, c2 + Q, c2)
+    u3 = b3 * wb1 % Q
+    c1 = b1 + u3
+    c1 = tl.where(c1 >= Q, c1 - Q, c1)
+    c3 = b1 - u3
+    c3 = tl.where(c3 < 0, c3 + Q, c3)
+
+    if FUSE_POST:
+        c0 = c0 * tl.load(POST + base + j, mask=mask, other=1).to(tl.int64) % Q
+        c1 = c1 * tl.load(POST + base + h + j, mask=mask, other=1).to(tl.int64) % Q
+        c2 = c2 * tl.load(POST + base + 2 * h + j, mask=mask, other=1).to(tl.int64) % Q
+        c3 = c3 * tl.load(POST + base + 3 * h + j, mask=mask, other=1).to(tl.int64) % Q
+
+    tl.store(Y + base + j, c0, mask=mask)
+    tl.store(Y + base + h + j, c1, mask=mask)
+    tl.store(Y + base + 2 * h + j, c2, mask=mask)
+    tl.store(Y + base + 3 * h + j, c3, mask=mask)
 
 
 @triton.jit
