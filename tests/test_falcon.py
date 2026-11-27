@@ -1,9 +1,9 @@
 """Falcon-512 verification, host side: decoders, hash-to-point, and one real signature.
 
 The vectors were produced by liboqs 0.16.0 (`pqclean_falcon-512`), so they are an independent
-implementation's output rather than this package's. `tests/test_falcon_ref.py` checks the
-decoders and the hash against the pure-Python reference; this file checks that a real
-signature is accepted and that four different kinds of tampering are not.
+implementation's output rather than this package's. This file checks the decoders and hash against
+the pure-Python reference, verifies that a real signature is accepted, and checks that four
+different kinds of tampering are not.
 """
 
 from __future__ import annotations

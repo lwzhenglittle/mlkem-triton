@@ -33,20 +33,29 @@ def pytest_configure(config):
 
 
 # Without a GPU: **centrally** skip the modules that need a graphics card.
-# Writing skipif in each test file is easy to get wrong (a newly added file
-# would be missed), so the fallback lives here. The whitelisted modules are
-# pure numpy / pure math and do not need a GPU.
-_NO_GPU_OK = {
-    "test_ntt.py",
-    "test_keyprep.py",
-    "test_ref.py",
-    "test_primitives.py",
-    "test_mldsa_ref.py",
-    "test_removed_api.py",
-    "test_slhdsa_ref.py",
-    "test_sha2.py",
-    "test_fields.py",
-    "test_chacha20.py",
+# Maintaining a positive whitelist of CPU-only modules drifted silently whenever a
+# new pure-math, reference, or contract test was added (e.g. `test_primitives_contract.py`,
+# `test_bench_harness.py`, `test_cpu_only.py`). Listing GPU modules instead -- plus
+# auto-skipping `*_gpu.py` and anything marked `@pytest.mark.gpu` -- ensures every
+# device-free test runs on CPU-only machines and hosted CI by default.
+_NEEDS_GPU = {
+    "test_dot_exact.py",
+    "test_encaps.py",
+    "test_falcon_liboqs.py",
+    "test_fused_gemm.py",
+    "test_gemm.py",
+    "test_gemm_int8.py",
+    "test_glue.py",
+    "test_input_validation.py",
+    "test_keygen.py",
+    "test_lms.py",
+    "test_mldsa.py",
+    "test_mldsa_sign.py",
+    "test_ntt_large.py",
+    "test_pipeline.py",
+    "test_rebuild.py",
+    "test_slhdsa.py",
+    "test_triton_behaviour.py",
 }
 
 
@@ -57,7 +66,14 @@ def pytest_collection_modifyitems(config, items):
         return
     import pytest
 
-    skip = pytest.mark.skip(reason="no usable GPU (only the math/reference cases can run on CPU)")
+    skip = pytest.mark.skip(
+        reason="no usable GPU (only the math/reference/contract cases run on CPU)"
+    )
     for item in items:
-        if item.path.name not in _NO_GPU_OK:
+        name = item.path.name
+        if (
+            name in _NEEDS_GPU
+            or name.endswith("_gpu.py")
+            or item.get_closest_marker("gpu") is not None
+        ):
             item.add_marker(skip)

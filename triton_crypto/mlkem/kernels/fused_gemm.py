@@ -267,22 +267,24 @@ def _pick_cfg(M: int, dev) -> dict:
 
 # --------------------------------------------------------------- ENC entry point
 def _fused_cfg(M: int, dev) -> dict:
-    """`_pick_cfg` with pipelining switched off, for the two fused kernels only.
+    """`_pick_cfg` with pipelining switched off on Intel XPU, for the two fused kernels only.
 
-    `num_stages >= 2` makes these kernels fault on this backend for a range of shapes: the GPU
-    dereferences virtual address 0x0, `xe` raises *Engine memory CAT error*, resets the CCS engine
-    and the process loses the device. Measured 2026-11-27 on Arc B390 / triton-xpu 3.9:
+    `num_stages >= 2` makes these kernels fault on Intel Xe3 / triton-xpu 3.9 for a range of
+    shapes: the GPU dereferences virtual address 0x0, `xe` raises *Engine memory CAT error*,
+    resets the CCS engine and the process loses the device. Measured 2026-11-27 on Arc B390 /
+    triton-xpu 3.9:
 
         M=1024 B=512   stages=2  5/5 fault     stages=1  5/5 clean
         M=1280 B=256   stages=2  fault         stages=1  clean
 
-    Masking the epilogue loads (see `mask_n` below) fixes the M=1024 shapes but not M=1280, so the
-    mask is kept *and* pipelining is off. `encaps.py` keeps its own config: its epilogue is
-    different and it was not the one that faulted. The cost of `num_stages=1` here is not measured
-    yet -- it has to be, before any ML-KEM number is quoted again.
+    Masking the epilogue loads (see `mask_n` below) fixes the M=1024 shapes but not M=1280, so on
+    XPU the mask is kept *and* pipelining is off. Other backends (CUDA, ROCm) keep `_pick_cfg`'s
+    `num_stages` so they do not pay for an Intel compiler bug. `encaps.py` keeps `_pick_cfg` as
+    well: its epilogue is different and it was not the one that faulted.
     """
     cfg = _pick_cfg(M, dev)
-    cfg["num_stages"] = 1
+    if getattr(dev, "type", str(dev)).startswith("xpu"):
+        cfg["num_stages"] = 1
     return cfg
 
 

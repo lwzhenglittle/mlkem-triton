@@ -69,6 +69,7 @@ pythonpath = [".", "tests"]
 testpaths = ["tests"]
 markers = [
     "slow: cases that take a long time to run",
+    "gpu: cases that require a Triton-capable GPU backend",
 ]
 
 [tool.ruff]

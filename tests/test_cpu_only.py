@@ -58,3 +58,17 @@ def test_an_explicit_cpu_device_is_refused(no_accelerator):
     """`resolve_device("cpu")` must say no rather than hand back a device the kernels cannot use."""
     with pytest.raises(RuntimeError, match="no CPU backend"):
         no_accelerator.resolve_device("cpu")
+
+
+def test_fused_cfg_disables_pipelining_only_on_xpu():
+    """The VA 0x0 fault is an Intel triton-xpu compiler bug; CUDA/ROCm keep `_pick_cfg` stages."""
+    import torch
+
+    from triton_crypto.mlkem.kernels.fused_gemm import _fused_cfg, _pick_cfg
+
+    assert _fused_cfg(1024, torch.device("xpu"))["num_stages"] == 1
+    assert (
+        _fused_cfg(1024, torch.device("cuda"))["num_stages"]
+        == _pick_cfg(1024, torch.device("cuda"))["num_stages"]
+    )
+    assert _fused_cfg(1024, torch.device("cuda"))["num_stages"] == 3

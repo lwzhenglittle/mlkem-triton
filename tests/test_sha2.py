@@ -30,6 +30,7 @@ def _device_block(bits: int, rows: int, blocks: int):
     return raw, t.contiguous().view(dtype)
 
 
+@pytest.mark.gpu
 @pytest.mark.parametrize("bits", BITS)
 @pytest.mark.parametrize("blocks", [1, 3])
 def test_kernel_matches_numpy(bits, blocks):

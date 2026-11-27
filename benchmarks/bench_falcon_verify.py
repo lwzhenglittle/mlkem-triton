@@ -45,6 +45,7 @@ TAGS = {"falcon-512": "falcon_512", "falcon-padded-512": "falcon_padded_512"}
 CPU_KEY = {"falcon-512": "falcon-512-verify", "falcon-padded-512": "falcon-padded-512-verify"}
 LIBOQS = ROOT / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so"
 CPU_JSON = ROOT / "benchmarks" / "cpu_baseline.json"
+CPU_JSON_BARRIER = ROOT / "benchmarks" / "cpu_baseline_barrier.json"
 
 
 def corpus(ps: str, n: int):
@@ -111,9 +112,12 @@ def main() -> int:
     verifier = Verifier(pk, params, dev, padded=args.ps.endswith("padded-512"))
 
     cpu = None
-    if CPU_JSON.exists():
-        data = json.loads(CPU_JSON.read_text())
+    cpu_path = CPU_JSON_BARRIER if CPU_JSON_BARRIER.exists() else CPU_JSON
+    cpu_method = "unknown"
+    if cpu_path.exists():
+        data = json.loads(cpu_path.read_text())
         cpu = data.get("rivals", {}).get(CPU_KEY[args.ps])
+        cpu_method = data.get("meta", {}).get("method", "sum-of-minima")
 
     print(
         f"\n{'B':>6} {'dev ms':>9} {'dev us/op':>10} {'dev Mo/s':>9} "
@@ -144,13 +148,19 @@ def main() -> int:
     n = batches[-1]
     t_dev = last_dev_per_op
     if cpu:
-        print(f"\nliboqs CPU baseline ({cpu['one_thread']:.0f}/s 1T, {cpu['procs16']:.0f}/s 16P):")
+        print(
+            f"\nliboqs CPU baseline ({cpu['one_thread']:.0f}/s 1T, {cpu['procs16']:.0f}/s 16P; "
+            f"{cpu_path.name}, {cpu_method}):"
+        )
         print(
             f"  device core {t_dev * 1e6:.2f} us/op = {1 / t_dev / cpu['one_thread']:.1f}x 1T, "
             f"{1 / t_dev / cpu['procs16']:.2f}x 16P"
         )
     else:
-        print("\n(no benchmarks/cpu_baseline.json -- run benchmarks/bench_cpu.py for the rival)")
+        print(
+            "\n(no benchmarks/cpu_baseline_barrier.json or cpu_baseline.json -- "
+            "run benchmarks/bench_16p_barrier.py for the rival)"
+        )
 
     if args.profile:
         import torch

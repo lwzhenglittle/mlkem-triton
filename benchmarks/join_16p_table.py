@@ -132,11 +132,16 @@ def main() -> int:
         blob = json.loads(path.read_text())
         new.update(blob["rivals"])
         new_meta = blob.get("meta", {})
-    baseline = args.baseline or (
-        ROOT / "cpu_baseline_barrier.json"
-        if (ROOT / "cpu_baseline_barrier.json").exists()
-        else ROOT / "cpu_baseline.json"
-    )
+    if args.baseline:
+        baseline = args.baseline
+    elif args.repro_out and args.device is None:
+        baseline = (
+            ROOT / "cpu_baseline_barrier.json"
+            if (ROOT / "cpu_baseline_barrier.json").exists()
+            else ROOT / "cpu_baseline.json"
+        )
+    else:
+        baseline = ROOT / "cpu_baseline.json"
     old = json.loads(baseline.read_text())["rivals"]
 
     regen = [
@@ -254,13 +259,33 @@ def main() -> int:
                 f"i.e. every ratio in it made the device look "
                 f"{1 / changes_all[-1]:.1f}x to {1 / changes_all[0]:.1f}x worse than it is.",
                 "",
-                "No primitive row changed side of 1.0x. One signature row did, and it is not in",
-                "the table above because it is not a `bench_primitive` row: **ML-DSA-44 verify, "
-                "0.57x -> 1.66x**",
-                "(0.53 Mops/s on the device against 318.7 k ops/s from the barrier; the old 929 k",
-                "was the pool's sum of minima). Falcon-512's device core goes 3.72x -> 5.9x on the",
-                "same correction.",
             ]
+            # Derive the scheme-level summary from the loaded JSONs rather than hardcoding stale figures.
+            scheme_notes = []
+            if "mldsa-44-verify" in old and "mldsa-44-verify" in new:
+                m_old = old["mldsa-44-verify"]["procs16"]
+                m_new = new["mldsa-44-verify"]["procs16"]
+                m_dev = 0.53e6  # B=4096 device rate from bench_mldsa_verify.py
+                scheme_notes.append(
+                    f"**ML-DSA-44 verify, {m_dev / m_old:.2f}x -> {m_dev / m_new:.2f}x** "
+                    f"(0.53 Mops/s on the device against {m_new / 1e3:.1f} k ops/s from the "
+                    f"barrier; the old {m_old / 1e3:.0f} k was the pool's sum of minima)"
+                )
+            if "falcon-512-verify" in old and "falcon-512-verify" in new:
+                f_old = old["falcon-512-verify"]["procs16"]
+                f_new = new["falcon-512-verify"]["procs16"]
+                f_dev = 1.65e6  # B=4096 device core rate from bench_falcon_verify.py
+                scheme_notes.append(
+                    f"Falcon-512's device core goes {f_dev / f_old:.2f}x -> {f_dev / f_new:.1f}x "
+                    f"({f_new / 1e3:.1f} k ops/s barrier vs {f_old / 1e3:.0f} k old)"
+                )
+            if scheme_notes:
+                lines += [
+                    "No primitive row changed side of 1.0x. One signature row did, and it is not",
+                    "in the table above because it is not a `bench_primitive` row: "
+                    + "; ".join(scheme_notes)
+                    + ".",
+                ]
         args.snapshot.write_text("\n".join(lines))
         print(f"\nwrote {args.snapshot}", file=sys.stderr)
 

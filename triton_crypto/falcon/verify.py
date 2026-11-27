@@ -5,8 +5,8 @@ What runs where, and why it is split that way:
 | stage | where | why |
 |---|---|---|
 | public-key decode | host, once per verifier | 14-bit stream, 512 coefficients, negligible |
-| signature decode (`comp_decode`) | host, per signature | a variable-length prefix code; see the note below |
-| `HashToPoint` (SHAKE256 + rejection) | host | the device sponge + a compaction kernel is the next step |
+| signature decode (`comp_decode`) | host, per signature | a variable-length prefix code (35x faster on host than a device scan); see below |
+| `HashToPoint` (SHAKE256 + rejection) | **device** (uniform lengths) / host (mixed) | `_hash_to_point_kernel` on device when all `nonce ‖ msg` lengths match |
 | `s2_hat = NTT(s2)`, `s2_hat * h_hat`, inverse NTT | **device** | three batched launches |
 | `s1 = c - s2h`, normalise, L2 bound | **device** | one launch, one program per signature |
 

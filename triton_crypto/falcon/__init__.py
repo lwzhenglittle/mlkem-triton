@@ -10,8 +10,9 @@ claim). Verification is pure integer arithmetic, so it is bit-exact by construct
     ok = v.verify(messages, signatures)    # -> numpy bool array
 
 The transform reuses `primitives.ntt` with q = 12289, N = 512 -- the parameterisation needed
-no new kernel. The signature decoder and `HashToPoint` currently run on the host; see
-`verify.py` for why and for the device-only entry point.
+no new kernel. The signature decoder (`comp_decode`) runs on the host (35x faster than a device
+scan kernel), while `HashToPoint` is dual-path (device kernel for uniform-length batches, host
+fallback for mixed lengths); see `verify.py` for the device-only entry point.
 """
 
 from __future__ import annotations
