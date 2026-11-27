@@ -392,9 +392,9 @@ def main() -> int:
             "one_thread": one,
             "procs16": many,
             "procs16_steady": best["steady"],
+            "msgsize": cfg.get("size", args.msgsize),
             "scale": many / one,
             "procs": args.procs,
-            "msgsize": args.msgsize,
             "rounds": args.reps,
             "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         }
