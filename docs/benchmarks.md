@@ -705,6 +705,18 @@ One row changed side: **ML-DSA-44 verify, 0.57x -> 1.66x**. Falcon-512's device 
 prints which method it used; `benchmarks/cpu_baseline.json` is kept unchanged, as the record of the
 sum-of-minima method, because the seven snapshots above were produced against it.
 
+**A fourth bias, found the same day: the power source.** This laptop reports
+`/sys/class/power_supply/BAT0/status = Discharging` on battery and drops the ACPI platform profile
+to `low-power`, which caps the CPU near 0.9 GHz against 3.4 GHz on mains -- a **4.6x** swing that
+makes every CPU rate low and pushes `scale` above the core count (a throttled run printed 16.8x on
+sixteen threads). It very likely also explains a `UR_RESULT_ERROR_DEVICE_LOST` that killed a test
+run: the iGPU is power-capped at the same time, and the level-zero backend reported dead after
+repeated `xe` CCS job timeouts. A snapshot generated in that state was written over the good
+baseline; it was restored from git, and `bench_16p_barrier.py` now (a) records the power state in
+its `meta`, (b) warns when the battery, the profile or the clock say the numbers are not
+comparable, (c) warns when a remeasured 1T rate drifts more than 1.5x from the stored baseline, and
+(d) **refuses to write a baseline** from a machine in that state unless `--force` is passed.
+
 **What this does not fix.** The device's clock state still moves 2-4x between runs, and it moved
 2x *within* the session that produced the table (the same 2^20 transform read 810, 1160 and 602
 transforms/s twenty minutes apart). Absolute GB/s in a snapshot is worth less than the ratio

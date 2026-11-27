@@ -75,6 +75,52 @@ MAC_BYTES = 1 << 30
 # --------------------------------------------------------------------------- rivals
 
 
+def power_state() -> dict:
+    """Battery, platform profile and clock, because on this box they multiply every number.
+
+    Measured the hard way: a snapshot taken while the machine had dropped to battery power read
+    every CPU rate 4.6x low (0.9 GHz against 3.4), and the `scale` column came out at 16.8x on
+    sixteen threads -- physically impossible, which is what gave it away. The iGPU was being
+    power-capped at the same time, which is also the most likely cause of the
+    `UR_RESULT_ERROR_DEVICE_LOST` that killed a test run.
+    """
+    state: dict = {}
+    for path in sorted(Path("/sys/class/power_supply").glob("*/status")):
+        with contextlib.suppress(OSError):
+            state["battery"] = path.read_text().strip()
+    with contextlib.suppress(OSError):
+        state["platform_profile"] = Path("/sys/firmware/acpi/platform_profile").read_text().strip()
+    freqs = []
+    for path in Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
+        with contextlib.suppress(OSError):
+            freqs.append(int(path.read_text()))
+    if freqs:
+        freqs.sort()
+        state["cur_freq_mhz_median"] = round(freqs[len(freqs) // 2] / 1000)
+        state["cur_freq_mhz_max"] = round(freqs[-1] / 1000)
+    return state
+
+
+def state_warning(state: dict) -> str | None:
+    """One line when the machine is not in a state where the numbers mean anything."""
+    problems = []
+    if state.get("battery") == "Discharging":
+        problems.append("on battery power")
+    if state.get("profile") == "low-power":
+        problems.append("ACPI profile is low-power")
+    if state.get("platform_profile") == "low-power":
+        problems.append("ACPI profile is low-power")
+    if state.get("cur_freq_mhz_max", 10_000) < 2000:
+        problems.append(f"CPU tops out at {state.get('cur_freq_mhz_max')} MHz")
+    if not problems:
+        return None
+    return (
+        "machine state is not comparable: "
+        + ", ".join(problems)
+        + " -- every rate here is low by 2-5x and `scale` can exceed the core count"
+    )
+
+
 def cpu_meta(procs: int, msgsize: int, reps: int) -> dict:
     """The provenance block `bench_primitive.load_cpu` checks before it will use a baseline.
 
@@ -97,6 +143,7 @@ def cpu_meta(procs: int, msgsize: int, reps: int) -> dict:
         "reps": reps,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "python": platform.python_version(),
+        "power": power_state(),
     }
 
 
@@ -303,6 +350,11 @@ def main() -> int:
     ap.add_argument("--reps", type=int, default=3, help="rounds per cell; the best 16P is kept")
     ap.add_argument("--msgsize", type=int, default=MSG)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="write --json even when the machine is on battery / in low-power mode",
+    )
     args = ap.parse_args()
 
     table = families(args.msgsize)
@@ -312,6 +364,11 @@ def main() -> int:
     unknown = [n for n in names if n not in table]
     if unknown:
         ap.error(f"unknown: {unknown}; have {sorted(table)}")
+
+    state = power_state()
+    warning = state_warning(state)
+    if warning:
+        print(f"# WARNING: {warning}", file=sys.stderr)
 
     rows = {}
     print(f"{'rival':26s} {'unit':5s} {'1T':>14s} {'16P':>14s} {'scale':>7s}  {'sum/bt':>6s}  msg")
@@ -346,6 +403,27 @@ def main() -> int:
             f"{best['steady'] / many:5.2f}x  {msg}"
         )
 
+    # A second machine-state check that does not depend on sysfs: the same binary and the same
+    # workload measured twice must agree. If they do not, the two sessions are not comparable and
+    # nothing that joins them is either.
+    previous = ROOT / "cpu_baseline_barrier.json"
+    if previous.exists() and (args.json is None or args.json.resolve() != previous.resolve()):
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            old = json.loads(previous.read_text())["rivals"]
+            drift = {
+                name: row["one_thread"] / old[name]["one_thread"]
+                for name, row in rows.items()
+                if name in old and old[name]["one_thread"]
+            }
+            worst = max(drift.items(), key=lambda kv: abs(kv[1] - 1.0), default=None)
+            if worst and not 0.67 <= worst[1] <= 1.5:
+                print(
+                    f"# WARNING: 1T rate for {worst[0]} is {worst[1]:.2f}x the stored baseline "
+                    f"-- this machine is in a different power/clock state, so these numbers "
+                    f"cannot be joined with anything measured before",
+                    file=sys.stderr,
+                )
+
     over = {k: v["scale"] for k, v in rows.items() if v["scale"] > args.procs}
     if over:
         print(
@@ -353,6 +431,17 @@ def main() -> int:
             f"re-run those rows: {over}",
             file=sys.stderr,
         )
+    if args.json and warning and not args.force:
+        # Writing here would replace a good baseline with a throttled one. It happened: a snapshot
+        # taken on battery overwrote benchmarks/cpu_baseline_barrier.json with rates 4.6x low, and
+        # the drift guard then agreed with itself because both sides were throttled.
+        print(
+            "error: refusing to write --json from a machine in this state (use --force to "
+            "override); the existing baseline is the better artifact",
+            file=sys.stderr,
+        )
+        return 3
+
     if args.json:
         args.json.write_text(
             json.dumps(

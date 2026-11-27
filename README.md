@@ -169,9 +169,18 @@ GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes
 Every B390 row is from `benchmarks/snapshot-20261126T171639Z.md` (one window); the clock moves
 these by up to 2x between sessions, so treat the ratios as the durable part, not the absolutes.
 GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted; the
-`vs 1T` / `vs 16P` columns come from `benchmarks/bench_cpu.py` measured in the same window, and
-`benchmarks/snapshot.py` runs the whole set at once. **Seven rows beat sixteen CPU processes** --
-the sponge/SHA-2 family at 1.55–4.11× and the 2^20 NTT at 4.1×. The sponge family wins because
+`vs 1T` / `vs 16P` columns come from `benchmarks/bench_16p_barrier.py` measured in the same
+window, and `benchmarks/snapshot.py` runs the whole set at once.
+
+**The `vs 16P` cells above are the snapshot's, and the snapshot's column over-counts the CPU.**
+Measured on 2026-11-27 with a barrier and matched message sizes, the correction is 1.25–4.25×
+(median 1.94×), so the rows that beat sixteen processes read: SHAKE-128 **8.13×**, SHAKE-256
+**7.78×**, SHA3-512 **7.72×**, NTT 2^20 **7.28×**, SHA-512 **6.97×**, SHA3-256 **5.15×**, SHA-256
+**2.80×**, ML-DSA-44 verify **1.66×**, Falcon-512 core **5.9×** — eight rows, not seven, and the
+sponge/SHA-2 family is at 2.80–8.13× rather than 1.55–4.11×. Everything else stays below 1.0×
+(BLAKE3 0.18× → **0.72×**, ChaCha20-Poly1305 **0.90×**, Poseidon2 **0.59×**, Poly1305 **0.32×**,
+AES-128-CTR **0.11×**). The corrected table, and the three commands that reproduce it, are in
+[benchmarks/table-16p-20261127.md](benchmarks/table-16p-20261127.md). The sponge family wins because
 Keccak is bad on all three CPU-side factors (no instruction, four usable lanes, 24 dependent
 rounds), not because of the instruction alone; the NTT is the one row that wins for a memory
 reason (84 MB of traffic per transform, radix-4). The ALU-bound primitives are 0.06–0.5×. Full tables,

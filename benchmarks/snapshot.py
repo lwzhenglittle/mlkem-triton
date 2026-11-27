@@ -36,9 +36,12 @@ BENCH = ROOT / "benchmarks"
 # name -> (script, argv, what it answers)
 SECTIONS: dict[str, tuple[str, list[str], str]] = {
     "cpu": (
-        "bench_cpu.py",
-        ["--merge"],
-        "the rival: every primitive's CPU opponent, 1T and 16 processes",
+        # The barrier harness, not `bench_cpu.py --merge`: the latter sums per-child minima, which
+        # over-counts the CPU by 1.25x..4.25x (docs/benchmarks.md §15). A snapshot regenerated
+        # with it would quietly restore the old column.
+        "bench_16p_barrier.py",
+        ["--all", "--reps", "2", "--json", "cpu_baseline_barrier.json"],
+        "the rival: every primitive's CPU opponent, 1T and 16 processes, barrier-measured",
     ),
     "primitive": (
         "bench_primitive.py",
