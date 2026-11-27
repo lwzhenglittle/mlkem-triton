@@ -70,7 +70,7 @@ def main() -> int:
     print(f"{'B':>7} {'e2e ms':>9} {'e2e µs/op':>10} {'dev µs/op':>10} {'Mops/s':>9} {hdr}")
     for B in [int(x) for x in args.batch.split(",")]:
         msgs = [m0] * B
-        arr = np.frombuffer(b"".join(msgs), np.uint8).reshape(B, 32)
+        arr = np.frombuffer(b"".join(msgs), np.uint8).reshape(B, 32).copy()
         mt = torch.from_numpy(arr).to(dev)
         e_min, _ = _bench(lambda B=B: enc.encapsulate([m0] * B), dev, n=args.iters)
         d_min, _ = _bench(lambda mt=mt, B=B: enc.encapsulate_torch(mt, B), dev, n=args.iters)

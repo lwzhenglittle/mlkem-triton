@@ -278,9 +278,10 @@ def _fused_cfg(M: int, dev) -> dict:
         M=1280 B=256   stages=2  fault         stages=1  clean
 
     Masking the epilogue loads (see `mask_n` below) fixes the M=1024 shapes but not M=1280, so on
-    XPU the mask is kept *and* pipelining is off. Other backends (CUDA, ROCm) keep `_pick_cfg`'s
-    `num_stages` so they do not pay for an Intel compiler bug. `encaps.py` keeps `_pick_cfg` as
-    well: its epilogue is different and it was not the one that faulted.
+    XPU the mask is kept *and* pipelining is off for `fused_enc_kernel`, `fused_dec_kernel`, and
+    `encaps_kernel` (the latter hit the same `UR_RESULT_ERROR_DEVICE_LOST` at M=1024, B=4096 with
+    `MASK_N=False` and `num_stages=2`). Other backends (CUDA, ROCm) keep `_pick_cfg`'s `num_stages`
+    so they do not pay for an Intel compiler bug.
     """
     cfg = _pick_cfg(M, dev)
     if getattr(dev, "type", str(dev)).startswith("xpu"):

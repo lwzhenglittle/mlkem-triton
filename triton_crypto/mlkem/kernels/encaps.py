@@ -30,7 +30,7 @@ import triton
 import triton.language as tl
 
 from ...devices import warps
-from .fused_gemm import _gemm_tile, _pick_cfg, _tile_id
+from .fused_gemm import _fused_cfg, _gemm_tile, _tile_id
 
 Q = 3329
 QL = tl.constexpr(Q)
@@ -164,12 +164,16 @@ def fused_encaps(W, Y, E, B: int, du: int, dv: int, pivot: int | None = None):
         pivot = M - 256
     if not (0 <= pivot <= M) or not (1 <= du <= 15 and 1 <= dv <= 15):
         return None
-    cfg = _pick_cfg(M, W.device)
+    cfg = _fused_cfg(M, W.device)
     BM, BN, BK = cfg["BM"], cfg["BN"], cfg["BK"]
     if K % BK or M % BM or pivot % BM:
         return None
     out = torch.empty((M, B), dtype=torch.int16, device=W.device)
     grid = (triton.cdiv(M, BM) * triton.cdiv(B, BN),)
+    # Always mask the epilogue load/store (same Intel triton-xpu VA 0x0 guard as fused_enc_gemm:
+    # at B=4096 with MASK_N=False and num_stages=2, encaps_kernel wedged the GPU with
+    # UR_RESULT_ERROR_DEVICE_LOST). `_fused_cfg` also disables pipelining on XPU while leaving
+    # CUDA/ROCm untouched.
     encaps_kernel[grid](
         W,
         Y,
@@ -185,7 +189,7 @@ def fused_encaps(W, Y, E, B: int, du: int, dv: int, pivot: int | None = None):
         BN,
         BK,
         cfg["GM"],
-        (B % BN) != 0,
+        True,
         num_warps=cfg["num_warps"],
         num_stages=cfg["num_stages"],
     )
