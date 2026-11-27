@@ -11,8 +11,8 @@ Exactness is the whole point. XMX int8 dot products accumulate in int32 with no 
 `int8 x int8 -> int32` is bit-exact for any inputs; that is what makes the bit-plane trick
 work: split each GF(2^8) element into 8 binary planes, run 8 (or fewer, with the standard
 CarryLessMultiply-free decomposition) int8 GEMMs, and recombine with XOR. Whether that is
-*faster* than a bitsliced CUDA-core version is exactly what `PLAN_ffgemm.md` is designed to
-measure; this module only guarantees the arithmetic the measurement needs.
+*faster* than a bitsliced SIMT version is a benchmark question (see `docs/benchmarks.md`); this
+module guarantees the exact arithmetic that measurement needs.
 
 The tile table comes from `devices.gemm_cfg`, the same one ML-KEM's GEMM uses, because the
 shape constraints (BM/BN multiples of 16) are the hardware's, not the scheme's.
@@ -144,11 +144,10 @@ def _reduce_mask(k: int) -> int:
 def gf2_8_matmul_torch(a, b, device=None, planes=None):
     """Product in `GF(2^8)` with the AES polynomial, assembled from bit-plane int8 GEMMs.
 
-    For binary operands an int8 GEMM *is* a `GF(2)` matrix product, so an `GF(2^8)` product is
-    64 of them -- one per pair of bit planes -- XOR-ed through the reduction masks. This is the
-    strategy `PLAN_ffgemm.md` is built on, and the point of exposing it here is to have an
-    end-to-end number: what an `GF(2^8)` multiply actually costs when the matrix unit does the
-    bit work.
+    For binary operands an int8 GEMM *is* a `GF(2)` matrix product, so a `GF(2^8)` product is
+    64 of them -- one per pair of bit planes -- XOR-ed through the reduction masks. Exposing this
+    construction gives an end-to-end measurement of what a `GF(2^8)` multiply actually costs when
+    the matrix unit does the bit work.
 
     `a` and `b` are `[M, K]` and `[K, N]` arrays of byte values. Pass `planes=1` to run only the
     low bit plane, which is what a caller who knows its operands are binary would use.

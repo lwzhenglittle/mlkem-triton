@@ -100,7 +100,7 @@ def _reduce_mask(k: int) -> int:
 
 
 def test_bit_planes_compute_a_gf2_8_product():
-    """The strategy `PLAN_ffgemm.md` is built on: 64 tiny int8 GEMMs == one GF(2^8) product.
+    """Bit-plane construction: 64 tiny int8 GEMMs == one GF(2^8) product.
 
     For binary operands an int8 GEMM *is* a GF(2) matrix product, so the product of two 8x8
     GF(2^8) matrices can be assembled from per-bit-plane products XOR-ed through the

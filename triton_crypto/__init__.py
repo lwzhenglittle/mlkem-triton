@@ -3,19 +3,23 @@
 Layout:
 
     primitives/   scheme-agnostic mathematics: Keccak-f[1600], the sponge
-                  (SHA3/SHAKE, any rate/output, batched), SHA-2 compression, a
-                  parameterised negacyclic NTT over Z_q[X]/(X^n+1), prime-field
-                  arithmetic and ChaCha20
+                  (SHA3/SHAKE, any rate/output, batched), SHA-2 compression,
+                  parameterised and multi-pass NTT over Z_q[X]/(X^n+1),
+                  prime-field arithmetic, ChaCha20, Poly1305/AEAD, AES-128-CTR,
+                  BLAKE3, Poseidon2-BabyBear/16 and exact int8 / GF(2^8) GEMM
     mlkem/        ML-KEM (FIPS 203): keygen, encapsulate, decapsulate
     mldsa/        ML-DSA (FIPS 204): sign, verify, plus a numpy reference
     slhdsa/       SLH-DSA (FIPS 205): verify, plus a numpy reference
     lms/          LMS/HSS (SP 800-208): verify, plus a numpy reference
+    falcon/       Falcon (FIPS 206 draft): verify, plus a numpy reference
 
 Every scheme is a thin layer over `primitives`; it keeps only what is
 scheme-specific (ML-KEM's Toeplitz GEMMs, ML-DSA's SampleInBall/Decompose,
-FIPS 205's thash, LMS Winternitz chains). The primitive layer does not assume
-post-quantum: `primitives.chacha20` is a symmetric stream cipher, and
-`primitives.fields` is what a Poseidon2 or a secp-curve primitive would build on.
+FIPS 205's thash, LMS Winternitz chains, Falcon's prefix decoder and L2 check).
+The primitive layer does not assume post-quantum: `primitives.chacha20`,
+`primitives.poly1305`, `primitives.aes` and `primitives.blake3` are symmetric
+primitives, and `primitives.fields` / `primitives.poseidon2` / `primitives.ntt.large`
+serve prime-field and ZK workloads.
 
 Primitives on their own:
 
@@ -33,6 +37,7 @@ ML-KEM, all three operations (also available from `triton_crypto.mlkem`):
     from triton_crypto.mldsa import Signer, Verifier
     from triton_crypto.slhdsa import Verifier
     from triton_crypto.lms import Verifier
+    from triton_crypto.falcon import Verifier
 
 
 Kernel contracts: docs/kernels.md. Design notes: README.md, docs/design.md.

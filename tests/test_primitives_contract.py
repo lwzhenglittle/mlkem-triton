@@ -1,7 +1,6 @@
 """What counts as "a primitive is done", as a red light instead of a convention.
 
-The 0.8.0 review (`eval-repo-structure-0.8.0.md`, P1-1) asked for this and it has been owed
-since. Every module under `primitives/` must:
+Every module under `primitives/` must satisfy a single executable contract:
 
 1. be re-exported from `triton_crypto.primitives` and listed in its `__all__`;
 2. ship a numpy reference (`*_np`, `*_np_batch` or `*_ref`) -- the oracle for the device path;

@@ -329,6 +329,8 @@ class Verifier:
         if isinstance(rows, np.ndarray):
             if rows.shape[0] != sig.shape[0]:
                 raise ValueError(f"{rows.shape[0]} messages but {sig.shape[0]} signatures")
+            if rows.shape[0] == 0:
+                return np.zeros(0, dtype=bool)
             mu = self._mu_torch(_to_device(rows, self.device))
             return self._verify_device(mu, sig).cpu().numpy()
         if len(rows) != sig.shape[0]:

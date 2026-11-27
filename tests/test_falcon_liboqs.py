@@ -37,7 +37,9 @@ from triton_crypto.falcon import FALCON_512, Verifier
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CANDIDATES = (
+    _ROOT / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so",
     _ROOT / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so",
+    _ROOT.parent / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so",
     _ROOT.parent / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so",
 )
 DEFAULT_SO = Path(

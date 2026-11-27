@@ -170,3 +170,25 @@ def test_public_key_rejects_a_coefficient_above_q():
     h[0] |= 0xC0  # first 14-bit field becomes 0x3FFF-ish
     with pytest.raises(ValueError, match="out of range"):
         modq_decode(bytes(h), FALCON_512)
+
+
+def test_offline_kat_corpus_accepts_valid_and_rejects_tampered():
+    """Deterministic multi-signature KATs exported from liboqs (no liboqs build needed at test time)."""
+    import json
+    from pathlib import Path
+
+    kat_path = Path(__file__).resolve().parent.parent / "data" / "vectors" / "falcon" / "kat.json"
+    data = json.loads(kat_path.read_text(encoding="utf-8"))
+    total = 0
+    for group in data["groups"]:
+        pk = bytes.fromhex(group["pk_hex"])
+        for case in group["cases"]:
+            msg = bytes.fromhex(case["msg_hex"])
+            sig = bytes.fromhex(case["sig_hex"])
+            assert verify_np(pk, msg, sig) is True
+            bad = bytearray(sig)
+            bad[1 + FALCON_512.nonce_len + 5] ^= 0x01
+            with contextlib.suppress(ValueError):
+                assert verify_np(pk, msg, bytes(bad)) is False
+            total += 1
+    assert total >= 32

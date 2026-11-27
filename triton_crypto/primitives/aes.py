@@ -546,7 +546,7 @@ def aes128_ctr_torch(keys, nonces, length: int, counter0: int = 0, device=None, 
         # 0.3 s, which dwarfs the kernel. Callers that time the device path pass `rk`.
         rk_np = np.stack([aes128_expand_key_np(bytes(row)) for row in k_np]).astype(np.int32)
         rk = torch.as_tensor(rk_np, device=dev)
-    nonce = torch.as_tensor(n_np, device=dev)
+    nonce = torch.as_tensor(np.array(n_np, copy=True), device=dev)
     out = torch.empty((batch, nblk * 16), dtype=torch.uint8, device=dev)
     tbl = torch.as_tensor(T_TABLE_NP.reshape(-1), dtype=torch.int32, device=dev)
     blk = 64

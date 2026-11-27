@@ -1,7 +1,7 @@
 """Falcon verification kernels: the two launches that are not the transform itself.
 
-The transform is `primitives.ntt` (q = 12289, N = 512, int32 -- no new kernel needed, which is
-what `eval-triton-crypto-primitives.md` §4.5 found). What is Falcon-specific is:
+The transform is `primitives.ntt` (q = 12289, N = 512, int32 -- no new kernel needed). What is
+Falcon-specific is:
 
     _mul_ntt_kernel   pointwise product in the NTT domain, `s2_hat * h_hat mod q`
     _check_kernel     `s1 = c - s2*h`, normalise into [-q/2, q/2], and the L2 bound

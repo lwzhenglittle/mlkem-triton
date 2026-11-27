@@ -19,12 +19,18 @@ keywords = [
     "dilithium",
     "slh-dsa",
     "lms",
+    "falcon",
     "fips-203",
     "fips-204",
     "fips-205",
+    "fips-206",
     "keccak",
     "shake",
     "chacha20",
+    "poly1305",
+    "aes",
+    "blake3",
+    "poseidon2",
     "symmetric",
     "ntt",
     "prime-field",
@@ -37,10 +43,15 @@ keywords = [
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Security :: Cryptography",
     "Intended Audience :: Developers",
     "Environment :: GPU :: NVIDIA CUDA",
     "Environment :: GPU :: Intel",
+    "Environment :: GPU :: AMD ROCm",
 ]
 dependencies = [
     "numpy>=1.24",
@@ -62,6 +73,9 @@ test = ["pytest>=7"]
 
 [tool.setuptools.packages.find]
 include = ["triton_crypto*"]
+
+[tool.setuptools.package-data]
+triton_crypto = ["py.typed"]
 
 
 [tool.pytest.ini_options]

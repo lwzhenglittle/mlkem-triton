@@ -18,6 +18,11 @@ def test_version_matches_pyproject():
     assert triton_crypto.__version__ == meta["project"]["version"]
 
 
+def test_py_typed_marker_exists():
+    """PEP 561 marker is shipped inside the package."""
+    assert (Path(triton_crypto.__file__).parent / "py.typed").is_file()
+
+
 def test_lms_is_a_package():
     """Without lms/__init__.py, setuptools.find_packages() drops the subpackage from wheels."""
     import setuptools

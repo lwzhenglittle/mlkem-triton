@@ -137,6 +137,11 @@ class Verifier:
         c_t = torch.as_tensor(c, dtype=torch.int32, device=self.device).reshape(-1, n)
         s2_t = torch.as_tensor(s2, dtype=torch.int32, device=self.device).reshape(-1, n)
         batch = c_t.shape[0]
+        if batch == 0:
+            return (
+                torch.empty(0, dtype=torch.int8, device=self.device),
+                torch.empty(0, dtype=torch.int64, device=self.device),
+            )
         s2_mod = s2_t % q
 
         domain = _falcon_domain(self.params)

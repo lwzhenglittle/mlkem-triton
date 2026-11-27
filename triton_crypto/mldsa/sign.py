@@ -130,14 +130,14 @@ class Signer:
             raise ValueError("context must be at most 255 bytes")
         rows = as_bytes_list(messages, "message")
         if not rows:
-            return np.empty((0, 0), dtype=np.uint8)
+            return np.empty((0, self.p.sig_size), dtype=np.uint8)
         return self.sign_mprime([self.ref.format_message(m, ctx, prehash) for m in rows], rnd)
 
     def sign_mprime(self, mprimes, rnd=None) -> np.ndarray:
         """The internal interface: each message is already M′ (FIPS 204 Alg. 7's input)."""
         mprime = as_bytes_list(mprimes, "message")
         if not mprime:
-            return np.empty((0, 0), dtype=np.uint8)
+            return np.empty((0, self.p.sig_size), dtype=np.uint8)
         return self.sign_mu_rows(self._mu(mprime), rnd)
 
     def sign_mu(self, mus, rnd=None) -> np.ndarray:
@@ -161,6 +161,8 @@ class Signer:
         """Sign from precomputed μ: [B, 64] uint8 on the device."""
         p = self.p
         b = mu.shape[0]
+        if b == 0:
+            return np.empty((0, p.sig_size), dtype=np.uint8)
         dev = self.device
         rnd_b = b"\x00" * 32 if rnd is None else bytes(rnd)
         if len(rnd_b) != 32:

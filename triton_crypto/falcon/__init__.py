@@ -1,9 +1,9 @@
 """Falcon-512 signature verification (FIPS 206 draft / the NIST additional-signatures spec).
 
 Verification only: signing needs Falcon's floating-point FFT and Gaussian sampler, which the
-project deliberately does not port (`eval-triton-crypto-primitives.md` §5.3 -- Triton does not
-expose FMA fusion, so a cross-backend bit-exact signature is not a property this code base can
-claim). Verification is pure integer arithmetic, so it is bit-exact by construction.
+project deliberately does not port (Triton does not expose FMA fusion control, so a cross-backend
+bit-exact signature is not a property this code base can claim). Verification is pure integer
+arithmetic, so it is bit-exact by construction.
 
     from triton_crypto.falcon import Verifier
     v = Verifier(pk)                       # 897 bytes, header 0x09

@@ -89,14 +89,16 @@ def test_check_kernel_matches_numpy_on_negative_differences():
     ok_ref, sqn_ref = check_np(prod, c, s2, q, bound)
     import torch
 
+    from triton_crypto.devices import resolve_device
     from triton_crypto.falcon.kernels import _check_kernel
 
-    sqn = torch.empty(6, dtype=torch.int64, device="xpu")
-    ok = torch.empty(6, dtype=torch.int8, device="xpu")
+    dev = resolve_device()
+    sqn = torch.empty(6, dtype=torch.int64, device=dev)
+    ok = torch.empty(6, dtype=torch.int8, device=dev)
     _check_kernel[(6,)](
-        torch.tensor(prod, dtype=torch.int32, device="xpu"),
-        torch.tensor(c, dtype=torch.int32, device="xpu"),
-        torch.tensor(s2, dtype=torch.int32, device="xpu"),
+        torch.tensor(prod, dtype=torch.int32, device=dev),
+        torch.tensor(c, dtype=torch.int32, device=dev),
+        torch.tensor(s2, dtype=torch.int32, device=dev),
         sqn,
         ok,
         6,
@@ -157,3 +159,34 @@ def test_public_api_batches(batch):
     ok = v.verify([MSG] * batch, [SIG] * batch)
     assert ok.shape == (batch,)
     assert ok.all()
+
+
+def test_empty_batch_core_and_public_api():
+    v = Verifier(PK)
+    assert v.verify([], []).tolist() == []
+    ok, sqn = v.verify_core_torch(
+        np.zeros((0, FALCON_512.n), dtype=np.int32),
+        np.zeros((0, FALCON_512.n), dtype=np.int32),
+    )
+    assert ok.shape == (0,) and sqn.shape == (0,)
+
+
+def test_offline_kat_corpus_on_device():
+    """Deterministic multi-signature GPU check covering both unpadded and padded Falcon-512."""
+    import json
+    from pathlib import Path
+
+    kat_path = Path(__file__).resolve().parent.parent / "data" / "vectors" / "falcon" / "kat.json"
+    data = json.loads(kat_path.read_text(encoding="utf-8"))
+    for group in data["groups"]:
+        pk = bytes.fromhex(group["pk_hex"])
+        msgs = [bytes.fromhex(c["msg_hex"]) for c in group["cases"]]
+        sigs = [bytes.fromhex(c["sig_hex"]) for c in group["cases"]]
+        v = Verifier(pk, padded=bool(group["padded"]))
+        assert v.verify(msgs, sigs).all()
+        tampered = []
+        for s in sigs:
+            b = bytearray(s)
+            b[1 + FALCON_512.nonce_len + 5] ^= 0x01
+            tampered.append(bytes(b))
+        assert not v.verify(msgs, tampered).any()

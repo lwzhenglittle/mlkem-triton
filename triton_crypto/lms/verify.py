@@ -191,11 +191,11 @@ class Verifier:
         msgs = as_bytes_list(messages, "message")
         sigs = as_bytes_list(signatures, "signature")
         n = len(msgs)
+        if len(sigs) != n:
+            raise ValueError(f"got {n} messages but {len(sigs)} signatures")
         out = np.zeros(n, dtype=bool)
         if n == 0:
             return out
-        if len(sigs) != n:
-            raise ValueError(f"got {n} messages but {len(sigs)} signatures")
         # A malformed signature is invalid, not an exception: reject short/absurd level
         # counts here and let the kernel path handle the rest. Previously a single `bytes`
         # message became a list of integer items and raised IndexError.

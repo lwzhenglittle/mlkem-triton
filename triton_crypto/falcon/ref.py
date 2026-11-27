@@ -134,10 +134,9 @@ def root_of_unity(q: int, n: int) -> int:
     """The smallest `zeta` of multiplicative order exactly `2n` mod q.
 
     Falcon's own generator is 7, but 7 has order 2048 and `7^12` only has order 512; the NTT
-    needs order `2n = 1024`, so the primitive root has to be searched for (11 gives 10302,
-    the value `eval-triton-crypto-primitives.md` verified by hand). Any element of order 2n
-    gives an equivalent transform: the tables are built from it, and pointwise multiplication
-    plus the inverse is the negacyclic product either way.
+    needs order `2n = 1024`, so the primitive root has to be searched for (11 gives 10302 for
+    n = 512). Any element of order 2n gives an equivalent transform: the tables are built from it,
+    and pointwise multiplication plus the inverse is the negacyclic product either way.
     """
     exp = (q - 1) // (2 * n)
     for g in range(2, 256):

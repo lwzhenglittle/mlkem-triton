@@ -54,6 +54,7 @@ jobs:
           wheel = glob.glob("dist/*.whl")[0]
           names = set(zipfile.ZipFile(wheel).namelist())
           for required in (
+              "triton_crypto/py.typed",
               "triton_crypto/lms/__init__.py",
               "triton_crypto/mldsa/__init__.py",
               "triton_crypto/slhdsa/__init__.py",

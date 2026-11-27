@@ -23,7 +23,9 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CANDIDATES = (
+    _ROOT / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so",
     _ROOT / "third_party" / "liboqs" / "build-mldsa" / "lib" / "liboqs.so",
+    _ROOT.parent / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so",
     _ROOT.parent / "third_party" / "liboqs" / "build-mldsa" / "lib" / "liboqs.so",
 )
 DEFAULT_SO = next((p for p in _CANDIDATES if p.exists()), _CANDIDATES[0])
