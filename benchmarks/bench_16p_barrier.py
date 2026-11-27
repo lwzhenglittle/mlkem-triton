@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
 import json
 import multiprocessing as mp
 import os
@@ -50,6 +51,77 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from bench_cpu import LIBOQS, LibOQS
+
+U8P = ctypes.POINTER(ctypes.c_ubyte)
+
+
+def _resolve_oqs_so(build: str = "build-all") -> Path:
+    """Prefer `OQS_BENCH_SO`, then the unified `build-bench`, then the family-specific build."""
+    override = os.environ.get("OQS_BENCH_SO")
+    if override and Path(override).exists():
+        return Path(override)
+    for cand in (
+        LIBOQS / "build-bench" / "lib" / "liboqs.so",
+        LIBOQS / build / "lib" / "liboqs.so",
+    ):
+        if cand.exists():
+            return cand
+    return LIBOQS / build / "lib" / "liboqs.so"
+
+
+class LibOQSKEM:
+    """ML-KEM keypair / encaps / decaps bound through ctypes for barrier benchmarking."""
+
+    def __init__(self, so: Path, tag: str):
+        self.lib = ctypes.CDLL(str(so))
+        self.tag = tag
+        self.keypair = self.lib[f"OQS_KEM_{tag}_keypair"]
+        self.keypair.argtypes = [U8P, U8P]
+        self.keypair.restype = ctypes.c_int
+        self.encaps = self.lib[f"OQS_KEM_{tag}_encaps"]
+        self.encaps.argtypes = [U8P, U8P, U8P]
+        self.encaps.restype = ctypes.c_int
+        self.decaps = self.lib[f"OQS_KEM_{tag}_decaps"]
+        self.decaps.argtypes = [U8P, U8P, U8P]
+        self.decaps.restype = ctypes.c_int
+
+    def prepare(self):
+        cap = 4096
+        pk, sk = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * cap)()
+        ct, ss = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * 64)()
+        if self.keypair(pk, sk) != 0:
+            raise RuntimeError(f"{self.tag}: keypair failed")
+        if self.encaps(ct, ss, pk) != 0:
+            raise RuntimeError(f"{self.tag}: encaps failed")
+        return pk, sk, ct, ss
+
+    def run_keygen(self, n: int) -> int:
+        cap = 4096
+        pk, sk = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * cap)()
+        bad = 0
+        for _ in range(n):
+            bad += self.keypair(pk, sk) != 0
+        return bad
+
+    def run_encaps(self, pk, n: int) -> int:
+        cap = 4096
+        ct, ss = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * 64)()
+        bad = 0
+        for _ in range(n):
+            bad += self.encaps(ct, ss, pk) != 0
+        return bad
+
+    def run_decaps(self, sk, ct, ss_ref, n: int) -> int:
+        ss = (ctypes.c_ubyte * 64)()
+        ref32 = bytes(ss_ref[:32])
+        bad = 0
+        for _ in range(n):
+            rc = self.decaps(ss, ct, sk)
+            bad += rc != 0
+        if bytes(ss[:32]) != ref32:
+            bad += 1
+        return bad
+
 
 # Families whose rival is a compiled binary the repo already builds for `bench_cpu.py`.
 BIN = {
@@ -158,11 +230,40 @@ def _prepare(family: str, cfg: dict):
     twenty thousand ML-DSA signatures at ~80 us each, forty times the verify round it is supposed
     to be measuring.
     """
-    if cfg["kind"] == "oqs":
-        so = LIBOQS / cfg.get("build", "build-all") / "lib" / "liboqs.so"
+    kind = cfg["kind"]
+    if kind == "oqs":
+        so = _resolve_oqs_so(cfg.get("build", "build-all"))
         impl = LibOQS(so, cfg["tag"])
         pk, corpus = impl.corpus(cfg["n"])
         return (impl, pk, corpus)
+    if kind == "oqs-sign":
+        so = _resolve_oqs_so(cfg.get("build", "build-all"))
+        impl = LibOQS(so, cfg["tag"])
+        cap = 65536
+        pk, sk = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * cap)()
+        if impl.keypair(pk, sk) != 0:
+            raise RuntimeError(f"{cfg['tag']}: keypair failed")
+        msgs = []
+        for i in range(cfg["n"]):
+            msg = b"s" * 28 + i.to_bytes(4, "little")
+            msgs.append((ctypes.c_ubyte * len(msg)).from_buffer_copy(msg))
+        return (impl, sk, msgs, cap)
+    if kind.startswith("oqs-kem-"):
+        so = _resolve_oqs_so(cfg.get("build", "build-all"))
+        impl = LibOQSKEM(so, cfg["tag"])
+        return (impl, *impl.prepare())
+    if kind == "torch-gemm-exact":
+        import numpy as np
+        import torch
+
+        os.environ["OMP_NUM_THREADS"] = "1"
+        os.environ["MKL_NUM_THREADS"] = "1"
+        torch.set_num_threads(1)
+        dim = cfg["dim"]
+        rng = np.random.default_rng(0)
+        a = torch.from_numpy(rng.integers(-128, 128, (dim, dim), dtype=np.int8).astype(np.float32))
+        b = torch.from_numpy(rng.integers(-128, 128, (dim, dim), dtype=np.int8).astype(np.float32))
+        return (torch, a, b)
     return None
 
 
@@ -188,6 +289,35 @@ def _round(family: str, cfg: dict, state=None) -> tuple[float, int]:
         # the second value is a *failure count*, not a success flag: a round that verified 19 999
         # of 20 000 must fail the run rather than pass on "nonzero"
         return float(cfg["n"]), int(cfg["n"]) - accepted
+
+    if kind == "oqs-sign":
+        impl, sk, msgs, cap = state
+        sig = (ctypes.c_ubyte * cap)()
+        bad = 0
+        for mb in msgs:
+            siglen = ctypes.c_size_t(cap)
+            bad += impl.sign(sig, ctypes.byref(siglen), mb, len(mb), sk) != 0
+        return float(len(msgs)), bad
+
+    if kind == "oqs-kem-keygen":
+        impl = state[0]
+        return float(cfg["n"]), impl.run_keygen(cfg["n"])
+
+    if kind == "oqs-kem-encaps":
+        impl, pk = state[0], state[1]
+        return float(cfg["n"]), impl.run_encaps(pk, cfg["n"])
+
+    if kind == "oqs-kem-decaps":
+        impl, _pk, sk, ct, ss_ref = state
+        return float(cfg["n"]), impl.run_decaps(sk, ct, ss_ref, cfg["n"])
+
+    if kind == "torch-gemm-exact":
+        torch, a, b = state
+        dim = cfg["dim"]
+        reps = cfg["reps"]
+        for _ in range(reps):
+            _ = torch.mm(a, b)
+        return float(reps * dim * dim * dim), 0
 
     if kind == "bin-ntt":
         exe = BIN["ntt"]
@@ -322,7 +452,75 @@ def families(msgsize: int = MSG) -> dict[str, dict]:
         "blake3": {"kind": "bin-blake3", "size": msgsize, "reps": 650_000, "unit": "B/s"},
         "poseidon2": {"kind": "bin-poseidon", "n": 1_000_000, "unit": "op/s"},
         "ntt-2^20": {"kind": "bin-ntt", "logn": 20, "reps": 8, "unit": "op/s"},
+        "gemm-int8": {
+            "kind": "torch-gemm-exact",
+            "dim": 1024,
+            "reps": 24,
+            "unit": "MAC/s",
+        },
+        # ML-KEM (FIPS 203): all three parameter sets x three operations
+        "mlkem-512-keygen": {
+            "kind": "oqs-kem-keygen",
+            "tag": "ml_kem_512",
+            "n": 40_000,
+            "unit": "op/s",
+        },
+        "mlkem-512-encaps": {
+            "kind": "oqs-kem-encaps",
+            "tag": "ml_kem_512",
+            "n": 40_000,
+            "unit": "op/s",
+        },
+        "mlkem-512-decaps": {
+            "kind": "oqs-kem-decaps",
+            "tag": "ml_kem_512",
+            "n": 40_000,
+            "unit": "op/s",
+        },
+        "mlkem-768-keygen": {
+            "kind": "oqs-kem-keygen",
+            "tag": "ml_kem_768",
+            "n": 30_000,
+            "unit": "op/s",
+        },
+        "mlkem-768-encaps": {
+            "kind": "oqs-kem-encaps",
+            "tag": "ml_kem_768",
+            "n": 30_000,
+            "unit": "op/s",
+        },
+        "mlkem-768-decaps": {
+            "kind": "oqs-kem-decaps",
+            "tag": "ml_kem_768",
+            "n": 30_000,
+            "unit": "op/s",
+        },
+        "mlkem-1024-keygen": {
+            "kind": "oqs-kem-keygen",
+            "tag": "ml_kem_1024",
+            "n": 20_000,
+            "unit": "op/s",
+        },
+        "mlkem-1024-encaps": {
+            "kind": "oqs-kem-encaps",
+            "tag": "ml_kem_1024",
+            "n": 20_000,
+            "unit": "op/s",
+        },
+        "mlkem-1024-decaps": {
+            "kind": "oqs-kem-decaps",
+            "tag": "ml_kem_1024",
+            "n": 20_000,
+            "unit": "op/s",
+        },
+        # ML-DSA (FIPS 204): all three parameter sets x verify + sign
         "mldsa-44-verify": {"kind": "oqs", "tag": "ml_dsa_44", "n": 20_000, "unit": "op/s"},
+        "mldsa-65-verify": {"kind": "oqs", "tag": "ml_dsa_65", "n": 12_000, "unit": "op/s"},
+        "mldsa-87-verify": {"kind": "oqs", "tag": "ml_dsa_87", "n": 8_000, "unit": "op/s"},
+        "mldsa-44-sign": {"kind": "oqs-sign", "tag": "ml_dsa_44", "n": 6_000, "unit": "op/s"},
+        "mldsa-65-sign": {"kind": "oqs-sign", "tag": "ml_dsa_65", "n": 4_000, "unit": "op/s"},
+        "mldsa-87-sign": {"kind": "oqs-sign", "tag": "ml_dsa_87", "n": 3_000, "unit": "op/s"},
+        # Falcon (FIPS 206 draft)
         "falcon-512-verify": {
             "kind": "oqs",
             "tag": "falcon_512",
@@ -337,9 +535,23 @@ def families(msgsize: int = MSG) -> dict[str, dict]:
             "build": "build-falcon",
             "unit": "op/s",
         },
+        # SLH-DSA (FIPS 205): separate SHA2 and SHAKE families so GPU vs CPU stays like-for-like.
+        # `slhdsa-128f-verify` is kept as the legacy SHA2-128f alias for older comparison scripts.
         "slhdsa-128f-verify": {
             "kind": "oqs",
             "tag": "slh_dsa_pure_sha2_128f",
+            "n": 350,
+            "unit": "op/s",
+        },
+        "slhdsa-sha2-128f-verify": {
+            "kind": "oqs",
+            "tag": "slh_dsa_pure_sha2_128f",
+            "n": 350,
+            "unit": "op/s",
+        },
+        "slhdsa-shake-128f-verify": {
+            "kind": "oqs",
+            "tag": "slh_dsa_pure_shake_128f",
             "n": 350,
             "unit": "op/s",
         },
@@ -386,6 +598,8 @@ def main() -> int:
         one = max(ones)
         best = max(manys, key=lambda m: m["batch"])
         many = best["batch"]
+        ones_sorted = sorted(ones)
+        manys_sorted = sorted(m["batch"] for m in manys)
         msg = (
             f"{cfg.get('size', args.msgsize)} B/msg"
             if cfg["kind"] in ("evp", "bin-blake3")
@@ -394,7 +608,9 @@ def main() -> int:
         rows[name] = {
             "unit": unit,
             "one_thread": one,
+            "one_thread_median": ones_sorted[len(ones_sorted) // 2],
             "procs16": many,
+            "procs16_median": manys_sorted[len(manys_sorted) // 2],
             "procs16_steady": best["steady"],
             "msgsize": cfg.get("size", args.msgsize),
             "scale": many / one,

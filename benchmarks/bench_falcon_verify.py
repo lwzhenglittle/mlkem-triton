@@ -43,7 +43,9 @@ from triton_crypto.falcon.verify import comp_decode_batch
 PARAMS = {"falcon-512": FALCON_512, "falcon-padded-512": FALCON_PADDED_512}
 TAGS = {"falcon-512": "falcon_512", "falcon-padded-512": "falcon_padded_512"}
 CPU_KEY = {"falcon-512": "falcon-512-verify", "falcon-padded-512": "falcon-padded-512-verify"}
-LIBOQS = ROOT / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so"
+LIBOQS_BENCH = ROOT / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so"
+LIBOQS_FALCON = ROOT / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so"
+LIBOQS = LIBOQS_BENCH if LIBOQS_BENCH.exists() else LIBOQS_FALCON
 CPU_JSON = ROOT / "benchmarks" / "cpu_baseline.json"
 CPU_JSON_BARRIER = ROOT / "benchmarks" / "cpu_baseline_barrier.json"
 
@@ -137,6 +139,7 @@ def main() -> int:
         t_dev = best(lambda c=c, s2=s2: verifier.verify_core_torch(c, s2), args.reps, dev)
         last_dev_per_op = t_dev / n  # reused by the summary line, so both quote one measurement
         t_e2e = best(lambda m=m, s=s: verifier.verify(m, s), max(3, args.reps // 3), dev)
+        last_e2e_per_op = t_e2e / n
         print(
             f"{n:6d} {t_dev * 1e3:9.3f} {t_dev / n * 1e6:10.2f} {n / t_dev / 1e6:9.2f} "
             f"{t_e2e * 1e3:9.3f} {t_e2e / n * 1e6:10.2f}   {valid}/{n}"
@@ -147,6 +150,7 @@ def main() -> int:
     # numbers for one quantity is how a report ends up contradicting itself.
     n = batches[-1]
     t_dev = last_dev_per_op
+    t_e2e = last_e2e_per_op
     if cpu:
         print(
             f"\nliboqs CPU baseline ({cpu['one_thread']:.0f}/s 1T, {cpu['procs16']:.0f}/s 16P; "
@@ -155,6 +159,10 @@ def main() -> int:
         print(
             f"  device core {t_dev * 1e6:.2f} us/op = {1 / t_dev / cpu['one_thread']:.1f}x 1T, "
             f"{1 / t_dev / cpu['procs16']:.2f}x 16P"
+        )
+        print(
+            f"  end-to-end  {t_e2e * 1e6:.2f} us/op = {1 / t_e2e / cpu['one_thread']:.2f}x 1T, "
+            f"{1 / t_e2e / cpu['procs16']:.2f}x 16P"
         )
     else:
         print(

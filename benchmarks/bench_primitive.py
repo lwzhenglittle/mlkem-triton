@@ -398,6 +398,7 @@ CPU_RIVAL = {
     "shake256": "shake256",
     "blake3": "blake3",
     "ntt-2^20": "ntt-2^20",
+    "gemm-int8": "gemm-int8",
 }
 
 CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"
