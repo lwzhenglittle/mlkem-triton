@@ -7,9 +7,10 @@ carries, modular arithmetic, the matrix unit, irregular memory access — and th
 would be a table saying which patterns are easy and which are hard.
 
 This is that table, as of 1.1.0. Every device number is from `benchmarks/snapshot.py` (one
-window, list at the top of each section below); every CPU number is from
-`benchmarks/cpu_baseline.json` (OpenSSL / liboqs / Plonky3, same machine, 16 concurrent
-processes). Sections in `docs/benchmarks.md` are cited where the detail lives.
+window, `benchmarks/snapshot-20261127T140302Z.md`); every CPU number is from
+`benchmarks/cpu_baseline_barrier.json` (OpenSSL / liboqs / Plonky3, same machine, 16 concurrent
+processes measured with a barrier at matched 1 KiB message sizes). Sections in `docs/benchmarks.md`
+are cited where the detail lives.
 
 ## 0. The rule, corrected: it is three factors, not one
 
@@ -17,9 +18,9 @@ The first version of this table said **"whether a pattern is worth porting is de
 the CPU has hardware support for it"**. That is wrong, and this project's own numbers refute it in
 both directions:
 
-- **SHA-256 has SHA-NI and the device still wins 1.55x.** A dedicated instruction does not by
+- **SHA-256 has SHA-NI and the device still wins 2.80x.** A dedicated instruction does not by
   itself beat 96 EUs of width.
-- **BLAKE3 has no CPU instruction at all and the device loses 0.18x.** No instruction does not
+- **BLAKE3 has no CPU instruction at all and the device loses 0.74x.** No instruction does not
   mean the CPU is slow -- its AVX-512 implementation does 16 blocks at once.
 
 The rule that does describe all nine measured rows: **the CPU's best implementation decides it, and
@@ -31,20 +32,21 @@ that is set by three factors together.**
 3. **How long the serial dependency chain is** -- Keccak's 24 rounds and SHA-2's chain leave a core
    latency-bound, so the CPU can only scale by adding cores; the GPU hides the latency with threads.
 
-| primitive | device | CPU 1T | CPU 16P | vs 16P | instruction | SIMD width | chain |
+| primitive | device | CPU 1T | CPU 16P (barrier) | vs 16P | instruction | SIMD width | chain |
 |---|---:|---:|---:|---:|---|---|---|
-| SHA3-256 | 31.6 GB/s | 0.72 GB/s | 7.64 GB/s | **4.11x** | none | 4 lanes | 24 rounds |
-| SHA-256 | 78.0 GB/s | 4.27 GB/s | 50.5 GB/s | 1.55x | **SHA-NI** | serial | 64 rounds |
-| SHA-512 | 47.6 GB/s | 1.12 GB/s | 13.2 GB/s | **3.52x** | none here | serial | 80 rounds |
-| ChaCha20 | 14.3 GB/s | 4.76 GB/s | 31.7 GB/s | 0.41x | none | 8-16 lanes | short |
-| Poly1305 | 11.7 GB/s | 7.55 GB/s | 87.2 GB/s | 0.12x | **PCLMUL** | 26-bit limbs | short |
-| AES-128-CTR | 10.7 GB/s | 14.1 GB/s | 165 GB/s | 0.06x | **AES-NI** | VAES 8-16 | short |
-| BLAKE3 | 10.0 GB/s | 2.91 GB/s | 56.0 GB/s | 0.18x | none | **16 lanes** | short |
-| Poseidon2 | 3.3 GB/s | 9.6M/s | 147M/s | 0.19x | none | Plonky3 asm | long |
-| 2^20 NTT | 0.85 ms (radix-4) | 21/s | 290/s | **5.92x** | none | memory-bound | n/a |
+| SHA3-256 | 31.4 GB/s | 0.61 GB/s | 6.09 GB/s | **5.15x** | none | 4 lanes | 24 rounds |
+| SHA-256 | 78.6 GB/s | 3.13 GB/s | 28.0 GB/s | **2.80x** | **SHA-NI** | serial | 64 rounds |
+| SHA-512 | 44.9 GB/s | 0.87 GB/s | 6.46 GB/s | **6.94x** | none here | serial | 80 rounds |
+| ChaCha20 | 14.2 GB/s | 4.23 GB/s | 21.8 GB/s | 0.65x | none | 8-16 lanes | short |
+| Poly1305 | 11.9 GB/s | 5.64 GB/s | 36.8 GB/s | 0.32x | **PCLMUL** | 26-bit limbs | short |
+| AES-128-CTR | 10.6 GB/s | 11.8 GB/s | 94.7 GB/s | 0.11x | **AES-NI** | VAES 8-16 | short |
+| BLAKE3 | 9.7 GB/s | 1.31 GB/s | 13.2 GB/s | 0.74x | none | **16 lanes** | short |
+| Poseidon2 | 3.2 GB/s | 9.08M/s | 43.8M/s | 0.58x | none | Plonky3 asm | long |
+| 2^20 NTT | 1.64 ms (0.85 ms fast, radix-4) | 19.2/s | 159/s | **3.83x** | none | memory-bound | n/a |
 
-(Device and CPU columns are from one window: `benchmarks/snapshot-20261126T171639Z.md` and the
-`cpu_baseline.json` written in the same run. Poseidon2 and the NTT are counted in permutations and
+(Device and CPU columns are from `benchmarks/snapshot-20261127T140302Z.md` and
+`benchmarks/cpu_baseline_barrier.json`; at top iGPU clock, the 2^20 NTT reaches 0.86 ms / **7.28x**
+in `benchmarks/table-16p-20261127.md`. Poseidon2 and the NTT are counted in permutations and
 transforms, not bytes.)
 
 **The device's ALU-bound throughput barely varies** (10-31 GB/s across every row). The 100x spread
@@ -67,13 +69,13 @@ Two corollaries that still hold:
 
 | # | pattern | representative | status | device | vs 1T | vs 16P | what it cost in Triton |
 |---|---|---|---|---|---|---|---|
-| 1 | ARX (add-rotate-xor) | ChaCha20 | ✅ | 14.1 GB/s | 2.99x | 0.49x | easy; the only trap is that `>>` on int32 is arithmetic, so rotate needs `.to(tl.uint32)` |
-| 2 | tree hash | BLAKE3 | ✅ | 10.1 GB/s | 3.45x | 0.19x | one launch per block index + one per level; the chaining value lives in a buffer because a runtime loop cannot carry a tuple. See §2 for the four sessions it took |
-| 3 | sponge | SHA3/SHAKE | ✅ | 31.5 GB/s | 43.9x | **4.00x** | easy and a winner: one lane holds 25 uint64 and the round loop must be *rolled*, not unrolled (unrolled: `spill_size=3584`, rolled: 0 and 30% faster) |
-| 4 | lookup vs bitslice | AES-CTR T-table | ✅ | 10.6 GB/s | 0.77x | 0.06x | 160 gathers/block into a 4.25 KiB hot table; bitslice (2-3 weeks) not attempted |
-| 5 | multi-limb big integer | Poly1305 | ✅ | 11.6 GB/s | 1.53x | 0.15x | 5x26-bit limbs fit int64 exactly; no `umulhi` pairs needed. X25519 not attempted |
-| 6 | small-prime NTT | ML-KEM/ML-DSA/BabyBear NTT | ✅ | 24.9 / 6.9 / 6.9 M poly/s (N<=1024); **2^20 in 1.0-1.8 ms**, product 9.3-11.9 ms | **70x** | **5.3x** | the `(q, N, ζ, layers)` parameterisation covered BabyBear and Falcon with no new kernel; 2^20 needed a multi-pass one (`ntt/large.py`) and is the only bandwidth-bound primitive here |
-| 7 | algebraic hash | Poseidon2-BabyBear/16 | ✅ | 38.7 ns/perm | 2.72x | 0.19x | 16 int64 state words per lane, one program per 128 permutations; state as int32 + widen per multiply is *slower* |
+| 1 | ARX (add-rotate-xor) | ChaCha20 | ✅ | 14.2 GB/s | 3.36x | 0.65x | easy; the only trap is that `>>` on int32 is arithmetic, so rotate needs `.to(tl.uint32)` |
+| 2 | tree hash | BLAKE3 | ✅ | 9.7 GB/s | 7.44x | 0.74x | one launch per block index + one per level; the chaining value lives in a buffer because a runtime loop cannot carry a tuple. See §2 for the four sessions it took |
+| 3 | sponge | SHA3/SHAKE | ✅ | 31.4 GB/s | 51.1x | **5.15x** | easy and a winner: one lane holds 25 uint64 and the round loop must be *rolled*, not unrolled (unrolled: `spill_size=3584`, rolled: 0 and 30% faster) |
+| 4 | lookup vs bitslice | AES-CTR T-table | ✅ | 10.6 GB/s | 0.90x | 0.11x | 160 gathers/block into a 4.25 KiB hot table; bitslice (2-3 weeks) not attempted |
+| 5 | multi-limb big integer | Poly1305 | ✅ | 11.9 GB/s | 2.11x | 0.32x | 5x26-bit limbs fit int64 exactly; no `umulhi` pairs needed. X25519 not attempted |
+| 6 | small-prime NTT | ML-KEM/ML-DSA/BabyBear NTT | ✅ | 23.8 / 7.2 / 7.2 M poly/s (N<=1024); **2^20 in 0.85-1.64 ms** | **32-57x** | **3.8-7.3x** | the `(q, N, ζ, layers)` parameterisation covered BabyBear and Falcon with no new kernel; 2^20 needed a multi-pass one (`ntt/large.py`) and is the only bandwidth-bound primitive here |
+| 7 | algebraic hash | Poseidon2-BabyBear/16 | ✅ | 38.7 ns/perm | 2.78x | 0.58x | 16 int64 state words per lane, one program per 128 permutations; state as int32 + widen per multiply is *slower* |
 | 8 | finite-field GEMM | exact int8 GEMM (UOV/RS substrate) | ✅ | 1.94 TMAC/s (n=1024), 3.96 (n=2048) | — | — | 16% of the int8 peak with an untuned tile table; the GF(2^8) product itself is verified via bit planes |
 | 9 | floating-point FFT | Falcon *signing* | ❌ | — | — | — | deliberately not attempted: Triton does not expose FMA fusion, so a cross-backend bit-exact signature is not claimable. fp64 itself works and is bit-exact elementwise |
 | 10 | scatter + atomics | MSM / Pippenger | ❌ | — | — | — | 32/64-bit atomics are correct; the gather penalty and the 381-bit arithmetic (900 ops per modular multiply) make it a 1-2 month item that ICICLE already owns |
@@ -83,10 +85,11 @@ Two corollaries that still hold:
 
 | result | number | why it wins |
 |---|---:|---|
-| SHA3-256 / SHAKE128 / SHAKE256 | **4.0x** | no Keccak instruction, 4 usable lanes, 24 dependent rounds |
-| SHA-256 | 1.58x | SHA-NI is real but slower than the device's rolled schedule |
-| Falcon-512 verification | **3.58x** | the CPU has no way to batch thousands of independent 512-point transforms |
-| SHA3-512 / SHA-512 | 4.07x / 3.57x | same as SHA3-256 (wide lanes) |
+| SHA3-256 / SHAKE128 / SHAKE256 | **5.15-8.10x** | no Keccak instruction, 4 usable lanes, 24 dependent rounds |
+| SHA-256 | **2.80x** | SHA-NI is real but slower than the device's rolled schedule |
+| Falcon-512 verification (core) | **5.76x** | the CPU has no way to batch thousands of independent 512-point transforms |
+| SHA3-512 / SHA-512 | **7.73x / 6.94x** | same as SHA3-256 (wide lanes) |
+| ML-DSA-44 verification | **1.6x** | batched NTT + sponge beats 16 barrier-measured liboqs processes |
 
 Everything else is parity at best. That is the honest summary of porting a primitive library to
 an integrated GPU with a 16-core hybrid CPU beside it.
@@ -120,12 +123,12 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   latency plus the modular multiplies.
 
   This is the answer to the question the project started with. Every ALU-bound primitive loses
-  to sixteen cores (0.06-0.5x); the sponge family wins by 1.6-4x because **Keccak is bad on all
-  three CPU-side factors** (no instruction, four usable lanes, 24 dependent rounds) -- not because
-  of the instruction alone (SHA-256 has SHA-NI and still wins 1.55x). The operator that wins by
-  more is the one whose **working set cannot fit in registers**: 84 MB of traffic per useful call
-  is something sixteen cores cannot match, because each of them has to move the same bytes through
-  the same memory system.
+  to sixteen cores (0.11-0.74x, with ChaCha20-Poly1305 near parity at 0.90-1.00x); the sponge/SHA-2
+  family wins by 2.8-8.1x because **Keccak is bad on all three CPU-side factors** (no instruction,
+  four usable lanes, 24 dependent rounds) -- not because of the instruction alone (SHA-256 has
+  SHA-NI and still wins 2.80x). The operator that wins for a memory reason is the one whose
+  **working set cannot fit in registers**: 84 MB of traffic per useful call is something sixteen
+  cores cannot match, because each of them has to move the same bytes through the same memory system.
 
 ## 3. Five Triton traps found the hard way
 
@@ -169,19 +172,19 @@ that is the only evidence for it is emitted at compile time and never again.)
 
 1. Find the fastest CPU implementation that exists (OpenSSL, liboqs, the reference crate) and
    measure **1 thread and 16 processes on this machine, in the same window** as the device
-   number. `benchmarks/bench_cpu.py` + `benchmark/snapshot.py` do exactly that.
+   number. `benchmarks/bench_16p_barrier.py` + `benchmarks/snapshot.py` do exactly that.
 2. **Score three things, not one.** The old checklist here said "if the CPU has a hardware
    instruction, do not port; if not, the work is worth it", and this project's own numbers refute
-   both halves -- SHA-256 *has* SHA-NI and wins 1.55x, BLAKE3 has *no* instruction and loses 0.18x.
+   both halves -- SHA-256 *has* SHA-NI and wins 2.80x, BLAKE3 has *no* instruction and loses 0.74x.
    Score instead:
-   - **dedicated instruction?** AES-NI / VAES / PCLMUL / SHA-NI -> the CPU side is at 14-165 GB/s
+   - **dedicated instruction?** AES-NI / VAES / PCLMUL / SHA-NI -> the CPU side is at 13-95 GB/s
      and you lose. Necessary to lose, not sufficient.
    - **how wide a SIMD does the shape admit?** 16 lanes (BLAKE3) or 8-16 (ChaCha20) and the CPU
-     wins by 2-6x; 4 lanes (Keccak) or a serial chain and it does not.
+     wins by 1.3-3x; 4 lanes (Keccak) or a serial chain and it does not.
    - **how long is the serial dependency chain?** 24-80 rounds of dependent work per block leaves a
      core latency-bound, which is where the GPU's parallelism actually pays.
-   All three favourable -> 0.06-0.2x. All three unfavourable -> 1.6-4x. Mixed -> measure, do not
-   guess: SHA-256 is the mixed case and it came out at 1.55x.
+   All three favourable -> 0.11-0.65x. All three unfavourable -> 5.1-8.1x. Mixed -> measure, do not
+   guess: SHA-256 is the mixed case and it came out at 2.80x.
 3. If it is a *shape* the CPU cannot batch (thousands of independent small transforms), the
    GPU wins by 3-60x regardless of instruction counts — that is what Falcon verification and
    the SLH-DSA suite demonstrate.

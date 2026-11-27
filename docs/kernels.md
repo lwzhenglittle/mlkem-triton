@@ -550,12 +550,19 @@ later call in that process dies with `UR_RESULT_ERROR_DEVICE_LOST`. Bisected 202
 | `num_stages=1` | clean | clean |
 
 So the mask alone was not enough: it fixes the M=1024 shapes and leaves M=1280 broken, which is
-why `_fused_cfg` now forces `num_stages=1` for both fused kernels. The mask is kept because it is
-free (always true when `B % BN == 0`) and it removes one of the two triggers. A bare pipelined
-matmul with no epilogue never faulted at the same shape, so this is the epilogue's interaction
-with the pipeliner, not `tl.dot`. **The cost of `num_stages=1` here has not been measured yet** --
-it has to be, before any ML-KEM number is quoted again. Regression:
-`tests/test_fused_gemm.py::test_the_epilogue_mask_keeps_the_pipelined_kernel_safe`.
+why `_fused_cfg` forces `num_stages=1` on `xpu` (leaving CUDA/ROCm at `_pick_cfg`'s stages) for
+`fused_enc_kernel`, `fused_dec_kernel`, and `encaps_kernel` (the latter hit the same
+`UR_RESULT_ERROR_DEVICE_LOST` at `M=1024, B=4096` with `MASK_N=False, num_stages=2` and now uses
+`_fused_cfg` + `MASK_N=True` as well). The mask is kept because it is free (always true when
+`B % BN == 0`) and removes one of the two triggers. A bare pipelined matmul with no epilogue never
+faulted at the same shape, so this is the epilogue's interaction with the pipeliner, not `tl.dot`.
+**Measured 2026-11-27 on Arc B390 (`B=4096`, ML-KEM-768)**: `bench_kernels.py` total GPU time is
+`0.916 ms` (`fused_enc_kernel` `0.309 ms`, `fused_dec_kernel` `0.084 ms`) vs `0.972 ms` (`0.290` /
+`0.093 ms`) previously, `bench_e2e.py` device-side `1.129 ms` (`0.276 µs/op`) vs `1.237 ms`
+previously, and `bench_encaps.py` device-side `0.191 µs/op` (B=4096) / `0.162 µs/op` (B=8192) — so
+`num_stages=1` adds no measurable penalty on Xe3. Regression:
+`tests/test_fused_gemm.py::test_the_epilogue_mask_keeps_the_pipelined_kernel_safe` and
+`tests/test_cpu_only.py::test_fused_cfg_disables_pipelining_only_on_xpu`.
 
 ### `fused_dec_kernel(W, U, V, MB, M, K, N, BM, BN, BK, GM, MASK_N)` — `mlkem/kernels/fused_gemm.py`
 

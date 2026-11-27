@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1213 passed + 1 skipped** of 1214 collected |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1214 passed + 1 skipped** of 1215 collected |
 | NVIDIA CUDA | ✅ **measured** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | ⚠️ **not run** | DGX Spark GB10 / sm_121 / torch 2.14 / triton 3.8, ML-KEM suite green (264 tests at the time) |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -38,12 +38,14 @@ tests green, without changing a single kernel. Only the tile configuration diffe
 CUDA cells are reasoning, not measurement, and are marked as such. ROCm remains an inference
 from the code and is not claimed as working.
 
-Every measurement in this project is paired with a CPU baseline taken **in the same window**
-(`benchmarks/bench_cpu.py`, `vs 1T` / `vs 16P` columns). On this machine the honest summary is:
-**seven rows beat sixteen x86 cores** -- the sponge/SHA-2 family at 1.55-4.11x and the 2^20 NTT at
-4.1x -- while the ALU-bound primitives lose at 0.06-0.5x and Falcon's *core* wins 3.7x (its
-end-to-end is 7.5x slower because 81% of it is host-side decode). `docs/benchmarks.md` §15.1 and §15-§19 have the
-tables.
+Every measurement in this project is paired with a CPU baseline taken **on the same machine**
+(`benchmarks/bench_16p_barrier.py`, `vs 1T` / `vs 16P` columns, barrier-measured at matched 1 KiB
+message sizes). On this machine the honest summary is:
+**seven primitive rows beat sixteen x86 cores** -- the sponge/SHA-2 family at 2.80-8.10x and the
+2^20 NTT at 3.83-7.28x (clock-dependent) -- while the ALU-bound primitives stay at 0.11-0.74x
+(ChaCha20-Poly1305 near parity at 0.90-1.00x). At the scheme level, ML-DSA-44 verify wins ~1.6x
+and Falcon's *core* wins 5.8x (its end-to-end is ~4.5x slower because 81% of it is host-side
+decode). `docs/benchmarks.md` §15.1 and `benchmarks/snapshot-20261127T140302Z.md` have the tables.
 
 With no GPU at all, `pytest tests` skips the device-dependent cases centrally, so a CPU-only
 machine can still smoke-test the maths and reference paths.
@@ -79,8 +81,11 @@ they are not exposed as free-form environment variables.
 **Only the `xpu` row was swept on real hardware.** The `cuda` and `hip` rows are conservative
 values from public experience: they run correctly and the test suite passes on CUDA, but their
 values were not tuned there. The Intel constraint is `BM*BN/(16*num_warps) <= 128` — beyond 128
-fp32 accumulators per thread the kernel spills heavily. `num_stages=2` is optimal on Intel
-because on-chip memory is small.
+fp32 accumulators per thread the kernel spills heavily. `num_stages=2` is optimal on Intel for
+generic GEMM because on-chip memory is small; for the three fused ML-KEM GEMM+epilogue kernels
+(`fused_enc_kernel`, `fused_dec_kernel`, `encaps_kernel`), `_fused_cfg` narrows `num_stages=1` on
+`xpu` only to work around the `triton-xpu` VA `0x0` pipeliner bug (`docs/kernels.md`), while
+`cuda` and `hip` keep their table values above.
 
 ### Small kernels — `devices.warps(name, default)`
 

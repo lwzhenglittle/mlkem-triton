@@ -19,7 +19,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 |---|---|
 | `primitives.sponge` | Keccak-f[1600] and the sponge: SHA3-224/256/384/512, SHAKE128/256, any rate, batched |
 | `primitives.sha2` | SHA-256 / SHA-512 compression |
-| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`; in-register to N = 1024, multi-pass to 2^20 (**2.2 ms**, 2.4x sixteen CPU processes) |
+| `primitives.ntt` | negacyclic NTT over `Z_q[X]/(X^N+1)`, parameterised by `(q, N, ζ, layers)`; in-register to N = 1024, multi-pass radix-4 to 2^20 (**0.85–1.6 ms**, 3.8–7.3× sixteen CPU processes) |
 | `primitives.fields` | prime-field arithmetic: the 32-bit Montgomery product, shared by every modular primitive |
 | `primitives.chacha20` | ChaCha20 (RFC 8439) — the first of the non-PQC primitives |
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds) |
@@ -28,10 +28,10 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.96 TMAC/s at n = 2048), the GF(2^k) GEMM substrate |
 
-**1214 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
+**1215 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
 NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
-`.lms`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
+`.lms`, `.falcon`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
 backwards compatibility.
 
 > **1.0 removed the pre-0.8 import paths.** `import mlkem_triton` and the old root modules
@@ -112,8 +112,9 @@ ok = v.verify(messages, signatures)  # any HSS depth up to 8
 
 Falcon verification is integer-only, so it is bit-exact by construction; signing needs the
 floating-point FFT and Gaussian sampler, which this code base deliberately does not port.
-`Verifier.verify` decodes signatures and hashes on the host today, so its end-to-end number is
-host-bound (31 µs/op); `verify_core_torch` is the device-only entry point (0.65 µs/op).
+`Verifier.verify` runs `comp_decode` on the host (35× faster than a device scan) and `HashToPoint`
+on the device for uniform-length batches, so end-to-end is decode-bound (16.5 µs/op);
+`verify_core_torch` is the device-only entry point (0.64 µs/op).
 
 SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is not implemented. LMS/HSS
 verification covers both approved SHA-256 families; the SP 800-208 SHAKE-256 sets are not
@@ -137,14 +138,14 @@ digests = hash_np_batch(messages, SHA3_256)  # [B, 32] uint8
 The same negacyclic NTT, parameterised by `(q, N, ζ, layers)`, serves both schemes — and a third
 domain (BabyBear, for ZK work) needs no new kernel; the sponge provides SHA3/SHAKE at any rate and
 output length, batched. **[docs/patterns.md](docs/patterns.md)** is the synthesis: the ten computational patterns the
-project set out to cover, what each cost in Triton, and the one rule that decides whether a port
-is worth doing (whether the CPU has a hardware instruction for it).
+project set out to cover, what each cost in Triton, and the three CPU-side factors that decide
+whether a port is worth doing (dedicated instruction, SIMD width, and serial dependency chain).
 
 `benchmarks/snapshot.py` runs everything — CPU rivals, the primitive table and the scheme
 benchmarks — in one window and writes one timestamped markdown file.
 `benchmarks/bench_primitive.py` prints one throughput table for this whole
-layer against a measured copy bandwidth, and joins in `benchmarks/cpu_baseline.json` (from
-`benchmarks/bench_cpu.py`) as `vs 1T` / `vs 16P` columns — the rival that decides whether a
+layer against a measured copy bandwidth, and joins in `benchmarks/cpu_baseline_barrier.json` (from
+`benchmarks/bench_16p_barrier.py`) as `vs 1T` / `vs 16P` columns — the rival that decides whether a
 port is worth doing. `benchmarks/poseidon2_ref/` is a small cargo project on Plonky3 that both
 emits the Poseidon2 known-answer vectors and supplies that CPU number.
 
@@ -157,34 +158,32 @@ Representative device-side numbers; the baseline is measured on the same machine
 | ML-KEM-768 decaps | 4096 | **125 ns/op** (GB10) | 6.8× vs liboqs 16T |
 | ML-KEM-768 encaps | 4096 | **88 ns/op** (GB10) | 2.3× faster than cuPQC |
 | ML-KEM-768 keygen | 4096 | 469 ns/op (GB10) | 2.7× slower than cuPQC |
-| ML-DSA-44 verify | 4096 | **1.8 µs/op** (B390) | 10.9× vs liboqs 1T |
+| ML-DSA-44 verify | 4096 | **1.9 µs/op** (B390) | 1.6× vs liboqs 16P (barrier), 8.5× vs 1T |
 | ML-DSA-44 sign | 1024 | **43 µs/sig** (B390) | 2.3× vs liboqs 1T |
-| SLH-DSA-SHAKE-128f verify | 4096 | **47.8 µs/op** (B390) | 27.9× vs liboqs 1T |
-| Falcon-512 verify | 4096 | **0.61 µs/op** (B390) dev core, 16.7 µs e2e | 3.7× vs liboqs 16P, 66.8× vs 1T |
-| BabyBear NTT, 2^20 points | 1 | **0.85–1.2 ms** (B390) | **2.9–4.1× faster** than 16 CPU processes, 40–57× vs 1T |
-| BLAKE3, 1 KiB messages | 65536 | **10.0 GB/s** (B390) | 3.5× vs 1T, 0.18× vs 16 processes |
+| SLH-DSA-SHAKE-128f verify | 4096 | **51.6 µs/op** (B390) | 27.9× vs liboqs 1T |
+| Falcon-512 verify | 4096 | **0.64 µs/op** (B390) dev core, 16.5 µs e2e | 5.8× vs liboqs 16P, 37.3× vs 1T |
+| BabyBear NTT, 2^20 points | 1 | **0.85–1.6 ms** (B390) | **3.8–7.3× faster** than 16 CPU processes, 32–57× vs 1T |
+| BLAKE3, 1 KiB messages | 65536 | **9.7 GB/s** (B390) | 7.4× vs 1T, 0.74× vs 16 processes |
 | LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.
-Every B390 row is from `benchmarks/snapshot-20261126T171639Z.md` (one window); the clock moves
-these by up to 2x between sessions, so treat the ratios as the durable part, not the absolutes.
-GPU clocks drift 2–3× between sessions, so only same-process A/B ratios are trusted; the
-`vs 1T` / `vs 16P` columns come from `benchmarks/bench_16p_barrier.py` measured in the same
-window, and `benchmarks/snapshot.py` runs the whole set at once.
+Every B390 row is from `benchmarks/snapshot-20261127T140302Z.md` (one window, barrier 16P
+baseline in `benchmarks/cpu_baseline_barrier.json`); the clock moves these by up to 2× between
+sessions, so treat the ratios as the durable part, not the absolutes.
 
-**The `vs 16P` cells above are the snapshot's, and the snapshot's column over-counts the CPU.**
-Measured on 2026-11-27 with a barrier and matched message sizes, the correction is 1.25–4.25×
-(median 1.94×), so the rows that beat sixteen processes read: SHAKE-128 **8.13×**, SHAKE-256
-**7.78×**, SHA3-512 **7.72×**, NTT 2^20 **7.28×**, SHA-512 **6.97×**, SHA3-256 **5.15×**, SHA-256
-**2.80×**, ML-DSA-44 verify **1.66×**, Falcon-512 core **5.9×** — eight rows, not seven, and the
-sponge/SHA-2 family is at 2.80–8.13× rather than 1.55–4.11×. Everything else stays below 1.0×
-(BLAKE3 0.18× → **0.72×**, ChaCha20-Poly1305 **0.90×**, Poseidon2 **0.59×**, Poly1305 **0.32×**,
-AES-128-CTR **0.11×**). The corrected table, and the three commands that reproduce it, are in
-[benchmarks/table-16p-20261127.md](benchmarks/table-16p-20261127.md). The sponge family wins because
-Keccak is bad on all three CPU-side factors (no instruction, four usable lanes, 24 dependent
-rounds), not because of the instruction alone; the NTT is the one row that wins for a memory
-reason (84 MB of traffic per transform, radix-4). The ALU-bound primitives are 0.06–0.5×. Full tables,
-per-kernel breakdowns and measurement conventions: [docs/benchmarks.md](docs/benchmarks.md).
+On the barrier 16P baseline (matched 1 KiB message sizes, one timed round per process behind a
+barrier), **seven primitive rows** beat sixteen CPU processes: SHAKE-128 **8.10×**, SHAKE-256
+**7.75×**, SHA3-512 **7.73×**, SHA-512 **6.94×**, SHA3-256 **5.15×**, NTT 2^20 **3.83–7.28×**
+(clock-dependent), and SHA-256 **2.80×**; at the scheme level, **Falcon-512 core (5.8×)** and
+**ML-DSA-44 verify (1.6×)** also beat sixteen processes. Everything else stays at or below 1.0×
+(ChaCha20-Poly1305 **1.00×**, BLAKE3 **0.74×**, ChaCha20 **0.65×**, Poseidon2 **0.58×**,
+Poly1305 **0.32×**, AES-128-CTR **0.11×**). The before/after comparison against the superseded
+sum-of-minima baseline (1.25–4.25× CPU over-count, median 1.94×) is in
+[benchmarks/table-16p-20261127.md](benchmarks/table-16p-20261127.md). The sponge family wins
+because Keccak is bad on all three CPU-side factors (no instruction, four usable lanes, 24
+dependent rounds), not because of the instruction alone; the NTT wins for a memory reason (84 MB
+of traffic per transform, radix-4). Full tables, per-kernel breakdowns and measurement conventions:
+[docs/benchmarks.md](docs/benchmarks.md).
 
 ### Why ML-KEM is fast
 
@@ -196,7 +195,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**1214 tests**, six layers:
+**1215 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;
@@ -215,7 +214,7 @@ ruff check . && ruff format --check .
 
 | backend | status |
 |---|---|
-| Intel XPU (`triton-xpu`) | all four schemes measured — Arc B390 |
+| Intel XPU (`triton-xpu`) | all five schemes measured — Arc B390 |
 | NVIDIA CUDA | ML-KEM measured (DGX Spark GB10); other schemes not run |
 | AMD ROCm | untested, code-level reasoning only |
 | Apple MPS / CPU | unsupported (no usable Triton backend) |

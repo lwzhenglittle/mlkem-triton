@@ -94,6 +94,12 @@ Batch sweep, device-side µs/op, to find the asymptote:
   degrades beyond it.
 - GB10 is flat from B=8192 through 65536.
 - **Asymptotic throughput: Intel 3.2 Mops/s, GB10 8.0 Mops/s.**
+- **Re-measured 2026-11-27 with `num_stages=1` on Intel XPU** (`_fused_cfg`, VA `0x0` guard):
+  ML-KEM-768 decaps device-side `0.585 / 0.680 / 1.129 / 2.006 ms` at B=1024/2048/4096/8192
+  (`0.276 µs/op` at B=4096, `bench_kernels.py` total `0.916 ms` with `fused_enc_kernel` `0.309 ms`
+  and `fused_dec_kernel` `0.084 ms`), ML-KEM-1024 `1.467 ms` (`0.358 µs/op`), ML-KEM-512
+  `3.206 ms` (`0.783 µs/op`), and ML-KEM-768 encaps `0.191 µs/op` (B=4096) / `0.162 µs/op`
+  (B=8192) — within normal session clock noise of the pre-guard numbers. CUDA keeps `num_stages=3`.
 
 ### The three parameter sets (B=4096, device-side µs/op)
 
@@ -648,13 +654,15 @@ concurrent **processes** (threads do not scale on this hybrid part), min-of-5.
 Read the two orders of magnitude: **what decides whether a port can win is how fast the CPU's best
 implementation is per core, and that is set by three things together, not by instruction support
 alone.** This section used to claim only the latter; the rows above refute it in both directions --
-**SHA-256 has SHA-NI and the device still wins 1.55x**, while **BLAKE3 has no x86 instruction and
-loses 0.18x** because its AVX-512 path does sixteen blocks at once. The dedicated instruction, the
+**SHA-256 has SHA-NI and the device still wins (1.55x on the old upper bound, 2.80x on the barrier
+baseline below)**, while **BLAKE3 has no x86 instruction and still loses (0.18x old, 0.74x
+barrier)** because its AVX-512 path does sixteen blocks at once. The dedicated instruction, the
 width of SIMD the shape admits, and the length of the serial dependency chain decide it together.
 `docs/patterns.md` §0 carries the corrected form with all nine rows. AES-NI
-makes AES a 166 GB/s wall (a bitsliced GPU AES at a predicted 20–40 GB/s is 0.12–0.23x);
-Keccak has no x86 instruction, so SHA3-256 is 0.72 GB/s per core and the device's 31.6 GB/s is
-**4.0x the whole 16-process CPU**.
+makes AES a 95 GB/s wall (166 GB/s on the old upper bound; a bitsliced GPU AES at a predicted
+20–40 GB/s is still well below 1×); Keccak has no x86 instruction, so SHA3-256 is 0.61–0.72 GB/s
+per core and the device's 31.4 GB/s is **5.15x the whole 16-process CPU** (4.0x on the old upper
+bound).
 
 Caveats, both visible in the table: the two Falcon rows disagree by 1.7x on one thread for
 identical verification work (clock state, min-of-3), so quote the 16P number or the ratio,
@@ -981,8 +989,10 @@ traffic, **45%** of copy bandwidth, against a 0.39 ms pure-traffic floor) and **
 low end. Both are measured in one process, min of alternating runs. (The older 0.98 / 1.8 ms pair
 in this paragraph was the radix-2 shape at its own two clock states.)
 
-**Seven rows have `vs 16P` above 1** -- SHA-2 and SHA-3/SHAKE (1.55-4.11x) and this one (5.9x, or
-4.1x after the CPU rival was measured as 1.5x too slow). What is unique here is the *reason*:
+**Seven primitive rows have `vs 16P` above 1** -- SHA-2 and SHA-3/SHAKE (2.80-8.10x on the barrier
+baseline; 1.55-4.11x on the old sum-of-minima upper bound) and this one (3.83-7.28x on the barrier
+baseline depending on clock state; 4.1x on the old upper bound after the CPU rival was fixed to
+radix-4). What is unique here is the *reason*:
 every other winner is ALU-limited and wins because the CPU cannot execute its shape, while this
 one is limited by moving bytes -- 84 MB per transform at radix-4 (160 MB at radix-2), i.e. one
 transform costs about as long as copying 190 MB -- which sixteen cores cannot beat by computing

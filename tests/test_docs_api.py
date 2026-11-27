@@ -129,10 +129,12 @@ def test_the_documented_test_count_is_the_real_one():
 def test_the_porting_rule_is_not_the_refuted_one():
     """`docs/patterns.md` §0 used to claim one factor decides everything; the CPU table refutes it.
 
-    SHA-256 has SHA-NI and still wins 1.55x; BLAKE3 has no instruction and loses 0.18x. If either
-    half of the old binary rule comes back into the guidance, this fails -- it is the sentence a
-    reader will act on.
+    SHA-256 has SHA-NI and still beats 16 CPU processes; BLAKE3 has no instruction and still loses
+    to 16 CPU processes. Assert the logical invariant from the §0 table rather than pinning a
+    single session's decimal.
     """
+    import re
+
     text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "patterns.md").read_text()
     assert "three factors" in text.lower() or "three things" in text.lower(), (
         "the corrected rule should still be there"
@@ -142,9 +144,14 @@ def test_the_porting_rule_is_not_the_refuted_one():
         "   do not port it for throughput",
     ):
         assert refuted not in text, "the refuted binary rule is back"
-    # the two counterexamples must stay named, because they are what makes the rule wrong
-    assert "SHA-NI" in text and "1.55" in text
-    assert "BLAKE3" in text and "0.18" in text
+    # the two counterexamples must stay named and hold in the right direction (>1x vs <1x)
+    assert "SHA-NI" in text and "BLAKE3" in text
+    sha256_row = next(ln for ln in text.splitlines() if ln.startswith("| SHA-256 |"))
+    blake3_row = next(ln for ln in text.splitlines() if ln.startswith("| BLAKE3 |"))
+    sha256_ratio = float(re.search(r"([\d.]+)x", sha256_row.split("|")[5]).group(1))
+    blake3_ratio = float(re.search(r"([\d.]+)x", blake3_row.split("|")[5]).group(1))
+    assert sha256_ratio > 1.0, f"expected SHA-256 vs 16P > 1.0, got {sha256_ratio}"
+    assert blake3_ratio < 1.0, f"expected BLAKE3 vs 16P < 1.0, got {blake3_ratio}"
 
 
 def test_the_readme_performance_table_matches_the_snapshot_it_names():
