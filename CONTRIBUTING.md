@@ -25,6 +25,12 @@ ninja -C build-mldsa             # -> lib/liboqs.so
 That library is also the CPU baseline in `benchmarks/bench_mldsa_verify.py`, and it is what makes
 the ML-DSA numbers in `docs/benchmarks.md` §11 cross-implementation rather than self-referential.
 
+SLH-DSA has the same arrangement under a different variable: `SLHDSA_LIBOQS_SO` points at a
+liboqs build compiled with SLH-DSA, and both `tests/_liboqs_slh.py` and
+`benchmarks/bench_slhdsa_verify.py --cpu` read it. With nothing set, the benchmark falls back to
+whichever `third_party/liboqs/build*/lib/liboqs.so` exports the symbol it needs (a build without
+SLH-DSA is skipped rather than used), and it says so on stderr when no candidate qualifies.
+
 Hardware:
 
 - **To run the whole suite**: a GPU with a Triton backend (NVIDIA / AMD / Intel). Without a GPU
