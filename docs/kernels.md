@@ -518,7 +518,9 @@ per step over `I(16) ‖ u32(q) ‖ u16(i) ‖ u8(j) ‖ value(32)` (55 bytes, f
 
 Rows are sorted by `START` on the host so blocks exit early once their chains finish (~2× less
 work for `w = 8`), and the 3-byte-unaligned value words are assembled with word shifts
-`(v[k] << 8) | (v[k+1] >> 24)`.
+`(v[k] << 8) | (v[k+1] >> 24)`. `chains()` byte-swaps `VALUE` and `IW` to native-endian SHA-256
+words on the device before launching `lms_chain_kernel` (and back afterwards), avoiding an LLVM /
+NVPTX instruction-selection crash (`Cannot select: v2i32 = bswap`) on Triton 3.8.
 
 ---
 

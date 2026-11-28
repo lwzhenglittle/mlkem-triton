@@ -166,23 +166,24 @@ Representative device-side numbers; the baseline is measured on the same machine
 
 | workload | batch | this library | baseline |
 |---|---:|---:|---|
-| ML-KEM-768 decaps | 4096 | **125 ns/op** (GB10), **273 ns/op** (B390) | 6.8× vs liboqs 16T (GB10); **6.7× dev / 3.3× e2e** vs 16P (B390) |
-| ML-KEM-768 encaps | 4096 | **88 ns/op** (GB10), **189–194 ns/op** (B390) | 2.3× faster than cuPQC (GB10); **7.8× dev / 3.2× e2e** vs 16P (B390) |
-| ML-KEM-768 keygen | 4096 | 469 ns/op (GB10), 1.46 µs/op (B390) | 2.7× slower than cuPQC (GB10); 0.95× dev / 0.77× e2e vs 16P (B390) |
-| ML-DSA-44 verify | 4096 | **2.0 µs/op** (B390) | **1.5× dev / 1.03× e2e** vs liboqs 16P (barrier), 8.0× vs 1T |
-| ML-DSA-44 sign | 1024 | **37.6 µs/sig** (B390) | 1.2× vs liboqs 1T, 0.22× vs 16P |
-| SLH-DSA-SHAKE-128f verify | 4096 | **51.7 µs/op** (B390) | **3.3×** vs liboqs SHAKE-128f 16P, 23.5× vs 1T (SHA2-128f: **3.9×** 16P) |
-| Falcon-512 verify | 4096 | **0.32 µs/op** (B390) dev core, **0.90 µs** e2e | **8.3×** dev / **2.9×** e2e vs liboqs 16P, 71.7× dev vs 1T |
-| Falcon-1024 verify | 4096 | **1.19 µs/op** (B390) dev core, **2.22 µs** e2e | **4.4×** dev / **2.3×** e2e vs liboqs 16P, 36.7× dev vs 1T |
-| BabyBear NTT, 2^20 points | 1 | **1.58–1.61 ms** (B390; 0.85–1.6 ms range) | **3.3–3.4× dev / 0.94× e2e** (up to 6.1× dev / 1.2× e2e) vs 16P |
-| BLAKE3, 1 KiB messages | 65536 | **9.9 GB/s** (B390) | 7.4× vs 1T, 0.62× vs 16 processes |
-| LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
+| ML-KEM-768 decaps | 4096 | **132 ns/op** (GB10), **273 ns/op** (B390) | **13.8× dev / 4.5× e2e** (GB10); **6.7× dev / 3.3× e2e** (B390) vs 16P |
+| ML-KEM-768 encaps | 4096 | **93 ns/op** (GB10), **189–194 ns/op** (B390) | 2.3× faster than cuPQC, **16.3× dev / 4.4× e2e** (GB10); **7.8× dev / 3.2× e2e** (B390) |
+| ML-KEM-768 keygen | 4096 | **480 ns/op** (GB10), 1.46 µs/op (B390) | **2.9× dev / 2.2× e2e** (GB10); 0.95× dev / 0.77× e2e (B390) vs 16P |
+| ML-DSA-44 verify | 4096 | **0.31 µs/op** (GB10), **2.0 µs/op** (B390) | **9.3× dev / 3.4× e2e** (GB10); **1.5× dev / 1.03× e2e** (B390) vs 16P |
+| ML-DSA-44 sign | 1024 | **15.0 µs/sig** (GB10), **37.6 µs/sig** (B390) | 3.0× 1T / 0.56× 16P (GB10); 1.2× 1T / 0.22× 16P (B390) |
+| SLH-DSA-SHAKE-128f verify | 4096 | **35.8 µs/op** (GB10), **51.7 µs/op** (B390) | **4.7×** (GB10), **3.3×** (B390) vs liboqs SHAKE-128f 16P (SHA2-128f: **4.0× / 3.9×**) |
+| Falcon-512 verify | 4096 | **0.07 µs** dev / **0.42–0.44 µs** e2e (GB10); **0.32 µs/op** (B390) dev core, **0.90 µs** e2e | **38.4× dev / 6.1× e2e** (GB10); **8.3×** dev / **2.9×** e2e vs liboqs 16P, 71.7× dev vs 1T (B390) |
+| Falcon-1024 verify | 4096 | **0.17 µs** dev / **0.74–0.79 µs** e2e (GB10); **1.19 µs/op** (B390) dev core, **2.22 µs** e2e | **30.6× dev / 6.6× e2e** (GB10); **4.4×** dev / **2.3×** e2e vs liboqs 16P, 36.7× dev vs 1T (B390) |
+| BabyBear NTT, 2^20 points | 1 | **0.20 ms** (GB10), **1.58–1.61 ms** (B390; 0.85–1.6 ms range) | **26.6× dev / 1.6× e2e** (GB10); **3.3–3.4× dev** (up to 6.1×) vs 16P (B390) |
+| BLAKE3, 1 KiB messages | 65536 | **25.7 GB/s** (GB10), **9.9 GB/s** (B390) | **1.6×** 16P (GB10); 7.4× vs 1T, 0.62× vs 16 processes (B390) |
+| LMS/HSS (RFC 8554 case 0) | 4096 | **5.8 µs/op** (GB10), **10.6 µs/op** (B390; case 2: 7.1 µs) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.
 Every B390 row is from `benchmarks/snapshot-20261128T063642Z.md` and the full same-window
-local GPU vs CPU matrix [benchmarks/local-gpu-vs-cpu-20261128.md](benchmarks/local-gpu-vs-cpu-20261128.md)
-(36-rival barrier 16P baseline in `benchmarks/cpu_baseline_barrier.json`); the clock moves these
-by up to 2× between sessions, so treat the ratios as the durable part, not the absolutes.
+local GPU vs CPU matrix [benchmarks/local-gpu-vs-cpu-20261128.md](benchmarks/local-gpu-vs-cpu-20261128.md);
+every GB10 CUDA row is from [benchmarks/cuda-gb10-vs-local-cpu-20261128.md](benchmarks/cuda-gb10-vs-local-cpu-20261128.md)
+compared against the same 36-rival local 16P barrier x86 CPU baseline in `benchmarks/cpu_baseline_barrier.json`.
+The B390 iGPU clock moves by up to 2× between sessions, so treat the ratios as the durable part, not the absolutes.
 
 On the barrier 16P baseline (matched 1 KiB message sizes, one timed round per process behind a
 barrier), **eight primitive rows** beat sixteen CPU processes device-side: exact int8 GEMM
@@ -230,8 +231,8 @@ ruff check . && ruff format --check .
 
 | backend | status |
 |---|---|
-| Intel XPU (`triton-xpu`) | all five schemes measured — Arc B390 |
-| NVIDIA CUDA | ML-KEM measured (DGX Spark GB10); other schemes not run |
+| Intel XPU (`triton-xpu`) | all five schemes and all 11 primitive families measured — Arc B390 |
+| NVIDIA CUDA | all five schemes and all 11 primitive families measured — DGX Spark GB10 (`sm_121`) |
 | AMD ROCm | untested, code-level reasoning only |
 | Apple MPS / CPU | unsupported (no usable Triton backend) |
 

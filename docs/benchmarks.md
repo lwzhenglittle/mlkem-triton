@@ -13,6 +13,7 @@ lives in [docs/patterns.md](patterns.md).
   - [1.1 All five schemes × operations (Dev + E2E vs 1T / 16P)](#11-all-five-schemes--operations-dev--e2e-vs-1t--16p)
   - [1.2 All 11 scheme-agnostic primitives (Dev + E2E vs 1T / 16P)](#12-all-11-scheme-agnostic-primitives-dev--e2e-vs-1t--16p)
   - [1.3 Batch-size breakeven curves (when GPU beats CPU)](#13-batch-size-breakeven-curves-when-gpu-beats-cpu)
+  - [1.4 NVIDIA GB10 (CUDA sm_121) vs Intel Arc B390 side-by-side](#14-nvidia-gb10-cuda-sm_121-vs-intel-arc-b390-side-by-side)
 - [2. Machines, methodology and reproducing](#2-machines-methodology-and-reproducing)
 - [3. Post-quantum schemes](#3-post-quantum-schemes)
   - [3.1 ML-KEM (FIPS 203): decaps, encaps, keygen, fusion A/B and GB10 CUDA](#31-ml-kem-fips-203-decaps-encaps-keygen-fusion-ab-and-gb10-cuda)
@@ -128,6 +129,63 @@ Detailed ML-KEM-768 decaps, Falcon-512 verify, and SHA3-256 sweep points (full 5
 | 256 | 2.001 / 2.956 | 0.62× | 0.742 / 3.375 | 0.78× | 0.685 / 1.000 | 0.18× |
 | 1024 | 0.598 / 0.957 | **1.91×** | 0.449 / 1.284 | **2.05×** | 0.174 / 0.321 | 0.55× |
 | 4096 | 0.273 / 0.563 | **3.25×** | 0.319 / 0.898 | **2.93×** | 0.054 / 0.168 | **1.05×** |
+
+### 1.4 NVIDIA GB10 (CUDA sm_121) vs Intel Arc B390 side-by-side
+
+The exact same pure-Triton kernels were verified (`1222 passed, 0 failed`) and benchmarked on
+`spark-ceb3` (`NVIDIA GB10`, `sm_121`, `torch 2.14.0+cu130`, `triton 3.8.0`, measured copy
+bandwidth **232.4 GB/s**), compared against the same 36-rival local x86 CPU baseline
+(`Intel Core Ultra X7 358H`, 16P barrier in `benchmarks/cpu_baseline_barrier.json`):
+
+- Full GB10 CUDA matrix (Dev + E2E + 5 breakeven curves): [benchmarks/cuda-gb10-vs-local-cpu-20261128.md](../benchmarks/cuda-gb10-vs-local-cpu-20261128.md) (`.json` sibling)
+- GB10 CUDA standard snapshot: [benchmarks/cuda-gb10-snapshot-20261128.md](../benchmarks/cuda-gb10-snapshot-20261128.md)
+
+**Schemes on NVIDIA GB10 vs Intel Arc B390 (B = 4096; ML-DSA sign B = 1024; ratios vs local 16P x86 CPU):**
+
+| Scheme | Op | Arc B390 dev / e2e (µs) | GB10 CUDA dev / e2e (µs) | GB10 dev vs 16P | GB10 e2e vs 16P | GB10 vs B390 (dev) |
+|---|---|---:|---:|---:|---:|---:|
+| ML-KEM-512 | keygen / encaps / decaps | 1.95 / 0.67 / 0.78 (dev) | 1.52 / 0.68 / 0.76 (dev) | 0.59× / 1.48× / 1.57× | 0.54× / 1.09× / 1.17× | ~1.0–1.3× |
+| ML-KEM-768 | keygen | 1.458 / 1.805 | **0.480 / 0.640** | **2.88×** | **2.16×** | **3.0×** |
+| ML-KEM-768 | encaps | 0.194 / 0.471 | **0.093 / 0.343** | **16.3×** | **4.43×** | **2.1×** |
+| ML-KEM-768 | decaps | 0.273 / 0.563 | **0.132 / 0.404** | **13.8×** | **4.52×** | **2.1×** |
+| ML-KEM-1024 | keygen | 2.218 / 2.654 | **0.737 / 0.916** | **2.52×** | **2.02×** | **3.0×** |
+| ML-KEM-1024 | encaps | 0.246 / 0.551 | **0.121 / 0.382** | **17.1×** | **5.41×** | **2.0×** |
+| ML-KEM-1024 | decaps | 0.363 / 0.694 | **0.175 / 0.486** | **14.2×** | **5.12×** | **2.1×** |
+| ML-DSA-44 | verify | 1.966 / 2.827 | **0.314 / 0.856** | **9.25×** | **3.39×** | **6.3×** |
+| ML-DSA-65 | verify | 2.614 / 3.692 | **0.459 / 1.209** | **10.6×** | **4.01×** | **5.7×** |
+| ML-DSA-87 | verify | 3.756 / 5.118 | **0.721 / 1.806** | **10.2×** | **4.08×** | **5.2×** |
+| ML-DSA-44/65/87 | sign (B=1024) | 37.6 / 51.2 / 51.4 (dev) | **15.0 / 20.0 / 21.5** (dev) | 0.56× / 0.66× / 0.75× | 0.52× / 0.62× / 0.71× | **2.4–2.6×** |
+| SLH-DSA-SHAKE-128f | verify | 51.67 | **35.76** | **4.71×** | **4.71×** | **1.4×** |
+| SLH-DSA-SHA2-128f | verify | 29.41 | **28.34** | **4.00×** | **4.00×** | 1.04× |
+| Falcon-512 | verify | 0.318 / 0.915 | **0.069 / 0.435** | **38.4×** | **6.05×** | **4.6×** |
+| Falcon-padded-512 | verify | 0.321 / 0.913 | **0.069 / 0.442** | **38.5×** | **6.01×** | **4.7×** |
+| Falcon-1024 | verify | 1.194 / 2.215 | **0.169 / 0.786** | **30.6×** | **6.60×** | **7.1×** |
+| Falcon-padded-1024 | verify | 1.135 / 2.183 | **0.170 / 0.776** | **30.5×** | **6.70×** | **6.7×** |
+| LMS/HSS (case 0) | verify | 10.57 | **5.785** | n/a | n/a | **1.8×** |
+
+**Primitives on NVIDIA GB10 vs Intel Arc B390 (`B = 65536, 1024 B`; ratios vs local 16P x86 CPU):**
+
+| Primitive | Arc B390 dev ms (%copy) | GB10 CUDA dev ms (%copy) | GB10 dev vs 16P | GB10 e2e vs 16P | GB10 vs B390 (dev) |
+|---|---:|---:|---:|---:|---:|
+| `copy` (256 MiB) | 2.452 (219.0 GB/s) | **2.310 (232.4 GB/s)** | n/a | n/a | 1.06× |
+| `keccak` | 1.250 (38%) | **0.474 (95%)** | n/a | n/a | **2.6×** |
+| `sha3-256` / `sha3-512` | 2.328 / 4.319 | **0.642 / 0.793** | **18.1× / 27.5×** | **3.89× / 6.97×** | **3.6–5.4×** |
+| `shake128` / `shake256` | 2.103 / 2.320 | **0.720 / 0.647** | **22.7× / 26.5×** | **5.25× / 5.78×** | **2.9–3.6×** |
+| `sha256` / `sha512` | 0.830 / 1.460 | **0.537 / 0.542** | **3.87× / 17.8×** | **1.21× / 5.37×** | **1.5–2.7×** |
+| `ntt-mlkem` / `mldsa` / `babybear` | 2.75 / 9.51 / 9.67 | **0.584 / 0.578 / 0.582** (**99–100%**) | n/a | n/a | **4.7–16.6×** |
+| `chacha20` | 5.243 (6%) | **0.635 (45%)** | **4.53×** | **1.63×** | **8.3×** |
+| `poseidon2` | 2.619 (1%) | **0.272 (13%)** | **5.24×** | **3.25×** | **9.6×** |
+| `poly1305` | 5.643 (5%) | **2.417 (12%)** | 0.70× | 0.70× | **2.3×** |
+| `chacha20-poly1305` | 15.081 (4%) | **4.322 (13%)** | **3.22×** | **2.53×** | **3.5×** |
+| `aes128-ctr` | 7.678 (4%) | **4.054 (7%)** | 0.16× | 0.13× | **1.9×** |
+| `gemm-int8` (`1024³`) | 0.283 | **0.053** (**20.4 TMAC/s**) | **50.0×** | **13.1×** | **5.3×** |
+| `blake3` | 6.726 (5%) | **2.609 (11%)** | **1.62×** | **1.59×** | **2.6×** |
+| `ntt-2^20` (radix-4) | 1.575 (24%) | **0.199 (181%, L2-resident)** | **26.6×** | **1.64×** | **7.9×** |
+
+**Key cross-backend insights (GB10 CUDA vs Arc B390 XPU):**
+- **17 of 21 rival-paired scheme operations and 13 of 15 rival-paired primitives beat 16P x86 CPU end-to-end on GB10** (including ML-KEM-768/1024 keygen, SHA-256, ChaCha20, Poseidon2, ChaCha20-Poly1305, and BLAKE3, which lost on Arc B390's iGPU ALUs).
+- **Int64 / Montgomery NTT saturates DRAM on GB10**: all three in-register NTT domains (`ntt-mlkem`, `ntt-mldsa`, `ntt-babybear`) run at **230–232 GB/s (99–100% of copy BW)** — a **16.6×** speedup over Arc B390 on 64-bit Montgomery NTTs (`ntt-mldsa` / `ntt-babybear`), driving ML-DSA verify (**5.2–6.3×** faster) and Falcon-512/1024 verify (**4.6–7.1×** faster, `14.3 Mops/s` Falcon-512 core).
+- **Breakeven shifts 4× lower on GB10**: ML-KEM-768 decaps, ML-DSA-44 verify, and Falcon-512 verify all beat 16P x86 CPU **end-to-end by `B = 256`** (`1.19×`, `1.61×`, `1.60×`; Falcon-512 dev core already beats 16P at `B = 64`). Only `poly1305` (`0.70×` vs PCLMUL) and `aes128-ctr` (`0.16×` vs AES-NI/VAES) remain behind 16P x86 CPU.
 
 ---
 

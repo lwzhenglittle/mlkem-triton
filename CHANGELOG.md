@@ -15,7 +15,8 @@
 - **Offline deterministic Falcon KAT corpus**: `data/vectors/falcon/kat.json` (72 liboqs-generated vectors across Falcon-512, Falcon-padded-512, Falcon-1024, and Falcon-padded-1024) exercised on both CPU and GPU without requiring a local `liboqs` build.
 - **Unified barrier benchmarking & local GPU vs CPU matrix**:
   - `benchmarks/bench_16p_barrier.py`: barrier-synchronized 1T / 16P CPU baselines (36 rivals covering ML-KEM 512/768/1024, ML-DSA 44/65/87 verify+sign, SLH-DSA SHAKE & SHA2, Falcon 512/1024 unpadded+padded, all symmetric/hash/ZK primitives, and exact `gemm-int8`), with power/clock-state refusal guards.
-  - `benchmarks/bench_local_full.py` & `benchmarks/local-gpu-vs-cpu-20261128.{md,json}`: single-window Arc B390 vs Core Ultra X7 358H matrix reporting **Device-only + End-to-End** ratios and 5-workload batch-size breakeven curves (including Falcon-512).
+  - `benchmarks/bench_local_full.py`, `benchmarks/local-gpu-vs-cpu-20261128.{md,json}`, and `benchmarks/cuda-gb10-vs-local-cpu-20261128.{md,json}`: single-window Intel Arc B390 and NVIDIA DGX Spark GB10 (`sm_121`) matrices reporting **Device-only + End-to-End** ratios and 5-workload batch-size breakeven curves against the same 36-rival 16P barrier x86 CPU baseline.
+- **Full NVIDIA CUDA (`sm_121`) verification & benchmarking**: all 5 schemes and all 11 primitive families verified on DGX Spark GB10 (`1222 passed, 0 failed`), with 17/21 scheme operations and 13/15 primitives beating 16P x86 CPU end-to-end (Falcon-512 `0.069 µs` dev / `0.42–0.44 µs` e2e; Falcon-1024 `0.169 µs` dev / `0.74–0.79 µs` e2e; ML-DSA-65 verify `0.46 µs` dev; `gemm-int8` `20.4 TMAC/s`; `ntt-2^20` `0.20 ms`).
   - `benchmarks/snapshot.py`: single-window snapshot runner with JSON metadata; legacy 2026-11-26 snapshots archived under `benchmarks/archive/`.
 - **Executable contracts & packaging**:
   - `tests/test_primitives_contract.py`, `tests/test_docs_api.py`, `tests/test_triton_behaviour.py`, `tests/test_cpu_only.py`, and `tests/test_bench_harness.py`.
@@ -33,6 +34,7 @@
 ### Fixed
 
 - **Intel XPU VA `0x0` GPU hang (`UR_RESULT_ERROR_DEVICE_LOST`)**: `_fused_cfg` disables software pipelining (`num_stages=1`) on `xpu` only (preserving `num_stages=3` on CUDA) and enforces `MASK_N=True` across `fused_enc_kernel`, `fused_dec_kernel`, and `encaps_kernel`, with no measurable penalty on Xe3 (`0.274 µs/op` ML-KEM-768 decaps, `0.191 µs/op` encaps at B=4096).
+- **NVIDIA NVPTX `v2i32 = bswap` compiler crash in LMS**: moved 32-bit endian byte-swapping out of `lms_chain_kernel` into its PyTorch wrapper (`lms/kernels.py`), preventing an LLVM instruction-selection abort on Triton 3.8 / `sm_121` while keeping the `chains()` contract unchanged; replaced remaining hardcoded `device="xpu"` calls in 7 test files with `resolve_device()`.
 - **BLAKE3 multi-chunk UB**: replaced `uint32 >> 32` (which silently folded kernel outputs to zero on `triton-xpu`) with explicit `(low, high)` counter words.
 - **Benchmarking correctness**:
   - Replaced sum-of-minima 16P aggregation (1.25–4.25× CPU over-count) and mismatched 16 KiB / 1 MiB message sizes with barrier-synchronized 1 KiB measurements (`benchmarks/table-16p-20261127.md`).

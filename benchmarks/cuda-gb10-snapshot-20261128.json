@@ -1,0 +1,47 @@
+{
+  "timestamp_utc": "2026-11-28T07:45:04+00:00",
+  "host": "spark-ceb3",
+  "python": "3.12.3",
+  "git_head": "29d085c",
+  "git_dirty": true,
+  "cpu_baseline": "reused",
+  "sections": [
+    {
+      "section": "primitive",
+      "command": "bench_primitive.py --batch 65536 --md",
+      "rc": 0,
+      "seconds": 8.2,
+      "stderr": ""
+    },
+    {
+      "section": "falcon",
+      "command": "bench_falcon_verify.py --ps falcon-512 --batch 512,4096",
+      "rc": 0,
+      "seconds": 2.2,
+      "stderr": ""
+    },
+    {
+      "section": "mldsa",
+      "command": "bench_mldsa_verify.py --ps ML-DSA-44 --batch 4096",
+      "rc": 0,
+      "seconds": 2.7,
+      "stderr": ""
+    },
+    {
+      "section": "mlkem",
+      "command": "bench_encaps.py --ps ML-KEM-768 --batch 4096",
+      "rc": 0,
+      "seconds": 2.4,
+      "stderr": ""
+    },
+    {
+      "section": "slhdsa",
+      "command": "bench_slhdsa_verify.py --ps SLH-DSA-SHAKE-128f --batch 4096",
+      "rc": 0,
+      "seconds": 2.2,
+      "stderr": ""
+    }
+  ],
+  "cpu_baseline_file": "benchmarks/cpu_baseline_barrier.json",
+  "cpu_baseline_method": "barrier (one timed round per process, sum of units over the union window)"
+}
