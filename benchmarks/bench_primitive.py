@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from triton_crypto import devices
 from triton_crypto.primitives import (
     aes,
+    ascon,
     blake3,
     chacha20,
     gemm,
@@ -48,6 +49,7 @@ from triton_crypto.primitives import (
     poly1305,
     poseidon2,
     sha2,
+    sm3,
     sponge,
 )
 from triton_crypto.primitives.ntt import (
@@ -334,6 +336,59 @@ def bench_chacha20(batch: int, size: int, dev) -> Bench:
     )
 
 
+def bench_sm3(batch: int, size: int, dev) -> Bench:
+    import torch
+
+    rows = max(batch, 1)
+    msgs = torch.zeros((rows, size), dtype=torch.uint8, device=dev)
+    padded = sm3.sm3_pad_torch(msgs)
+    return Bench(
+        lambda: sm3.sm3_hash_torch(padded, device=dev, pre_padded=True),
+        units=rows,
+        unit="msg",
+        nbytes=padded.numel() + rows * 32,
+        note=f"{padded.shape[1] // 64} block(s), 64 rounds",
+        payload_bytes=rows * size,
+    )
+
+
+def bench_ascon_hash256(batch: int, size: int, dev) -> Bench:
+    import torch
+
+    rows = max(batch, 1)
+    nblocks = (size + 1 + 7) // 8
+    padded = torch.zeros((rows, nblocks * 8), dtype=torch.uint8, device=dev)
+    padded[:, size] = 0x01
+    return Bench(
+        lambda: ascon.ascon_hash256_torch(padded, device=dev, pre_padded=True),
+        units=rows,
+        unit="msg",
+        nbytes=padded.numel() + rows * 32,
+        note=f"SP 800-232, {nblocks} block(s), p[12]",
+        payload_bytes=rows * size,
+    )
+
+
+def _bench_ascon_aead(batch: int, size: int, dev, *, sp800_232: bool) -> Bench:
+    import torch
+
+    rng = np.random.default_rng(0)
+    rows = max(batch, 1)
+    keys = torch.as_tensor(rng.integers(0, 256, (rows, 16), dtype=np.uint8), device=dev)
+    nonces = torch.as_tensor(rng.integers(0, 256, (rows, 16), dtype=np.uint8), device=dev)
+    pt = torch.as_tensor(rng.integers(0, 256, (rows, size), dtype=np.uint8), device=dev)
+    fn = ascon.ascon_aead128_torch if sp800_232 else ascon.ascon128a_torch
+    label = "SP 800-232 Ascon-AEAD128" if sp800_232 else "Ascon-128a v1.2"
+    return Bench(
+        lambda: fn(keys, nonces, pt, device=dev),
+        units=rows * size,
+        unit="B",
+        nbytes=2 * rows * size + rows * 48,
+        note=f"{label}, no AD",
+        payload_bytes=rows * size,
+    )
+
+
 CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "copy": bench_copy,
     "keccak": bench_keccak,
@@ -343,6 +398,10 @@ CASES: dict[str, Callable[[int, int, object], Bench]] = {
     "shake256": lambda b, s, d: _sponge_bench(sponge.SHAKE256, b, s, d),
     "sha256": lambda b, s, d: _sha_bench(256, b, s, d),
     "sha512": lambda b, s, d: _sha_bench(512, b, s, d),
+    "sm3": bench_sm3,
+    "ascon-hash256": bench_ascon_hash256,
+    "ascon-aead128": lambda b, s, d: _bench_ascon_aead(b, s, d, sp800_232=True),
+    "ascon-128a": lambda b, s, d: _bench_ascon_aead(b, s, d, sp800_232=False),
     "ntt-mlkem": lambda b, s, d: _ntt_bench(KYBER, b, s, d),
     "ntt-mldsa": lambda b, s, d: _ntt_bench(DILITHIUM, b, s, d),
     "ntt-babybear": lambda b, s, d: _ntt_bench(BABYBEAR_NTT, b, s, d),
@@ -367,6 +426,10 @@ WHAT = {
     "shake256": "SHAKE256, 32-byte output",
     "sha256": "SHA-256 compression chain over --size-byte messages",
     "sha512": "SHA-512 compression chain over --size-byte messages",
+    "sm3": "SM3 (GB/T 32905-2016) compression chain over --size-byte messages",
+    "ascon-hash256": "Ascon-Hash256 (NIST SP 800-232) over --size-byte messages",
+    "ascon-aead128": "Ascon-AEAD128 (NIST SP 800-232) seal over --size-byte messages, no AD",
+    "ascon-128a": "Ascon-128a (v1.2) seal over --size-byte messages, no AD",
     "ntt-mlkem": "negacyclic NTT, q = 3329, 7 layers",
     "ntt-mldsa": "negacyclic NTT, q = 8380417, 8 layers, Montgomery",
     "ntt-babybear": "negacyclic NTT, q = 2^31-2^27+1, 8 layers",

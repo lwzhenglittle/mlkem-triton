@@ -4,6 +4,12 @@
 
 ### Added
 
+- **Four additional cryptographic families + Karatsuba accelerations (pure Triton + offline KATs + 16P CPU benchmarks)**:
+  - `primitives/gemm.py`: upgraded `gf2_8_matmul_torch` from 64 schoolbook GEMMs (`33.5 GMAC/s`) to a 3-level **27-plane Karatsuba** batched 3-D XMX GEMM (**`234.3 GMAC/s`** at `1024^3`, **7.0×** faster), and added 2-level **9-plane Karatsuba** `gf16_matmul_torch` (**`486.9 GMAC/s`** at `1024^3`).
+  - `primitives/sm3.py`: SM3 cryptographic hash (GB/T 32905-2016 / ISO/IEC 10118-3) with a rolled 16-word sliding-window GPU kernel (`56.1 GB/s` dev on Arc B390, **13.5×** vs 16P OpenSSL at 1 KiB).
+  - `primitives/ascon.py`: NIST SP 800-232 `Ascon-Hash256` (`11.5 GB/s` dev, **4.8×** vs 16P C rival) and `Ascon-AEAD128` (`10.7 GB/s` dev, **1.44×** vs 16P), plus `Ascon-128a` v1.2 (`10.7 GB/s` dev, **1.74×** vs 16P).
+  - `triton_crypto/ed25519`: RFC 7748 X25519 Montgomery ladder and RFC 8032 batched Ed25519 verification using 10-limb radix-2^25.5 `int64` arithmetic with **1-level Karatsuba** (`75`-mul `_fe_mul` / `45`-mul `_fe_sq`, **2.06–2.27×** faster than 100-mul schoolbook: X25519 `270 kops/s` ≈ `0.98×` 16P OpenSSL; Ed25519 `95.8 kops/s` = `4.45×` 1T / `0.62×` 16P OpenSSL).
+  - `triton_crypto/mayo` and `triton_crypto/uov`: batched multivariate PQC verification for all four MAYO sets (`MAYO-1/2/3/5`, offline KATs in `data/vectors/mayo/kat.json`) and all four UOV sets (`OV-Is/Ip/III/V`, classic & `-pkc`, offline KATs in `data/vectors/uov/kat.json`). Coalesced transposed `[K, N, B]` / `[N, B]` packed-`uint32` evaluation outperforms 9-plane Karatsuba XMX by 3.5–4× on thin-`K` MAYO (`n = 81..154`) by avoiding intermediate `PS` DRAM traffic, lifting all four MAYO sets (`MAYO-1` `212 kops/s`, `MAYO-2` `656 kops/s`, `MAYO-3` `76.8 kops/s`, `MAYO-5` `32.5 kops/s`) and all four UOV sets (`OV-Is` `701 kops/s`, `OV-Ip` `589 kops/s`, `OV-III` `158 kops/s`, `OV-V` `67.6–72.5 kops/s`) above 16P AVX2 `liboqs` device-side.
 - **Six new scheme-agnostic primitive modules** under `triton_crypto.primitives`:
   - `primitives/poseidon2.py`: Poseidon2-BabyBear/16 (Plonky3 parameters, 8 full + 13 partial rounds), verified against `data/vectors/poseidon2/bb16.json` (`38.5–39.6 ns/perm` on Arc B390).
   - `primitives/poly1305.py`: Poly1305 (5×26-bit limbs) and `chacha20_poly1305_torch` / `chacha20_poly1305_open_torch` AEAD, cross-checked against OpenSSL `EVP_MAC`.

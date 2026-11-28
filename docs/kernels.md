@@ -35,6 +35,11 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_xor_kernel` | `primitives/chacha20.py` | primitive | `(cdiv(n, 4096),)` | `chacha20_xor` |
 | `_poseidon2_kernel` | `primitives/poseidon2.py` | primitive | `(cdiv(B, 128),)` | `poseidon2_permute_torch` |
 | `_gemm_int8_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN))` | `gemm_int8_torch` |
+| `_gemm_int8_batched_kernel` | `primitives/gemm.py` | primitive | `(cdiv(M,BM), cdiv(N,BN), P)` | `gf16_matmul_torch` (`P=9`), `gf2_8_matmul_torch` (`P=27`) |
+| `_gf16_kara9_planes_kernel` | `primitives/gemm.py` | primitive | `(cdiv(N, 1024),)` | `gf16_expand_planes_torch`, `gf16_matmul_torch` |
+| `_gf16_kara9_recombine_kernel` | `primitives/gemm.py` | primitive | `(cdiv(N, 1024),)` | `gf16_matmul_from_planes_torch`, `gf16_matmul_torch` |
+| `_gf256_kara27_planes_kernel` | `primitives/gemm.py` | primitive | `(cdiv(N, 1024),)` | `gf2_8_matmul_torch` |
+| `_gf256_kara27_recombine_kernel` | `primitives/gemm.py` | primitive | `(cdiv(N, 1024),)` | `gf2_8_matmul_torch` |
 | `_aes_ctr_kernel` | `primitives/aes.py` | primitive | `(cdiv(B, 64),)` | `aes128_ctr_torch` |
 | `_stage_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/2, 1024),)` | `LargeNTT`, one launch per radix-2 pass |
 | `_stage4_kernel` | `primitives/ntt/large.py` | primitive | `(cdiv(N/4, 1024),)` | `LargeNTT(radix=4)`, two stages per pass |
@@ -43,6 +48,9 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_block_kernel` | `primitives/blake3.py` | primitive | `(chunks, cdiv(B, 64))` | `blake3_hash_torch`, per block index |
 | `_pair_kernel` | `primitives/blake3.py` | primitive | `(pairs, cdiv(B, 64))` | `blake3_hash_torch`, per tree level |
 | `_poly1305_kernel` | `primitives/poly1305.py` | primitive | `(cdiv(B, 64),)` | `poly1305_torch`, AEAD |
+| `_sm3_kernel` | `primitives/sm3.py` | primitive | `(cdiv(B, 128),)` | `sm3_hash_torch` |
+| `_ascon_hash256_kernel` | `primitives/ascon.py` | primitive | `(cdiv(B, 128),)` | `ascon_hash256_torch` |
+| `_ascon_aead_kernel` | `primitives/ascon.py` | primitive | `(cdiv(B, 128),)` | `ascon_aead128_torch`, `ascon128a_torch` (+ `*_open_torch`) |
 | `_gemm_modq_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM / generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq` |
 | `_gemm_modq_i8_kernel` | `mlkem/kernels/gemm_modq.py` | ML-KEM / generic | `(cdiv(M,BM), cdiv(B,BN))` | `gemm_modq_int8` |
 | `padcat2_kernel` | `mlkem/kernels/padcat.py` | ML-KEM / generic | `(cdiv(n, BR),)` | `padcat2` |
@@ -75,6 +83,14 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, BLK),)` | `hash_to_point_batch_torch`, `Verifier.verify` |
 | `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*N, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
+| `_x25519_kernel` | `ed25519/kernels.py` | Ed25519 / X25519 | `(cdiv(B, 64),)` | `x25519_torch`, `x25519_base_torch` |
+| `_ed25519_reduce_sc_kernel` | `ed25519/kernels.py` | Ed25519 | `(cdiv(B, 128),)` | `Verifier.verify_torch`, `verify_batch` |
+| `_ed25519_msm_kernel` | `ed25519/kernels.py` | Ed25519 | `(cdiv(B, 64),)` | `Verifier.verify_core_torch`, `verify_batch` |
+| `_ed25519_finalize_kernel` | `ed25519/kernels.py` | Ed25519 | `(cdiv(B, 64),)` | `Verifier.verify_core_torch`, `verify_batch` |
+| `_mayo_sps_kernel` | `mayo/kernels.py` | MAYO | `(cdiv(B, 128), K, M_WORDS)` | `mayo.Verifier.verify_core_torch` |
+| `_mayo_fold_check_kernel` | `mayo/kernels.py` | MAYO | `(cdiv(B, 128),)` | `mayo.Verifier.verify_core_torch` |
+| `_uov_eval_gf16_kernel` | `uov/kernels.py` | UOV | `(cdiv(B, 128), M_WORDS)` | `uov.Verifier.eval_core_torch` (`OV-Is`) |
+| `_uov_eval_gf256_kernel` | `uov/kernels.py` | UOV | `(cdiv(B, 128), M_WORDS)` | `uov.Verifier.eval_core_torch` (`OV-Ip/III/V`) |
 
 ---
 
@@ -101,7 +117,8 @@ sections below give the arguments and the traps for the ones with a kernel behin
 | `primitives.ntt.large.large_ntt_np` / `primitives.ntt.large.large_ntt_torch` | the 2^k multi-pass path, numpy and device (submodule; the class `LargeNTT` is the top-level entry) |
 | `poseidon2_permute_np` | the Plonky3-shaped reference permutation |
 | `gemm_int8_np` / `gemm_int8_torch` | exact int8 GEMM (the matrix-unit substrate) |
-| `gf2_8_matmul_torch` | **GF(2^8) product from 64 int8 GEMMs** — see Composite primitive wrappers below |
+| `gf16_matmul_torch` | **GF(16) product via 9-plane Karatsuba batched int8 GEMM** (`x^4+x+1`) |
+| `gf2_8_matmul_torch` | **GF(2^8) product via 27-plane Karatsuba batched int8 GEMM** (`0x11B`) — see Composite primitive wrappers below |
 | `aes128_expand_key_np` / `aes128_encrypt_block_np` / `aes128_ctr_np` / `aes128_ctr_torch` | AES reference and the T-table device path |
 | `primitives.aes.t_table` | the generated T-table itself (submodule) |
 | `chacha20_keystream_np` / `chacha20_keystream_torch` | ChaCha20 keystream, reference and device |
@@ -112,6 +129,8 @@ sections below give the arguments and the traps for the ones with a kernel behin
 | `chacha20_xor` | ChaCha20 XOR (the AEAD's data path), one `_xor_kernel` launch |
 | `compress_np` | the 7-round BLAKE3 compression primitive, exported at the top level |
 | `primitives.blake3.compression_np` | one BLAKE3 compression, the oracle `blake3_hash_np` is built on (submodule) |
+| `sm3` / `IV_SM3` / `T_SM3` / `sm3_compress_np` / `sm3_hash_np` / `sm3_hash_np_batch` / `sm3_pad_torch` / `sm3_hash_torch` | SM3 (GB/T 32905-2016) constants, reference, padding, and rolled 16-word GPU hash |
+| `ascon` / `ASCON_AEAD128_IV` / `ASCON_HASH256_IV` / `ASCON128A_IV` / `ascon_permute_np` / `ascon_hash256_np` / `ascon_hash256_np_batch` / `ascon_hash256_torch` / `ascon_aead128_encrypt_np` / `ascon_aead128_decrypt_np` / `ascon_aead128_torch` / `ascon_aead128_open_torch` / `ascon128a_encrypt_np` / `ascon128a_decrypt_np` / `ascon128a_torch` / `ascon128a_open_torch` | Ascon-Hash256 & Ascon-AEAD128 (NIST SP 800-232) and Ascon-128a (v1.2), reference and GPU kernels |
 
 ---
 

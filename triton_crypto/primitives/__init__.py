@@ -41,6 +41,7 @@ from __future__ import annotations
 
 from . import (
     aes,
+    ascon,
     blake3,
     chacha20,
     fields,
@@ -50,6 +51,7 @@ from . import (
     poly1305,
     poseidon2,
     sha2,
+    sm3,
     sponge,
 )
 from .aes import (
@@ -57,6 +59,23 @@ from .aes import (
     aes128_ctr_torch,
     aes128_encrypt_block_np,
     aes128_expand_key_np,
+)
+from .ascon import (
+    ASCON128A_IV,
+    ASCON_AEAD128_IV,
+    ASCON_HASH256_IV,
+    ascon128a_decrypt_np,
+    ascon128a_encrypt_np,
+    ascon128a_open_torch,
+    ascon128a_torch,
+    ascon_aead128_decrypt_np,
+    ascon_aead128_encrypt_np,
+    ascon_aead128_open_torch,
+    ascon_aead128_torch,
+    ascon_hash256_np,
+    ascon_hash256_np_batch,
+    ascon_hash256_torch,
+    ascon_permute_np,
 )
 from .blake3 import blake3_hash_np, blake3_hash_torch
 from .chacha20 import (
@@ -66,7 +85,7 @@ from .chacha20 import (
     chacha20_xor,
 )
 from .fields import BABYBEAR, MONT_R, PrimeField, mont_mul
-from .gemm import gemm_int8_np, gemm_int8_torch, gf2_8_matmul_torch
+from .gemm import gemm_int8_np, gemm_int8_torch, gf2_8_matmul_torch, gf16_matmul_torch
 from .ntt import (
     BABYBEAR_NTT,
     DILITHIUM,
@@ -102,6 +121,15 @@ from .sha2 import (
     hash_np,
     sha_absorb,
 )
+from .sm3 import (
+    IV_SM3,
+    T_SM3,
+    sm3_compress_np,
+    sm3_hash_np,
+    sm3_hash_np_batch,
+    sm3_hash_torch,
+    sm3_pad_torch,
+)
 from .sponge import (
     DOMAIN_SHA3,
     DOMAIN_SHAKE,
@@ -123,6 +151,9 @@ from .sponge import (
 )
 
 __all__ = [
+    "ASCON128A_IV",
+    "ASCON_AEAD128_IV",
+    "ASCON_HASH256_IV",
     "BABYBEAR",
     "BABYBEAR_NTT",
     "BABYBEAR_POSEIDON2_16",
@@ -132,6 +163,7 @@ __all__ = [
     "HASHES",
     "IV256",
     "IV512",
+    "IV_SM3",
     "K256",
     "K512",
     "KYBER",
@@ -142,6 +174,7 @@ __all__ = [
     "SHA3_512",
     "SHAKE128",
     "SHAKE256",
+    "T_SM3",
     "HashFn",
     "LargeNTT",
     "NTTDomain",
@@ -152,6 +185,19 @@ __all__ = [
     "aes128_ctr_torch",
     "aes128_encrypt_block_np",
     "aes128_expand_key_np",
+    "ascon",
+    "ascon128a_decrypt_np",
+    "ascon128a_encrypt_np",
+    "ascon128a_open_torch",
+    "ascon128a_torch",
+    "ascon_aead128_decrypt_np",
+    "ascon_aead128_encrypt_np",
+    "ascon_aead128_open_torch",
+    "ascon_aead128_torch",
+    "ascon_hash256_np",
+    "ascon_hash256_np_batch",
+    "ascon_hash256_torch",
+    "ascon_permute_np",
     "blake3",
     "blake3_hash_np",
     "blake3_hash_torch",
@@ -169,6 +215,7 @@ __all__ = [
     "gemm_int8_torch",
     "get_sponge",
     "gf2_8_matmul_torch",
+    "gf16_matmul_torch",
     "hash_np",
     "hash_np_batch",
     "intt_np",
@@ -193,6 +240,12 @@ __all__ = [
     "poseidon2_permute_torch",
     "sha2",
     "sha_absorb",
+    "sm3",
+    "sm3_compress_np",
+    "sm3_hash_np",
+    "sm3_hash_np_batch",
+    "sm3_hash_torch",
+    "sm3_pad_torch",
     "sponge",
     "sponge_padded",
 ]

@@ -15,6 +15,7 @@ from triton_crypto.primitives.gemm import (
     gemm_int8_np,
     gemm_int8_torch,
     gf2_8_matmul_torch,
+    gf16_matmul_torch,
 )
 
 
@@ -181,3 +182,26 @@ def test_gf2_8_matmul_agrees_with_the_bit_plane_reference():
 def test_gf2_8_matmul_rejects_a_bad_inner_dimension():
     with pytest.raises(ValueError, match="not a product"):
         gf2_8_matmul_torch(np.zeros((4, 5), np.uint16), np.zeros((6, 3), np.uint16))
+
+
+def test_gf16_matmul_karatsuba9_matches_reference():
+    """9-plane Karatsuba GF(16) matmul matches scalar GF(16) mod x^4 + x + 1."""
+    rng = np.random.default_rng(19)
+    a = rng.integers(0, 16, (37, 53), dtype=np.uint8)
+    b = rng.integers(0, 16, (53, 29), dtype=np.uint8)
+
+    def g16(x: int, y: int) -> int:
+        p = ((x & 1) * y) ^ ((x & 2) * y) ^ ((x & 4) * y) ^ ((x & 8) * y)
+        t = p & 0xF0
+        return (p ^ (t >> 4) ^ (t >> 3)) & 0xF
+
+    want = np.zeros((37, 29), dtype=np.uint8)
+    for i in range(37):
+        for j in range(29):
+            acc = 0
+            for k in range(53):
+                acc ^= g16(int(a[i, k]), int(b[k, j]))
+            want[i, j] = acc
+
+    got = gf16_matmul_torch(a, b).cpu().numpy()
+    assert np.array_equal(got, want)

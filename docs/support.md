@@ -8,7 +8,7 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1235 tests** (cold cache: 1232 passed in 1.1.0 baseline + 3 compat/harness checks; warm cache skips 1 compile-cache test) |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1451 tests** (includes SM3, Ascon, Ed25519/X25519, MAYO, and UOV suites; warm cache skips 1 compile-cache test) |
 | NVIDIA CUDA (`sm_75+`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | DGX Spark GB10 / `sm_121` / torch 2.14+cu130 / triton 3.8, **1222 passed + 10 skipped** (9 optional full-SLH-DSA liboqs + 1 compile-cache), 0 failed; representative 16-workload suite also passes on A100 (`sm_80`), RTX 4090 (`sm_89`), and H100 (`sm_90`) on torch 2.15 + triton 3.9 |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
@@ -33,6 +33,10 @@ and benchmarked on both Intel XPU and NVIDIA CUDA (`benchmarks/local-gpu-vs-cpu-
 | `primitives.aes` | AES-128-CTR, T-table (a measurement, not a fast path) | ✅ | ✅ | FIPS-197 C.1, `openssl enc -aes-128-ctr` |
 | `primitives.gemm` | exact `int8 x int8 -> int32` | ✅ | ✅ | numpy, and a bit-plane GF(2^8) product |
 | `primitives.blake3` | BLAKE3 (tree hash) | ✅ | ✅ | the official Rust implementation's 26 KAT vectors |
+| `primitives.sm3` | SM3 cryptographic hash (GB/T 32905-2016) | ✅ | ⚠️ untested | GB/T 32905-2016 vectors, OpenSSL / `hashlib` |
+| `primitives.ascon` | Ascon-Hash256 & Ascon-AEAD128 (SP 800-232) + Ascon-128a (v1.2) | ✅ | ⚠️ untested | NIST SP 800-232 empty KAT, numpy reference |
+
+Additional scheme subpackages verified on Intel XPU (`Arc B390`) with pure-Triton kernels (not yet measured on CUDA): `triton_crypto.mayo` (MAYO-1/2/3/5 vs liboqs KATs), `triton_crypto.uov` (OV-Is/Ip/III/V classic & `-pkc` vs liboqs KATs), and `triton_crypto.ed25519` (RFC 8032 Ed25519 verify + RFC 7748 X25519).
 
 Both the Intel XPU (`Arc B390`) and NVIDIA CUDA (`DGX Spark GB10 / sm_121`) rows were **actually
 run on real hardware**: same pure-Triton kernels, same ACVP / RFC / Plonky3 / BLAKE3 / Falcon KAT

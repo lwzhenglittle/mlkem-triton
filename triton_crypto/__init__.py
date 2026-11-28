@@ -4,14 +4,18 @@ Layout:
 
     primitives/   scheme-agnostic mathematics: Keccak-f[1600], the sponge
                   (SHA3/SHAKE, any rate/output, batched), SHA-2 compression,
-                  parameterised and multi-pass NTT over Z_q[X]/(X^n+1),
-                  prime-field arithmetic, ChaCha20, Poly1305/AEAD, AES-128-CTR,
-                  BLAKE3, Poseidon2-BabyBear/16 and exact int8 / GF(2^8) GEMM
+                  SM3, Ascon-Hash256/AEAD128/128a, parameterised and multi-pass
+                  NTT over Z_q[X]/(X^n+1), prime-field arithmetic, ChaCha20,
+                  Poly1305/AEAD, AES-128-CTR, BLAKE3, Poseidon2-BabyBear/16
+                  and exact int8 / GF(2^8) GEMM
     mlkem/        ML-KEM (FIPS 203): keygen, encapsulate, decapsulate
     mldsa/        ML-DSA (FIPS 204): sign, verify, plus a numpy reference
     slhdsa/       SLH-DSA (FIPS 205): verify, plus a numpy reference
     lms/          LMS/HSS (SP 800-208): verify, plus a numpy reference
     falcon/       Falcon (FIPS 206 draft): verify, plus a numpy reference
+    mayo/         MAYO (MAYO-1/2/3/5): verify, plus a numpy reference
+    uov/          UOV (OV-Is/Ip/III/V, classic & -pkc): verify, plus a numpy reference
+    ed25519/      Ed25519 (RFC 8032) verify and X25519 (RFC 7748) scalar multiply
 
 Every scheme is a thin layer over `primitives`; it keeps only what is
 scheme-specific (ML-KEM's Toeplitz GEMMs, ML-DSA's SampleInBall/Decompose,

@@ -12,6 +12,9 @@ Post-quantum schemes:
 | SLH-DSA | verify (all 12 parameter sets) | FIPS 205 |
 | LMS / HSS | verify (SHA-256/256 and /192) | SP 800-208 |
 | Falcon | verify (Falcon-512 / Falcon-1024, unpadded & padded) | FIPS 206 draft |
+| MAYO | verify (MAYO-1 / 2 / 3 / 5) | NIST Round 2 MQ |
+| UOV | verify (OV-Is / Ip / III / V, classic & `-pkc`) | NIST Round 2 MQ |
+| Ed25519 / X25519 | batched verify (single & multi-key) + scalar multiply | RFC 8032 / RFC 7748 |
 
 And the scheme-agnostic primitives underneath them, usable on their own:
 
@@ -27,8 +30,10 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.aes` | AES-128-CTR through a T-table — a gather measurement, not a fast path |
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.8–4.0 TMAC/s, **9.0–9.3×** vs 16P CPU at n = 1024), the GF(2^k) GEMM substrate |
+| `primitives.sm3` | SM3 cryptographic hash (GB/T 32905-2016 / ISO/IEC 10118-3), rolled 16-word schedule |
+| `primitives.ascon` | Ascon-Hash256 & Ascon-AEAD128 (NIST SP 800-232) plus Ascon-128a (v1.2), 5×uint64 register state |
 
-**1235 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
+**1451 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
 NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, offline Falcon KATs, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`, `.falcon`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
@@ -131,6 +136,19 @@ SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is not im
 verification covers both approved SHA-256 families; the SP 800-208 SHAKE-256 sets are not
 implemented because their type codes are still TBD.
 
+### MAYO, UOV, and Ed25519 / X25519
+
+```python
+from triton_crypto.mayo import Verifier as MayoVerifier
+from triton_crypto.uov import Verifier as UovVerifier
+from triton_crypto.ed25519 import Verifier as Ed25519Verifier, x25519_torch
+
+mv = MayoVerifier(cpk)  # auto-detects MAYO-1 / 2 / 3 / 5
+uv = UovVerifier(uov_pk)  # auto-detects OV-Is / Ip / III / V (classic or -pkc)
+ev = Ed25519Verifier(ed_pk)  # RFC 8032 single-key (or verify_batch for multi-key)
+shared = x25519_torch(scalars, peer_pubkeys)  # RFC 7748 [B, 32] uint8 -> [B, 32] uint8
+```
+
 ### Shared primitives
 
 ```python
@@ -212,7 +230,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**1235 tests**, six layers:
+**1451 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;
