@@ -58,3 +58,53 @@ def test_power_state_reports_what_this_machine_says():
         assert any(
             k.startswith("cur_freq_mhz") or k in ("battery", "platform_profile") for k in state
         )
+
+
+def test_bench_rival_bytes_prefers_payload_over_traffic():
+    """CPU `B/s` rivals count payload bytes, never sponge padding or read+write traffic."""
+    bp = pytest.importorskip("bench_primitive")
+
+    same = bp.Bench(fn=lambda: None, units=1024, unit="B", nbytes=1024)
+    assert same.rival_bytes == 1024
+
+    split = bp.Bench(fn=lambda: None, units=16, unit="msg", nbytes=17920, payload_bytes=16384)
+    assert split.nbytes == 17920
+    assert split.rival_bytes == 16384
+
+
+@pytest.mark.gpu
+def test_primitive_bench_payload_bytes_and_device_staging():
+    """Sponge/AEAD report payload bytes for CPU comparisons, and device benches pre-stage tensors."""
+    import torch
+
+    from triton_crypto import devices
+
+    bp = pytest.importorskip("bench_primitive")
+    dev = devices.resolve_device()
+    batch, size = 16, 1024
+    expected_payload = batch * size
+
+    for name in ("sha3-256", "sha3-512", "shake128", "shake256"):
+        b = bp.CASES[name](batch, size, dev)
+        assert b.rival_bytes == expected_payload, name
+        assert b.nbytes > expected_payload, name
+
+    aead = bp.CASES["chacha20-poly1305"](batch, size, dev)
+    assert aead.rival_bytes == expected_payload
+    assert aead.nbytes == 2 * expected_payload
+    aead_tensors = [
+        c.cell_contents
+        for c in (aead.fn.__closure__ or ())
+        if isinstance(c.cell_contents, torch.Tensor)
+    ]
+    assert any(t.device.type == dev.type and t.shape == (batch, size) for t in aead_tensors)
+
+    for name in ("blake3", "poly1305"):
+        b = bp.CASES[name](batch, size, dev)
+        assert b.rival_bytes == expected_payload
+        tensors = [
+            c.cell_contents
+            for c in (b.fn.__closure__ or ())
+            if isinstance(c.cell_contents, torch.Tensor)
+        ]
+        assert tensors and all(t.device.type == dev.type for t in tensors), name

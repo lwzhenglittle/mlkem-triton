@@ -514,9 +514,9 @@ def _bench_primitives(dev, rivals: dict, batch: int = 65536, size: int = 1024, r
         rv = rivals.get(rival_key) if rival_key else None
         if rv is not None:
             is_bytes = rv["unit"] == "B/s"
-            dev_rate = (bench.nbytes / t_dev) if is_bytes else (bench.units / t_dev)
+            dev_rate = (bench.rival_bytes / t_dev) if is_bytes else (bench.units / t_dev)
             e2e_rate = (
-                ((bench.nbytes / t_e2e) if is_bytes else (bench.units / t_e2e))
+                ((bench.rival_bytes / t_e2e) if is_bytes else (bench.units / t_e2e))
                 if t_e2e is not None
                 else None
             )
@@ -657,10 +657,10 @@ def _bench_breakeven(dev, rivals: dict, oqs_so: Path) -> dict[str, list[dict]]:
                     "batch": B,
                     "dev_us": t_dev / B * 1e6,
                     "e2e_us": t_e2e / B * 1e6,
-                    "dev_vs_1t": (bench.nbytes / t_dev) / rv["one_thread"],
-                    "dev_vs_16p": (bench.nbytes / t_dev) / rv["procs16"],
-                    "e2e_vs_1t": (bench.nbytes / t_e2e) / rv["one_thread"],
-                    "e2e_vs_16p": (bench.nbytes / t_e2e) / rv["procs16"],
+                    "dev_vs_1t": (bench.rival_bytes / t_dev) / rv["one_thread"],
+                    "dev_vs_16p": (bench.rival_bytes / t_dev) / rv["procs16"],
+                    "e2e_vs_1t": (bench.rival_bytes / t_e2e) / rv["one_thread"],
+                    "e2e_vs_16p": (bench.rival_bytes / t_e2e) / rv["procs16"],
                 }
             )
         out[label] = rows_p

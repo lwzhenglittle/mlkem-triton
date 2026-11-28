@@ -280,12 +280,54 @@ workloads passed. It is the version used for all Hygon performance numbers in th
 No BLAKE3 performance claim is made for Hygon. Excluding it is a limitation of the Hygon result, not
 evidence that its reference implementation or the other backends fail.
 
-## 10. Practical portability rules
+## 10. Additional NVIDIA CUDA observations (`sm_70`, `sm_80`, `sm_89`, `sm_90`)
+
+A separate four-GPU NVIDIA evaluation (2026-11-28) ran a **16-workload representative subset**
+(8 primitives at `B=4096`, 1 KiB; 8 scheme operations at `B=4096` for ML-KEM/ML-DSA/Falcon and
+`B=256` for SLH-DSA/LMS) with same-host 16P barrier CPU rivals, without running the full `pytest`
+suite. Because its scope, batch sizes (16x smaller on primitives and on SLH-DSA/LMS), and
+shortened CPU rounds differ from §2–§8, those numbers are **not merged into the §5–§6 tables**.
+They still establish four concrete portability facts for CUDA:
+
+1. **The Triton `< 3.3` floor is upstream, not Hygon-specific.** On **Tesla V100S** (`sm_70`,
+   CUDA 12.4, PyTorch 2.6.0, Triton 3.2.0), only 7/16 workloads succeeded:
+   - PyTorch 2.6 rejected PEP 585 `list[Tensor]` return annotations in `triton_crypto/mlkem/ops.py`
+     until `pre` and `build_ye` were switched to `typing.List[Tensor]` (now fixed in the library).
+   - Triton 3.2 lacked `tl.gather` (5 failures: `ntt-mlkem`, `mlkem-768-keygen`, `mldsa-44-verify`,
+     `falcon-512-verify`, `falcon-1024-verify`), failed `tl.static_range` tuple accumulation in
+     `blake3`, and failed to compile SLH-DSA `thash_kernel`.
+   - `gemm-int8` failed lowering on `sm_70` (Volta lacks int8 Tensor Cores), and
+     `mlkem-768-decaps` compiled and ran but failed its ACVP check (`AssertionError`, while
+     `mlkem-768-encaps` passed) — direct evidence that compilation alone does not guarantee
+     correctness on older architectures. Volta `sm_70` and Triton `< 3.3` are therefore unsupported.
+2. **Discrete PCIe CUDA shows the same `dev -> e2e` cliff as BW1000.** On idle **A100 SXM4 40GB**
+   (`sm_80`, Xeon Gold 6330) and **RTX 4090** (`sm_89`, Core i9-13900K) with CUDA 13.2 /
+   PyTorch 2.15.0 / Triton 3.9.0, **16/16 workloads passed** their in-runner ACVP/liboqs checks.
+   Even within NVIDIA CUDA, PCIe transfers (10–21 GB/s vs GB10 coherent memory) dominate standalone
+   primitive round trips (for example, A100 `ntt-2^20` moves from 0.291 ms dev to 6.88 ms e2e, and
+   `gemm-int8` from 12.5 to 1.26 TMAC/s).
+3. **Small crypto working sets track L2, SM clock, and host launch speed rather than HBM peak.**
+   On 2–16 MiB working sets (`B=4096` schemes, `1024^3` GEMM, `2^20` NTT), RTX 4090 (72 MiB L2,
+   higher SM clock, faster single-core host CPU) is roughly 2x faster than A100 SXM4 across nearly
+   every measured workload — e.g. ML-KEM-768 encaps `0.085 / 0.332 us` vs `0.186 / 0.830 us`,
+   Falcon-512 `0.018 / 0.231 us` vs `0.050 / 0.599 us`, Falcon-1024 `0.040 / 0.371 us` vs
+   `0.087 / 1.000 us`, ML-DSA-44 verify `0.098 / 0.724 us` vs `0.242 / 1.854 us`, `ntt-2^20`
+   `0.114 ms` vs `0.291 ms`, and `gemm-int8` `31.0` vs `12.5 TMAC/s`. With same-host 16P CPU
+   rivals, all tested lattice schemes keep positive e2e speed-ups (A100 `1.1–7.3x`; RTX 4090
+   `2.0–12.6x`), whereas standalone e2e hashes and stream ciphers (`sha256`, `chacha20`, `blake3`)
+   trail strong 16P CPUs.
+4. **Hopper `sm_90` functional coverage (timings excluded).** On **H100 PCIe 80GB** (`sm_90`,
+   CUDA 13.2 / PyTorch 2.15.0 / Triton 3.9.0), **16/16 workloads passed** their ACVP/liboqs checks,
+   but GPU 0 was shared under 68%–81% external utilization (~18 GiB occupied), so its timings are
+   excluded from performance claims.
+
+## 11. Practical portability rules
 
 A new backend should be evaluated in this order:
 
-1. **Pin the exact Triton build.** A generic `triton>=3.0` requirement does not capture the frontend
-   and compiler differences observed here.
+1. **Pin the exact Triton build.** The package now declares `triton>=3.3` (and CUDA `sm_75+`), but
+   even a minimum version floor does not capture every frontend and compiler difference observed
+   across vendor forks and older architectures.
 2. **Run the numerical prerequisites first.** `test_dot_exact.py`, `test_fields_gpu.py`, and
    `test_primitives_gpu.py` establish the assumptions on which larger pipelines depend.
 3. **Run modules in separate processes during bring-up.** A compiler segmentation fault should not
@@ -300,7 +342,7 @@ A new backend should be evaluated in this order:
 8. **Do not generalize from one primitive.** NTT, tensor-core GEMM, serial hashes, table lookups,
    and multi-limb arithmetic exercise different hardware properties.
 
-## 11. Scope and data provenance
+## 12. Scope and data provenance
 
 - B390 values come from `benchmarks/local-gpu-vs-cpu-20261128.{md,json}` and the referenced
   same-window snapshot.
@@ -309,6 +351,10 @@ A new backend should be evaluated in this order:
 - BW1000 values come from an external evaluation of source `e82515f` on 2026-11-28. Its remote raw
   outputs were `bw1000-full.{md,json}` and `bw1000-cpu16.json`; those remote files are not
   repository paths. The summary is reproduced here to keep this document self-contained.
+- The §10 observations for V100S (`sm_70`), A100 (`sm_80`), RTX 4090 (`sm_89`), and H100 (`sm_90`)
+  come from a separate four-host 2026-11-28 evaluation archive (`RESULTS.md`, not tracked in this
+  repository). Only the three platforms in §2–§8 were validated with the full `pytest` suite and
+  the repository's full `B=65536` / `B=4096` benchmark protocol.
 - Hygon is an AMD-derived HIP target, but these results do not claim that AMD ROCm hardware has been
   tested. The support matrix should continue to distinguish them.
 

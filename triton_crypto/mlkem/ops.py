@@ -12,6 +12,8 @@ implementations only describe shapes/dtypes, for Dynamo to trace.
 
 from __future__ import annotations
 
+import typing
+
 import torch
 import triton
 from torch import Tensor
@@ -66,10 +68,11 @@ def _(bufs, eta):
 
 
 # ---------------------------------------------------------------- unpack + decompress
+# PyTorch 2.4-2.6 custom_op schema inference requires typing.List for tensor-list returns.
 @custom_op(f"{LIB}::pre", mutates_args=())
 def pre(
     ct: Tensor, B: int, CTLEN: int, BYTE0: int, COUNT: int, D: int, CENTER: int, BC: int, JT: int
-) -> list[Tensor]:
+) -> typing.List[Tensor]:  # noqa: UP006
     from .pipeline import _pre_kernel
 
     out = torch.empty((COUNT, B), dtype=torch.float16 if CENTER else torch.int16, device=ct.device)
@@ -102,7 +105,7 @@ def _(acc, V, B):
 
 # ---------------------------------------------------------------- build Y / E
 @custom_op(f"{LIB}::build_ye", mutates_args=())
-def build_ye(y: Tensor, e: Tensor, mbytes: Tensor, B: int, K: int) -> list[Tensor]:
+def build_ye(y: Tensor, e: Tensor, mbytes: Tensor, B: int, K: int) -> typing.List[Tensor]:  # noqa: UP006
     from .kernels.glue import build_ye as impl
 
     return list(impl(y, e, mbytes, B, K))

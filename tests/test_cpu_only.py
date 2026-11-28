@@ -72,3 +72,27 @@ def test_fused_cfg_disables_pipelining_only_on_xpu():
         == _pick_cfg(1024, torch.device("cuda"))["num_stages"]
     )
     assert _fused_cfg(1024, torch.device("cuda"))["num_stages"] == 3
+
+
+def test_mlkem_custom_ops_use_typing_list_for_torch_2_6_compat():
+    """PyTorch 2.4-2.6 custom_op schema inference rejects PEP 585 `list[Tensor]` returns."""
+    import ast
+    import pathlib
+
+    import torch
+
+    from triton_crypto.mlkem import ops as _ops  # noqa: F401 - registers custom ops
+
+    src = (
+        pathlib.Path(__file__).resolve().parent.parent / "triton_crypto" / "mlkem" / "ops.py"
+    ).read_text()
+    tree = ast.parse(src)
+    returns = {
+        node.name: ast.unparse(node.returns)
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.returns is not None
+    }
+    for fn_name in ("pre", "build_ye"):
+        assert returns[fn_name] == "typing.List[Tensor]", (fn_name, returns[fn_name])
+        schema = str(getattr(torch.ops.triton_crypto, fn_name).default._schema)
+        assert "-> Tensor[]" in schema, schema

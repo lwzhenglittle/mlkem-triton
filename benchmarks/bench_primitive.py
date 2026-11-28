@@ -67,8 +67,16 @@ class Bench:
     fn: Callable[[], object]
     units: int  # how many `unit`s one call processes
     unit: str
-    nbytes: int  # bytes read + written by one call, for the GB/s column
+    nbytes: int  # device traffic bytes read + written by one call, for the GB/s column
     note: str = ""
+    # Raw payload bytes processed per call, used when comparing against `B/s` CPU rivals
+    # (which report message payload bytes, never sponge padding or read+write traffic).
+    # Defaults to `nbytes` when they coincide.
+    payload_bytes: int | None = None
+
+    @property
+    def rival_bytes(self) -> int:
+        return self.nbytes if self.payload_bytes is None else self.payload_bytes
 
 
 # --------------------------------------------------------------------------- builders
@@ -140,6 +148,7 @@ def _sponge_bench(hf, batch: int, size: int, dev, xof_out: int = 32) -> Bench:
         unit="msg",
         nbytes=padded.numel() + rows * outlen,
         note=f"rate {rate}, {padded.shape[1] // rate} block(s)",
+        payload_bytes=rows * size,
     )
 
 
@@ -262,9 +271,11 @@ def bench_ntt_large(batch: int, size: int, dev) -> Bench:
 
 
 def bench_blake3(batch: int, size: int, dev) -> Bench:
+    import torch
+
     rows, size = max(batch, 1), max(size, 1)
     rng = np.random.default_rng(0)
-    msgs = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    msgs = torch.as_tensor(rng.integers(0, 256, (rows, size), dtype=np.uint8), device=dev)
     return Bench(
         lambda: blake3.blake3_hash_torch(msgs, device=dev),
         units=rows * size,
@@ -275,11 +286,13 @@ def bench_blake3(batch: int, size: int, dev) -> Bench:
 
 
 def bench_poly1305(batch: int, size: int, dev) -> Bench:
+    import torch
+
     rows, size = max(batch, 1), max(size, 16)
     size -= size % 16  # the device path takes whole 16-byte blocks
     rng = np.random.default_rng(0)
-    keys = rng.integers(0, 256, (rows, 32), dtype=np.uint8)
-    msgs = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    keys = torch.as_tensor(rng.integers(0, 256, (rows, 32), dtype=np.uint8), device=dev)
+    msgs = torch.as_tensor(rng.integers(0, 256, (rows, size), dtype=np.uint8), device=dev)
     return Bench(
         lambda: poly1305.poly1305_torch(keys, msgs, device=dev),
         units=rows * size,
@@ -290,17 +303,20 @@ def bench_poly1305(batch: int, size: int, dev) -> Bench:
 
 
 def bench_aead(batch: int, size: int, dev) -> Bench:
+    import torch
+
     rows, size = max(batch, 1), max(size, 1)
     rng = np.random.default_rng(0)
     keys = rng.integers(0, 256, (rows, 32), dtype=np.uint8)
     nonces = rng.integers(0, 256, (rows, 12), dtype=np.uint8)
-    pt = rng.integers(0, 256, (rows, size), dtype=np.uint8)
+    pt = torch.as_tensor(rng.integers(0, 256, (rows, size), dtype=np.uint8), device=dev)
     return Bench(
         lambda: poly1305.chacha20_poly1305_torch(keys, nonces, pt, device=dev),
         units=rows * size,
         unit="B",
         nbytes=2 * rows * size,
         note="ChaCha20-Poly1305 seal, no AAD",
+        payload_bytes=rows * size,
     )
 
 
@@ -558,6 +574,7 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
                 "gbs": gbs,
                 "share": share,
                 "bytes": bench.nbytes / t,
+                "payload_bytes": bench.rival_bytes / t,
                 "ops": bench.units / t,
                 # One *unit* of work, expressed as bytes of copy bandwidth. A byte-rate row
                 # has no meaningful per-unit version, so it stays None.
@@ -573,7 +590,7 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
             r["vs1t"] = r["vs16p"] = "n/a"
             continue
         unit = rival["unit"]
-        device_rate = r["bytes"] if unit == "B/s" else r["ops"]
+        device_rate = r["payload_bytes"] if unit == "B/s" else r["ops"]
         r["vs1t"] = _speedup(device_rate, rival["one_thread"])
         r["vs16p"] = _speedup(device_rate, rival["procs16"])
 
@@ -642,7 +659,7 @@ def _one_table(names, batch, args, dev, copy_t, copy_bw) -> int:
         "# printed anyway so the table has one shape.\n"
         "# `≈B copy` is the time one operation takes, expressed as bytes of copy bandwidth --\n"
         "# the only column here that does not move with the iGPU's clock state.\n"
-        f"# `vs 1T`/`vs 16P` compare against {baseline_label} (16P = 16 processes);\n"
+        f"# `vs 1T`/`vs 16P` compare raw payload bytes/s (or ops/s) against {baseline_label} (16P = 16 processes);\n"
         "# `n/a` means no CPU reference exists for that row, not that the row is fast."
     )
     return 0

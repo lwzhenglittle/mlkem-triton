@@ -177,7 +177,7 @@ def main() -> int:
             )
             continue
         unit = new[rival_name]["unit"]
-        device_rate = row["bytes"] if unit == "B/s" else row["ops"]
+        device_rate = row.get("payload_bytes", row["bytes"]) if unit == "B/s" else row["ops"]
         old16 = old[rival_name]["procs16"]
         new16 = new[rival_name]["procs16"]
         r_old = device_rate / old16
@@ -238,7 +238,7 @@ def main() -> int:
             if not rival_name:
                 continue
             unit = new[rival_name]["unit"] if rival_name in new else "B/s"
-            rate = row["bytes"] if unit == "B/s" else row["ops"]
+            rate = row.get("payload_bytes", row["bytes"]) if unit == "B/s" else row["ops"]
             lines.append(f"| `{row['name']}` | {_fmt(rate, unit)} |")
         if args.repro:
             lines += _repro_section(old, args.repro)
@@ -247,7 +247,9 @@ def main() -> int:
             (device_rate / new[r]["procs16"]) / (device_rate / old[r]["procs16"])
             for row in dev["rows"]
             if (r := CPU_RIVAL.get(row["name"])) and r in new
-            for device_rate in [row["bytes"] if new[r]["unit"] == "B/s" else row["ops"]]
+            for device_rate in [
+                row.get("payload_bytes", row["bytes"]) if new[r]["unit"] == "B/s" else row["ops"]
+            ]
         )
         if changes_all:
             lines += [
@@ -302,7 +304,7 @@ def main() -> int:
         if not rival_name or rival_name not in new:
             continue
         unit = new[rival_name]["unit"]
-        device_rate = row["bytes"] if unit == "B/s" else row["ops"]
+        device_rate = row.get("payload_bytes", row["bytes"]) if unit == "B/s" else row["ops"]
         changes.append(
             (device_rate / new[rival_name]["procs16"]) / (device_rate / old[rival_name]["procs16"])
         )

@@ -28,7 +28,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.8–4.0 TMAC/s, **9.0–9.3×** vs 16P CPU at n = 1024), the GF(2^k) GEMM substrate |
 
-**1232 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
+**1235 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
 NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, offline Falcon KATs, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`, `.falcon`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
@@ -46,7 +46,7 @@ Not on PyPI yet. From GitHub:
 pip install "triton-crypto-kernels @ git+https://github.com/lwzhenglittle/triton-crypto-kernels.git"
 ```
 
-Dependencies: `torch>=2.4`, `triton>=3.0`, `numpy`. The wheel is pure Python; nothing compiles.
+Dependencies: `torch>=2.4`, `triton>=3.3`, `numpy` (CUDA requires `sm_75+`; see [docs/support.md](docs/support.md)). The wheel is pure Python; nothing compiles.
 For the test suite (ACVP vectors are not shipped in the wheel):
 
 ```bash
@@ -212,7 +212,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**1232 tests**, six layers:
+**1235 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;

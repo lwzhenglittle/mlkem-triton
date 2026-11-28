@@ -8,8 +8,8 @@
 
 | backend | ML-KEM (FIPS 203) | ML-DSA verify + sign (FIPS 204) | SLH-DSA verify (FIPS 205) | LMS/HSS verify (SP 800-208) | Falcon verify (FIPS 206 draft) | notes |
 |---|---|---|---|---|---|---|
-| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1232 tests** (cold cache: 1232 passed, 0 skipped; warm cache: 1231 passed + 1 compile-cache skip) |
-| NVIDIA CUDA | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | DGX Spark GB10 / sm_121 / torch 2.14+cu130 / triton 3.8, **1222 passed + 10 skipped** (9 optional full-SLH-DSA liboqs + 1 compile-cache), 0 failed |
+| Intel XPU (`triton-xpu`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | Arc B390 / Xe3-LPG / torch 2.15 / triton-xpu 3.9, **1235 tests** (cold cache: 1232 passed in 1.1.0 baseline + 3 compat/harness checks; warm cache skips 1 compile-cache test) |
+| NVIDIA CUDA (`sm_75+`) | ✅ **measured** | ✅ **measured** | ✅ **measured** (all 12) | ✅ **measured** (both SHA-256 families, ACVP) | ✅ **measured** (Falcon-512 & 1024, unpadded + padded) | DGX Spark GB10 / `sm_121` / torch 2.14+cu130 / triton 3.8, **1222 passed + 10 skipped** (9 optional full-SLH-DSA liboqs + 1 compile-cache), 0 failed; representative 16-workload suite also passes on A100 (`sm_80`), RTX 4090 (`sm_89`), and H100 (`sm_90`) on torch 2.15 + triton 3.9 |
 | AMD ROCm | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | ⚠️ **untested** | code-level reasoning only |
 | Apple MPS | ❌ | ❌ | ❌ | ❌ | ❌ | no Triton backend |
 | CPU | ❌ | ❌ | ❌ | ❌ | ❌ | no usable Triton CPU target |
@@ -41,6 +41,17 @@ vectors, zero failures on either backend. The only kernel-level portability fix 
 PyTorch launcher (`lms/kernels.py`) to avoid an LLVM instruction-selection crash
 (`Cannot select: v2i32 = bswap`). ROCm remains an inference from the code and is not claimed as
 working.
+
+**Minimum toolchain and architecture floor (`triton>=3.3`, CUDA `sm_75+`):**
+Measured on Tesla V100S (`sm_70`, CUDA 12.4, PyTorch 2.6.0, Triton 3.2.0):
+- PyTorch 2.4–2.6 requires `typing.List[Tensor]` return annotations on `torch.library.custom_op`
+  wrappers (`mlkem/ops.py` uses `typing.List[Tensor]` for `pre` and `build_ye`).
+- Triton < 3.3 lacks `tl.gather` (breaking NTT, ML-KEM keygen, ML-DSA verify, and Falcon verify)
+  and rejects `tl.static_range` tuple accumulation in BLAKE3; SLH-DSA `thash_kernel` also fails to
+  compile on Triton 3.2.
+- Volta `sm_70` lacks int8 Tensor Cores (`gemm-int8` fails lowering) and produced an ACVP
+  `AssertionError` in `mlkem-768-decaps` under Triton 3.2 (while `mlkem-768-encaps` passed).
+  Volta `sm_70` and Triton < 3.3 are therefore unsupported.
 
 Every measurement in this project is paired with a CPU baseline taken **on the same machine**
 (`benchmarks/bench_16p_barrier.py`, `vs 1T` / `vs 16P` columns, barrier-measured at matched 1 KiB
