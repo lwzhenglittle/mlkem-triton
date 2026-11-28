@@ -33,7 +33,20 @@ from pathlib import Path
 
 import pytest
 
-from triton_crypto.falcon import FALCON_512, Verifier
+from triton_crypto.falcon import (
+    FALCON_512,
+    FALCON_1024,
+    FALCON_PADDED_512,
+    FALCON_PADDED_1024,
+    Verifier,
+)
+
+TAG_PARAMS = {
+    "falcon_512": (FALCON_512, False),
+    "falcon_padded_512": (FALCON_PADDED_512, True),
+    "falcon_1024": (FALCON_1024, False),
+    "falcon_padded_1024": (FALCON_PADDED_1024, True),
+}
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CANDIDATES = (
@@ -64,11 +77,12 @@ def _lib(tag: str):
 
 
 def _corpus(tag: str, n: int = CASES):
+    params, _ = TAG_PARAMS[tag]
     keypair, sign, verify = _lib(tag)
     cap = 65536
     pk, sk = (ctypes.c_ubyte * cap)(), (ctypes.c_ubyte * cap)()
     assert keypair(pk, sk) == 0
-    pkb = bytes(pk[: FALCON_512.pk_len])
+    pkb = bytes(pk[: params.pk_len])
     msgs, sigs = [], []
     for i in range(n):
         msg = b"liboqs-falcon-%03d" % i
@@ -81,23 +95,25 @@ def _corpus(tag: str, n: int = CASES):
     return pkb, msgs, sigs, verify
 
 
-@pytest.mark.parametrize("tag", ["falcon_512", "falcon_padded_512"])
+@pytest.mark.parametrize("tag", list(TAG_PARAMS))
 def test_accepts_every_liboqs_signature(tag):
+    params, padded = TAG_PARAMS[tag]
     pk, msgs, sigs, _ = _corpus(tag)
-    ok = Verifier(pk).verify(msgs, sigs)
-    assert ok.all(), f"{int(ok.sum())}/{len(ok)} accepted"
+    ok = Verifier(pk, params, padded=padded).verify(msgs, sigs)
+    assert ok.all(), f"{tag}: {int(ok.sum())}/{len(ok)} accepted"
 
 
-@pytest.mark.parametrize("tag", ["falcon_512", "falcon_padded_512"])
+@pytest.mark.parametrize("tag", list(TAG_PARAMS))
 def test_rejects_what_liboqs_rejects(tag):
+    params, padded = TAG_PARAMS[tag]
     pk, msgs, sigs, verify = _corpus(tag)
     tampered = []
     for sig in sigs:
         bad = bytearray(sig)
-        bad[1 + FALCON_512.nonce_len + 7] ^= 0x01  # inside the coefficient stream
+        bad[1 + params.nonce_len + 7] ^= 0x01  # inside the coefficient stream
         tampered.append(bytes(bad))
-    ok = Verifier(pk).verify(msgs, tampered)
-    assert not ok.any(), f"{int(ok.sum())} tampered signatures accepted"
+    ok = Verifier(pk, params, padded=padded).verify(msgs, tampered)
+    assert not ok.any(), f"{tag}: {int(ok.sum())} tampered signatures accepted"
 
     # and liboqs must agree on the same 64 (it is the other implementation of the decoder)
     pkbuf = (ctypes.c_ubyte * len(pk)).from_buffer_copy(pk)
@@ -109,21 +125,29 @@ def test_rejects_what_liboqs_rejects(tag):
     assert disagree == 0
 
 
-def test_mixed_batch_with_one_bad_row():
+@pytest.mark.parametrize("tag", ["falcon_512", "falcon_1024"])
+def test_mixed_batch_with_one_bad_row(tag):
     """One bad row must not disturb its neighbours -- the batch is one launch, after all."""
-    pk, msgs, sigs, _ = _corpus("falcon_512", 16)
+    params, _ = TAG_PARAMS[tag]
+    pk, msgs, sigs, _ = _corpus(tag, 16)
     bad = bytearray(sigs[7])
     bad[len(bad) // 2] ^= 0x01
     sigs[7] = bytes(bad)
-    ok = Verifier(pk).verify(msgs, sigs)
+    ok = Verifier(pk, params).verify(msgs, sigs)
     assert ok.tolist() == [True] * 7 + [False] + [True] * 8
 
 
-def test_padded_and_unpadded_share_a_verifier():
+@pytest.mark.parametrize(
+    ("unpadded_tag", "padded_tag", "params"),
+    [
+        ("falcon_512", "falcon_padded_512", FALCON_512),
+        ("falcon_1024", "falcon_padded_1024", FALCON_1024),
+    ],
+)
+def test_padded_and_unpadded_share_a_verifier(unpadded_tag, padded_tag, params):
     """Both encodings decode to the same coefficients; the verdict must not depend on which."""
-    pk_u, msgs_u, sigs_u, _ = _corpus("falcon_512", 4)
-    pk_p, msgs_p, sigs_p, _ = _corpus("falcon_padded_512", 4)
-    assert Verifier(pk_u, padded=False).verify(msgs_u, sigs_u).all()
-    assert Verifier(pk_p, padded=True).verify(msgs_p, sigs_p).all()
-    # unpadded lengths really are shorter, which is why the decoder is variable-length at all
-    assert all(len(s) <= FALCON_512.sig_padded for s in sigs_u)
+    pk_u, msgs_u, sigs_u, _ = _corpus(unpadded_tag, 4)
+    pk_p, msgs_p, sigs_p, _ = _corpus(padded_tag, 4)
+    assert Verifier(pk_u, params, padded=False).verify(msgs_u, sigs_u).all()
+    assert Verifier(pk_p, params, padded=True).verify(msgs_p, sigs_p).all()
+    assert all(len(s) <= params.sig_padded for s in sigs_u)

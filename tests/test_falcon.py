@@ -15,6 +15,9 @@ import pytest
 
 from triton_crypto.falcon import (
     FALCON_512,
+    FALCON_1024,
+    FALCON_PADDED_512,
+    FALCON_PADDED_1024,
     comp_decode,
     hash_to_point,
     modq_decode,
@@ -92,7 +95,18 @@ def test_parameters_match_the_reference_implementation():
     assert p.pk_header == 0x09 and p.sig_header == 0x39
     assert len(PK) == p.pk_len == 897
     assert len(SIG) <= p.sig_max == 752
+    assert p.sig_padded == 666
     assert p.l2bound == 34034726
+    assert p.oversample == 205
+
+    p10 = FALCON_1024
+    assert (p10.n, p10.logn, p10.q) == (1024, 10, 12289)
+    assert p10.nonce_len == 40
+    assert p10.pk_header == 0x0A and p10.sig_header == 0x3A
+    assert p10.pk_len == 1793 and p10.sk_len == 2305
+    assert p10.sig_max == 1462 and p10.sig_padded == 1280
+    assert p10.l2bound == 70265242 and p10.oversample == 287
+    assert FALCON_PADDED_1024.sig_padded == 1280 and FALCON_PADDED_512.sig_padded == 666
 
 
 def test_public_key_decodes_into_range():
@@ -173,22 +187,34 @@ def test_public_key_rejects_a_coefficient_above_q():
 
 
 def test_offline_kat_corpus_accepts_valid_and_rejects_tampered():
-    """Deterministic multi-signature KATs exported from liboqs (no liboqs build needed at test time)."""
+    """Deterministic multi-signature KATs exported from liboqs (512 + 1024, unpadded + padded)."""
     import json
     from pathlib import Path
 
+    tag_params = {
+        "falcon_512": FALCON_512,
+        "falcon_padded_512": FALCON_PADDED_512,
+        "falcon_1024": FALCON_1024,
+        "falcon_padded_1024": FALCON_PADDED_1024,
+    }
     kat_path = Path(__file__).resolve().parent.parent / "data" / "vectors" / "falcon" / "kat.json"
     data = json.loads(kat_path.read_text(encoding="utf-8"))
+    seen_tags = set()
     total = 0
     for group in data["groups"]:
+        tag = group["tag"]
+        seen_tags.add(tag)
+        params = tag_params[tag]
         pk = bytes.fromhex(group["pk_hex"])
+        assert len(pk) == params.pk_len
         for case in group["cases"]:
             msg = bytes.fromhex(case["msg_hex"])
             sig = bytes.fromhex(case["sig_hex"])
-            assert verify_np(pk, msg, sig) is True
+            assert verify_np(pk, msg, sig, params) is True
             bad = bytearray(sig)
-            bad[1 + FALCON_512.nonce_len + 5] ^= 0x01
+            bad[1 + params.nonce_len + 5] ^= 0x01
             with contextlib.suppress(ValueError):
-                assert verify_np(pk, msg, bytes(bad)) is False
+                assert verify_np(pk, msg, bytes(bad), params) is False
             total += 1
-    assert total >= 32
+    assert seen_tags == set(tag_params)
+    assert total >= 64

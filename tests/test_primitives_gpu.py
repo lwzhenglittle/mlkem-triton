@@ -56,7 +56,7 @@ def test_sponge_matches_hashlib(name, msglen):
         assert got[i].tobytes() == want, (name, msglen, i)
 
 
-@pytest.mark.parametrize("outlen", [32, 64, 136, 272, 408])
+@pytest.mark.parametrize("outlen", [32, 64, 136, 272, 408, 2624])
 def test_sponge_multi_block_squeeze(outlen):
     rng = np.random.default_rng(outlen)
     msgs = rng.integers(0, 256, (3, 40), dtype=np.uint8)

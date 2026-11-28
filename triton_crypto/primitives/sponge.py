@@ -75,8 +75,8 @@ def gen_sponge_source(rate: int, outlen: int) -> str:
     nw = rate // 8
     if rate % 8 or outlen % 8:
         raise ValueError(f"rate and outlen must be multiples of 8, got {rate} and {outlen}")
-    if outlen > 16 * rate:
-        raise ValueError(f"outlen {outlen} needs more than 16 squeeze blocks (rate {rate})")
+    if outlen <= 0 or outlen > 64 * rate:
+        raise ValueError(f"outlen {outlen} must be in (0, 64 * rate] (rate {rate})")
 
     L = ["import triton", "import triton.language as tl", "", "@triton.jit"]
     # NB / ROW are runtime arguments: the block count no longer has to be
@@ -101,20 +101,43 @@ def gen_sponge_source(rate: int, outlen: int) -> str:
     L.append("            rc = tl.load(RCP + _r)")
     _emit_rounds(L, 0, ind="            ", rc_expr="rc")
 
-    # squeeze: may take multiple blocks (e.g. at eta=3 PRF needs 192B > rate 136B)
+    # squeeze: single-block stays flat; multi-block rolls the full-block squeezes so XOF
+    # outputs like Falcon-1024's 2624 B (20 blocks) keep one copy of the 24-round loop.
     nfull = outlen // rate
     rem = outlen - nfull * rate
-    blocks = [rate] * nfull + ([rem] if rem else [])
-    for bi, blen in enumerate(blocks):
-        for lane in range(blen // 8):
+    if nfull == 1:
+        for lane in range(nw):
             L.append(
-                f"    tl.store(OUT + offs * OUTW + {bi * nw + lane}, "
+                f"    tl.store(OUT + offs * OUTW + {lane}, "
                 f"a{lane}.to(tl.int64, bitcast=True), mask=m)"
             )
-        if bi < len(blocks) - 1:
+        if rem > 0:
             L.append("    for _r in range(0, 24, 1):")
             L.append("        rc = tl.load(RCP + _r)")
             _emit_rounds(L, 0, ind="        ", rc_expr="rc")
+    elif nfull >= 2:
+        loop_blocks = nfull if rem > 0 else nfull - 1
+        L.append(f"    for _sb in range(0, {loop_blocks}, 1):")
+        for lane in range(nw):
+            L.append(
+                f"        tl.store(OUT + offs * OUTW + _sb * {nw} + {lane}, "
+                f"a{lane}.to(tl.int64, bitcast=True), mask=m)"
+            )
+        L.append("        for _r in range(0, 24, 1):")
+        L.append("            rc = tl.load(RCP + _r)")
+        _emit_rounds(L, 0, ind="            ", rc_expr="rc")
+        if rem == 0:
+            for lane in range(nw):
+                L.append(
+                    f"    tl.store(OUT + offs * OUTW + {(nfull - 1) * nw + lane}, "
+                    f"a{lane}.to(tl.int64, bitcast=True), mask=m)"
+                )
+    if rem > 0:
+        for lane in range(rem // 8):
+            L.append(
+                f"    tl.store(OUT + offs * OUTW + {nfull * nw + lane}, "
+                f"a{lane}.to(tl.int64, bitcast=True), mask=m)"
+            )
     return "\n".join(L) + "\n"
 
 

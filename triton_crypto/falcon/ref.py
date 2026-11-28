@@ -1,21 +1,21 @@
-"""Falcon-512 verification, numpy reference: the definitions the device path is judged by.
+"""Falcon-512 and Falcon-1024 verification, numpy reference: the definitions the device path is judged by.
 
-Everything here mirrors `pqclean_falcon-512_clean` line for line, because the details are
+Everything here mirrors `pqclean_falcon-{512,1024}_clean` line for line, because the details are
 where Falcon verification actually lives:
 
     comp_decode     signatures are *variable length*: per coefficient, one byte carrying the
                     sign and the low 7 bits of the magnitude, then a unary continuation
-                    (each 0 bit adds 128, a 1 bit ends it), so 654-666 bytes in practice.
-                    "-0" is forbidden and the last byte's unused bits must be zero.
+                    (each 0 bit adds 128, a 1 bit ends it). "-0" is forbidden and the last
+                    byte's unused bits must be zero.
     modq_decode     public keys are a 14-bit MSB-first stream; a coefficient >= q is invalid
                     and the padding bits must be zero.
     hash_to_point   SHAKE256(nonce || m) -> 16-bit big-endian samples -> keep w < 5q (otherwise
                     reject) -> w mod q -> the first n accepted samples, in order. The reference
-                    does this with a branch-free compaction over `n + 205` samples; filtering
-                    in order gives the same sequence (the probability of running out of samples
-                    is below 2^-256).
-    is_short        sum(s1[u]^2 + s2[u]^2) <= 34034726, with s1 = c - s2*h normalised into
-                    [-q/2, q/2] and s2 the *decoded* signed coefficients.
+                    does this with a branch-free compaction over `n + oversample` samples
+                    (205 for 512, 287 for 1024); filtering in order gives the same sequence.
+    is_short        sum(s1[u]^2 + s2[u]^2) <= l2bound (34 034 726 for 512; 70 265 242 for 1024),
+                    with s1 = c - s2*h normalised into [-q/2, q/2] and s2 the *decoded* signed
+                    coefficients.
 
 The public key arrives in NTT+Montgomery form in the reference (`to_ntt_monty`), but that only
 matters to the C implementation: a plain NTT, a pointwise product and an inverse NTT compute
@@ -214,18 +214,19 @@ def verify(pk: bytes, message: bytes, sig: bytes, params: FalconParams = FALCON_
     return ok
 
 
-def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512):
+def comp_decode_batch_np(
+    bodies: list[bytes], params: FalconParams = FALCON_512, padded: bool = False
+):
     """Vectorised `comp_decode` over a batch: the per-coefficient scan, one numpy op per step.
 
     The code is a prefix code whose coefficients are not byte-aligned, so a batch cannot be
     decoded with a single bit-gather. But the *scan* can be vectorised over the batch: fix the
-    coefficient index `u`, and all rows do step `u` together. 512 steps of ~20 numpy ops each
-    decodes 4096 signatures in well under a second, where the per-signature Python loop needs
-    ~134 us each.
+    coefficient index `u`, and all rows do step `u` together.
 
-    Returns `(coefficients [B, n] int64, ok [B] bool, used [B] int64)`. `ok` is the *strict*
-    rule (the body must be consumed exactly); the padded variant relaxes that, so the caller
-    gets `used` and decides. A malformed row is reported, not raised -- the caller is a verifier.
+    Returns `(coefficients [B, n] int32, ok [B] bool, used [B] int64)`. When `padded=False`
+    the body must be consumed exactly; when `padded=True` a valid stream of length
+    `sig_padded - 1 - nonce_len` with all-zero trailing bytes is also accepted. A malformed row
+    is reported, not raised -- the caller is a verifier.
     """
     B = len(bodies)
     if B == 0:
@@ -275,10 +276,20 @@ def comp_decode_batch_np(bodies: list[bytes], params: FalconParams = FALCON_512)
         x[:, u] = np.where(sign, -mag, mag)
         pos = pos + 8 + k + 1
 
-    # Unused bits of the last used byte must be zero, and the body must be fully consumed.
+    # Unused bits of the last used byte must be zero, and the body must be fully consumed
+    # (or zero-padded to `sig_padded - 1 - nonce_len` when `padded=True`).
     consumed_bytes = (pos + 7) >> 3
     last_byte = buf[rows, np.minimum(consumed_bytes - 1, width - 1)].astype(np.int64)
     tail_bits = (8 - (pos & 7)) & 7
     ok &= ((last_byte & ((1 << tail_bits) - 1)) == 0) | (tail_bits == 0)
-    ok &= consumed_bytes == lens
+    exact_len = consumed_bytes == lens
+    if padded:
+        pad_len = params.sig_padded - 1 - params.nonce_len
+        pad_ok = np.zeros(B, dtype=bool)
+        for i in np.nonzero(ok & (~exact_len) & (lens == pad_len))[0]:
+            if not any(bodies[i][int(consumed_bytes[i]) :]):
+                pad_ok[i] = True
+        ok &= exact_len | pad_ok
+    else:
+        ok &= exact_len
     return x, ok, consumed_bytes
