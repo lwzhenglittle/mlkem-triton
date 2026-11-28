@@ -1,10 +1,10 @@
-# Local GPU vs CPU Full Benchmark — 2026-11-28T07:44:58+00:00
+# GPU vs CPU Full Benchmark — 2026-11-28T07:44:58+00:00
 
-- **Host**: `spark-ceb3` (`Intel(R) Core(TM) Ultra X7 358H`, 16 logical CPUs)
+- **Host**: `spark-ceb3` (`aarch64` / Grace ARM64)
 - **GPU**: `NVIDIA GB10 (cuda, capability 12.1)` (`torch 2.14.0+cu130`, `triton 3.8.0`)
 - **Copy bandwidth (same window)**: **232.4 GB/s** (read+write)
 - **Git HEAD**: `29d085c` (dirty)
-- **CPU baseline**: `benchmarks/cpu_baseline_barrier.json` (`barrier (one timed round per process, sum of units over the union window)`, timestamp `2026-11-27T22:58:05+0800`)
+- **CPU baseline**: `benchmarks/cpu_baseline_barrier.json` (`Intel(R) Core(TM) Ultra X7 358H`, 16 logical CPUs on `lwzheng-TB14-AOSC`, `barrier (one timed round per process, sum of units over the union window)`, timestamp `2026-11-27T22:58:05+0800`)
 - **Power state**: `{"cur_freq_mhz_max": 3900, "cur_freq_mhz_median": 3900}`
 
 ## Part A — Schemes × Parameter Sets × Operations (Dev + E2E vs 1T / 16P)

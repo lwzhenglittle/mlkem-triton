@@ -2,8 +2,11 @@
   "meta": {
     "timestamp_utc": "2026-11-28T07:44:58+00:00",
     "host": "spark-ceb3",
-    "cpu": "Intel(R) Core(TM) Ultra X7 358H",
-    "nproc": 16,
+    "host_arch": "aarch64",
+    "host_cpu": "Grace ARM64",
+    "cpu_baseline_host": "lwzheng-TB14-AOSC",
+    "cpu_baseline_cpu": "Intel(R) Core(TM) Ultra X7 358H",
+    "cpu_baseline_nproc": 16,
     "gpu": "NVIDIA GB10 (cuda, capability 12.1)",
     "torch": "2.14.0+cu130",
     "triton": "3.8.0",

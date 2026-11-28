@@ -681,14 +681,19 @@ def _render_md(
             return "n/a"
         return f"{v:.1f}×" if v >= 10 else f"{v:.2f}×"
 
+    host_cpu = meta.get("host_cpu") or meta.get("host_arch", "unknown")
+    host_nproc = meta.get("host_nproc")
+    base_cpu = meta.get("cpu_baseline_cpu") or meta.get("cpu", "unknown")
+    base_nproc = meta.get("cpu_baseline_nproc") or meta.get("nproc")
+    base_host = meta.get("cpu_baseline_host", "unknown")
     lines = [
-        f"# Local GPU vs CPU Full Benchmark — {meta['timestamp_utc']}",
+        f"# GPU vs CPU Full Benchmark — {meta['timestamp_utc']}",
         "",
-        f"- **Host**: `{meta['host']}` (`{meta['cpu']}`, {meta['nproc']} logical CPUs)",
+        f"- **Host**: `{meta['host']}` (`{host_cpu}`, {host_nproc} logical CPUs)",
         f"- **GPU**: `{meta['gpu']}` (`torch {meta['torch']}`, `triton {meta['triton']}`)",
         f"- **Copy bandwidth (same window)**: **{copy_bw:.1f} GB/s** (read+write)",
         f"- **Git HEAD**: `{meta['git_head']}`{' (dirty)' if meta['git_dirty'] else ''}",
-        f"- **CPU baseline**: `{meta['cpu_baseline_file']}` (`{meta['cpu_baseline_method']}`, timestamp `{meta['cpu_timestamp']}`)",
+        f"- **CPU baseline**: `{meta['cpu_baseline_file']}` (`{base_cpu}`, {base_nproc} logical CPUs on `{base_host}`, `{meta['cpu_baseline_method']}`, timestamp `{meta['cpu_timestamp']}`)",
         f"- **Power state**: `{json.dumps(meta['power'], sort_keys=True)}`",
         "",
         "## Part A — Schemes × Parameter Sets × Operations (Dev + E2E vs 1T / 16P)",
@@ -765,11 +770,24 @@ def main() -> int:
     print("# Part C: Breakeven sweep ...", flush=True)
     brk = _bench_breakeven(dev, rivals, oqs_so)
 
+    def _local_cpu_model() -> str:
+        try:
+            for ln in Path("/proc/cpuinfo").read_text().splitlines():
+                if ln.startswith("model name"):
+                    return ln.split(":", 1)[1].strip()
+        except OSError:
+            pass
+        return platform.processor() or platform.machine()
+
     meta = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "host": platform.node(),
-        "cpu": cpu_meta.get("cpu", "unknown"),
-        "nproc": cpu_meta.get("nproc"),
+        "host_arch": platform.machine(),
+        "host_cpu": _local_cpu_model(),
+        "host_nproc": os.cpu_count(),
+        "cpu_baseline_host": cpu_meta.get("host", "unknown"),
+        "cpu_baseline_cpu": cpu_meta.get("cpu", "unknown"),
+        "cpu_baseline_nproc": cpu_meta.get("nproc"),
         "gpu": devices.describe(dev),
         "torch": torch.__version__,
         "triton": __import__("triton").__version__,
