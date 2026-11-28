@@ -261,6 +261,7 @@ More, including the keygen gap against cuPQC: [docs/compare.md](docs/compare.md)
 - [docs/design.md](docs/design.md) — Toeplitz argument, fp16 exactness proof, fusion catalogue
 - [docs/benchmarks.md](docs/benchmarks.md) — all measured tables and how they were taken
 - [docs/support.md](docs/support.md) — backend status and tuning knobs
+- [docs/portability.md](docs/portability.md) — three-platform correctness, performance and bring-up lessons
 - [docs/compare.md](docs/compare.md) — cuPQC, HI-Kyber, ConvKyber, TensorCrypto
 - [CHANGELOG.md](CHANGELOG.md) — release notes
 - [CONTRIBUTING.md](CONTRIBUTING.md) — setup, tests, a new backend, measurement discipline
