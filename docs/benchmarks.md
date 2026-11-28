@@ -358,6 +358,36 @@ End-to-end stage breakdown at `B = 4096` (measured with `benchmarks/bench_falcon
 
 **How `comp_decode` flipped from a 35× loss to a 168×–232× win:** an early GPU `comp_decode` attempt ran 3-byte uncoalesced gathers plus global CLZ lookup tables per coefficient and measured **2.6 ms/sig** (~190× slower than the 13.5 µs host NumPy scan). Replacing it with (1) a single flat `b"".join(signatures)` upload, (2) `_pack_sig_words_kernel` transposing bodies into `[W, B]` big-endian `uint32` words, (3) a **64-bit register bit reservoir** (`acc`, `acc_len`) that refills one coalesced `uint32` word only ~32% of steps, (4) a 4-stage **branchless 16-bit CLZ** with zero lookup tables, and (5) keeping `c_t` and `s2_t` device-resident through `verify_core_torch` cut Falcon-512 end-to-end verification from **15.35 µs → 0.90 µs** (**17× faster**, flipping `0.22×` → **`2.88–2.94×` vs 16P CPU**). For Falcon-1024, rolling multi-block SHAKE256 squeezes in `primitives/sponge.py` enables the 20-block (`2624 B`) `HashToPoint` stream cleanly with one copy of the 24-round loop.
 
+### 3.6 MAYO, UOV, and Ed25519 / X25519 (Arc B390 vs NVIDIA GB10)
+
+All three subpackages ran bit-exact without backend-specific kernel edits on both **Intel Arc B390** (`torch 2.15+xpu`, `triton-xpu 3.9`) and **NVIDIA DGX Spark GB10** (`sm_121`, `torch 2.15+cu132`, `triton 3.9`).
+
+**Ed25519 / X25519 — 1-level Karatsuba (`75`-mul `_fe_mul` / `45`-mul `_fe_sq` vs 100-mul schoolbook):**
+
+| Workload | Batch | B390 schoolbook → Karatsuba | B390 speedup | GB10 schoolbook → Karatsuba | GB10 speedup |
+|---|---:|---:|---:|---:|---:|
+| X25519 (`x25519_torch`) | 4096 | `119.2` → **`270.4 kops/s`** | **2.27×** | `1605.5` → **`1947.3 kops/s`** | **1.21×** |
+| X25519 (`x25519_torch`) | 16384 | — | — | `2141.6` → **`2606.2 kops/s`** | **1.22×** |
+| Ed25519 verify core | 4096 | `46.6` → **`95.8 kops/s`** | **2.06×** | `933.0` → **`1100.4 kops/s`** (full `1075.3`) | **1.18×** |
+| Ed25519 verify core | 16384 | — | — | `1254.1` → **`1473.0 kops/s`** | **1.17×** |
+
+Why the Karatsuba speedup is `2.06–2.27×` on Arc B390 vs `1.17–1.22×` on GB10: Xe3 emulates 64-bit integer multiplies via multi-instruction 32-bit sequences, so cutting 25%–55% of `int64` multiplies directly removes the primary ALU bottleneck; Blackwell (`sm_121`) has much higher IMAD throughput, so Karatsuba's extra additions/shifts and live intermediates offset part of the multiply reduction while still delivering a clean ~20% net win with zero regressions.
+
+**MAYO & UOV batched verification (`B = 4096`, full on-device `verify_torch`, coalesced packed-`uint32`):**
+
+| Parameter set | Field | Arc B390 (`kops/s`) | NVIDIA GB10 (`kops/s`) | GB10 / B390 |
+|---|---|---:|---:|---:|
+| MAYO-1 | `GF(16)` | 212.2 | **641.3** | 3.02× |
+| MAYO-2 | `GF(16)` | 655.6 | **2258.0** | 3.44× |
+| MAYO-3 | `GF(16)` | 76.8 | **233.7** | 3.04× |
+| MAYO-5 | `GF(16)` | 32.5 | **101.3** | 3.12× |
+| OV-Is | `GF(16)` | 701 | **2096.7** | 2.99× |
+| OV-Ip | `GF(256)` | 589.2 | **1441.6** | 2.45× |
+| OV-III | `GF(256)` | 158 | **385.6** | 2.44× |
+| OV-V | `GF(256)` | 67.6–72.5 | **173.0** | 2.4–2.6× |
+
+**Why MAYO stays on fused coalesced `uint32` instead of 9-plane Karatsuba Tensor Cores on both GPUs:** even though GB10 reaches **3.77 TMAC/s** on dense `GF(16)` Karatsuba GEMM (§4.4), a paired `B = 512` measurement of **just the `PS = P · S^T` GEMM** via `gf16_matmul_from_planes_torch` takes `3.78 / 1.00 / 6.73 / 13.44 ms` for MAYO-1/2/3/5 vs `0.95 / 0.30 / 2.40 / 5.35 ms` for the complete fused `verify_core_torch` (`PS + S·PS + fold`) — coalesced packed-`uint32` remains **2.51×–3.97× faster** on GB10 (and `3.5–4.0×` faster on B390) because materializing 9 binary planes of `[n·m, B·k]` blows up DRAM traffic.
+
 ---
 
 ## 4. Scheme-agnostic primitives
@@ -398,10 +428,19 @@ End-to-end stage breakdown at `B = 4096` (measured with `benchmarks/bench_falcon
 
 The CPU rival at `1024³` is `torch.mm` on `fp32` inputs cast from `int8` (`1024 × 128² = 2²⁴`, bit-exact in IEEE 754 float32, utilizing CPU AVX2/FMA SGEMM: `66.5 GMAC/s` 1T, `409 GMAC/s` 16P barrier).
 
-- **`gf2_8_matmul_torch` (64 bit-plane int8 GEMMs XORed via AES polynomial)**:
-  - At `512³`: `13.7–15.3 GMAC/s` (`54–56×` below one int8 GEMM).
-  - At `1024³`: **`33.5–33.8 GMAC/s`** (`60–61×` below one int8 GEMM at `2 040 GMAC/s` in that window).
-  - Decomposition overhead is `~1/57` of the int8 rate, giving an honest empirical ceiling for bit-plane matrix-unit finite-field GEMMs before any field-specific tiling or VNNI rival comparison.
+- **`gf2_8_matmul_torch` (3-level 27-plane Karatsuba) & `gf16_matmul_torch` (2-level 9-plane Karatsuba) at `1024³`**:
+
+| Workload (`1024³`) | Path | Arc B390 (XPU) | NVIDIA GB10 (`sm_121`) |
+|---|---|---:|---:|
+| `GF(2^8)` mod `0x11B` | Old 64-launch schoolbook | `33.5 GMAC/s` | `122.6 GMAC/s` (`8.758 ms`) |
+| `GF(2^8)` mod `0x11B` | 64-plane 3-D batched (no recombine) | — | `426.1 GMAC/s` (`2.520 ms`) |
+| `GF(2^8)` mod `0x11B` | **27-plane Karatsuba** (`gf2_8_matmul_torch`) | **`234.3 GMAC/s`** (**7.0×** vs old) | **`1155.6 GMAC/s`** (`0.929 ms`, **9.43×** vs old, **2.71×** vs 64-batched) |
+| `GF(16)` mod `x^4+x+1` | 16-plane 3-D batched (no recombine) | — | `1549.6 GMAC/s` (`0.693 ms`) |
+| `GF(16)` mod `x^4+x+1` | **9-plane Karatsuba** (`gf16_matmul_torch`) | **`486.9 GMAC/s`** (`2.205 ms`) | **`3765.1 GMAC/s`** (`0.285 ms`, **3.77 TMAC/s**, **2.43×** vs 16-batched) |
+
+Isolating Karatsuba from 3-D batching on GB10 confirms pure algorithmic speedups of **2.71×** (`GF(2^8)`) and **2.43×** (`GF(16)`), slightly exceeding the theoretical `64/27 = 2.37×` and `16/9 = 1.78×` MAC reductions because expanded binary-plane memory traffic drops proportionally too.
+
+> **Known limitation (TODO):** `_gemm_int8_batched_kernel` and the Karatsuba plane-expand/recombine kernels currently compute plane pointer offsets in signed `int32`; outputs with `P * M * N >= 2^31` (observed on GB10 at `[9, 6708, 40960]`) wrap negative and trigger an illegal memory access. Tracked as a `TODO(int64-offset)` in `triton_crypto/primitives/gemm.py`.
 
 ---
 

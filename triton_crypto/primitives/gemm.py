@@ -110,7 +110,13 @@ def _gemm_int8_batched_kernel(
     BN: tl.constexpr,
     BK: tl.constexpr,
 ):
-    """Batched 3-D binary-plane GEMM: `[P, M, K] int8 @ [P, K, N] int8 -> [P, M, N] uint8` (mod 2)."""
+    """Batched 3-D binary-plane GEMM: `[P, M, K] int8 @ [P, K, N] int8 -> [P, M, N] uint8` (mod 2).
+
+    TODO(int64-offset): Promote `pid_p`, `offs_m`, `offs_n`, and `sa_p`/`sb_p`/`so_p` pointer
+    arithmetic to `tl.int64` here and in `_gf16_kara9_*` / `_gf256_kara27_*` below. Currently
+    signed `int32` plane offsets overflow when `P * M * N >= 2^31` (observed on CUDA GB10 at
+    `[9, 6708, 40960] = 2.47e9` elements -> `CUDA_ERROR_ILLEGAL_ADDRESS`).
+    """
     pid_m = tl.program_id(0)
     pid_n = tl.program_id(1)
     pid_p = tl.program_id(2)
@@ -132,6 +138,9 @@ def _gemm_int8_batched_kernel(
     tl.store(o_ptrs, (acc & 1).to(tl.uint8), mask=(offs_m[:, None] < M) & (offs_n[None, :] < N))
 
 
+# TODO(int64-offset): Promote `idx` and `n_elems` to `tl.int64` in the four Karatsuba
+# expand/recombine kernels below so `k * n_elems + idx` does not overflow signed `int32`
+# when `P * n_elems >= 2^31` (9 planes for GF(16), 27 planes for GF(2^8)).
 @triton.jit
 def _gf16_kara9_planes_kernel(X, PLANES, n_elems, BLOCK: tl.constexpr):
     """Expand `[n_elems]` uint8 GF(16) values into 9 Karatsuba binary planes `[9, n_elems]` int8."""

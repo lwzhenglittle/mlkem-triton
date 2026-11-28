@@ -31,12 +31,12 @@ and benchmarked on both Intel XPU and NVIDIA CUDA (`benchmarks/local-gpu-vs-cpu-
 | `primitives.poly1305` | Poly1305 + ChaCha20-Poly1305 AEAD | ✅ | ✅ | RFC 8439 §2.5.2 / §2.8.2, OpenSSL EVP_MAC |
 | `primitives.poseidon2` | Poseidon2-BabyBear/16 | ✅ | ✅ | Plonky3 0.8 (its own `kat` output) |
 | `primitives.aes` | AES-128-CTR, T-table (a measurement, not a fast path) | ✅ | ✅ | FIPS-197 C.1, `openssl enc -aes-128-ctr` |
-| `primitives.gemm` | exact `int8 x int8 -> int32` | ✅ | ✅ | numpy, and a bit-plane GF(2^8) product |
+| `primitives.gemm` | exact `int8 x int8 -> int32`, plus 9-plane `GF(16)` and 27-plane `GF(2^8)` Karatsuba batched GEMMs | ✅ | ✅ | numpy, schoolbook `GF(16)` / `GF(2^8)` |
 | `primitives.blake3` | BLAKE3 (tree hash) | ✅ | ✅ | the official Rust implementation's 26 KAT vectors |
-| `primitives.sm3` | SM3 cryptographic hash (GB/T 32905-2016) | ✅ | ⚠️ untested | GB/T 32905-2016 vectors, OpenSSL / `hashlib` |
-| `primitives.ascon` | Ascon-Hash256 & Ascon-AEAD128 (SP 800-232) + Ascon-128a (v1.2) | ✅ | ⚠️ untested | NIST SP 800-232 empty KAT, numpy reference |
+| `primitives.sm3` | SM3 cryptographic hash (GB/T 32905-2016) | ✅ | ✅ | GB/T 32905-2016 vectors, OpenSSL / `hashlib` |
+| `primitives.ascon` | Ascon-Hash256 & Ascon-AEAD128 (SP 800-232) + Ascon-128a (v1.2) | ✅ | ✅ | NIST SP 800-232 empty KAT, numpy reference |
 
-Additional scheme subpackages verified on Intel XPU (`Arc B390`) with pure-Triton kernels (not yet measured on CUDA): `triton_crypto.mayo` (MAYO-1/2/3/5 vs liboqs KATs), `triton_crypto.uov` (OV-Is/Ip/III/V classic & `-pkc` vs liboqs KATs), and `triton_crypto.ed25519` (RFC 8032 Ed25519 verify + RFC 7748 X25519).
+Additional scheme subpackages verified bit-exact and benchmarked on both Intel XPU (`Arc B390`, torch 2.15 + triton-xpu 3.9) and NVIDIA CUDA (`DGX Spark GB10 / sm_121`, torch 2.15+cu132 + triton 3.9) with zero CUDA-specific kernel changes: `triton_crypto.mayo` (MAYO-1/2/3/5 vs liboqs KATs), `triton_crypto.uov` (OV-Is/Ip/III/V classic & `-pkc` vs liboqs KATs), and `triton_crypto.ed25519` (RFC 8032 Ed25519 verify + RFC 7748 X25519).
 
 Both the Intel XPU (`Arc B390`) and NVIDIA CUDA (`DGX Spark GB10 / sm_121`) rows were **actually
 run on real hardware**: same pure-Triton kernels, same ACVP / RFC / Plonky3 / BLAKE3 / Falcon KAT

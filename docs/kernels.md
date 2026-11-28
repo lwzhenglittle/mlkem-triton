@@ -329,22 +329,24 @@ avoid `uint32 >> 32` UB (which caused the Xe backend to fold kernel stores to ze
 
 ## Composite primitive wrappers
 
-### `gf2_8_matmul_torch(a, b, device=None, planes=None)` — `primitives/gemm.py`
+### `gf2_8_matmul_torch(a, b, device=None, planes=None, tile=None)` — `primitives/gemm.py`
 
-A product in `GF(2^8)` with the AES polynomial `x^8 + x^4 + x^3 + x + 1`, assembled from bit-plane
-int8 GEMMs (`docs/benchmarks.md` §4.4).
+A product in `GF(2^8)` with the AES polynomial `x^8 + x^4 + x^3 + x + 1` (`docs/benchmarks.md` §4.4).
 
 | argument | shape | dtype | meaning |
 |---|---|---|---|
-| `a` | `[M, K]` | anything `np.asarray` reads as `uint16` | byte values |
+| `a` | `[M, K]` | `uint8` (or array-like convertible to `uint8`) | byte values |
 | `b` | `[K, N]` | same | byte values |
 | `device` | — | — | resolved via `devices.resolve_device` |
-| `planes` | — | — | `8` (full bytes) or `1` for binary operands |
+| `planes` | — | — | `None` / `8` (27-plane Karatsuba), `1` (single binary GEMM), or `2..7` fallback |
 
-Returns an `int32` tensor on the device. It is not a `@triton.jit` kernel: it dispatches
-`planes²` (64 for full bytes) `gemm_int8_torch` calls and XORs the reduction-masked results
-together (~1/57 of the int8 GEMM rate at `1024³`). Raises `ValueError` when inner dimensions
-disagree.
+Returns an `int32` tensor on the device. For full `GF(2^8)` (`planes=None` or `8`), expands `a` and `b` on-device into 27 Karatsuba binary planes (`_gf256_kara27_planes_kernel`), runs one 3-D batched XMX/Tensor-Core GEMM (`_gemm_int8_batched_kernel`), and recombines mod `0x11B` (`_gf256_kara27_recombine_kernel`) — **7.0×** faster on Arc B390 (`234.3 GMAC/s`) and **9.43×** faster on NVIDIA GB10 (`1155.6 GMAC/s` at `1024³`) than the old 64-launch schoolbook path. Raises `ValueError` when inner dimensions disagree.
+
+### `gf16_matmul_torch(a, b, device=None, tile=None)` — `primitives/gemm.py`
+
+A product in `GF(16)` mod `x^4 + x + 1` via 2-level **9-plane Karatsuba** (`_gf16_kara9_planes_kernel` → `_gemm_int8_batched_kernel` → `_gf16_kara9_recombine_kernel`), returning `[M, N] uint8` (`486.9 GMAC/s` on Arc B390, **`3765.1 GMAC/s` / 3.77 TMAC/s** on NVIDIA GB10 at `1024³`). `gf16_expand_planes_torch` and `gf16_matmul_from_planes_torch` expose pre-expanded `[9, M, K]` planes for repeated products with a fixed matrix.
+
+> **Known limitation (`TODO(int64-offset)` in `primitives/gemm.py`):** `_gemm_int8_batched_kernel` and the Karatsuba expand/recombine kernels compute plane pointer offsets in `int32`, so inputs/outputs with `P * M * N >= 2^31` overflow signed 32-bit offsets.
 
 ---
 
