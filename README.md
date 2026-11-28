@@ -11,7 +11,7 @@ Post-quantum schemes:
 | ML-DSA | sign, verify | FIPS 204 |
 | SLH-DSA | verify (all 12 parameter sets) | FIPS 205 |
 | LMS / HSS | verify (SHA-256/256 and /192) | SP 800-208 |
-| Falcon | verify (Falcon-512 and Falcon-padded-512) | FIPS 206 draft |
+| Falcon | verify (Falcon-512 / Falcon-1024, unpadded & padded) | FIPS 206 draft |
 
 And the scheme-agnostic primitives underneath them, usable on their own:
 
@@ -28,7 +28,7 @@ And the scheme-agnostic primitives underneath them, usable on their own:
 | `primitives.blake3` | BLAKE3 — the tree hash, one launch per block index and per level |
 | `primitives.gemm` | exact int8 GEMM (3.8–4.0 TMAC/s, **9.0–9.3×** vs 16P CPU at n = 1024), the GF(2^k) GEMM substrate |
 
-**1221 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
+**1232 tests** (`pytest -q`; the number is in this line because prose cannot run it) —
 NIST ACVP vectors, RFC 8439 vectors, Plonky3 Poseidon2 vectors, offline Falcon KATs, liboqs
 cross-checks and independent numpy references. Each scheme has its own subpackage (`triton_crypto.mlkem`, `.mldsa`, `.slhdsa`,
 `.lms`, `.falcon`) and so does the primitive layer; the top level re-exports the ML-KEM entry points for
@@ -115,15 +115,17 @@ ok = v.verify(messages, signatures)  # any HSS depth up to 8
 ```python
 from triton_crypto.falcon import Verifier
 
-v = Verifier(pk)  # Falcon-512 (897 bytes, header 0x09)
-ok = v.verify(messages, signatures)  # -> [B] bool (padded=True for Falcon-padded-512)
+v = Verifier(pk)  # auto-detects Falcon-512 (897 B) or Falcon-1024 (1793 B)
+ok = v.verify(messages, signatures)  # -> [B] bool (padded=True accepts padded + unpadded)
 ```
 
 Falcon verification is integer-only, so it is bit-exact by construction; signing needs the
 floating-point FFT and Gaussian sampler, which this code base deliberately does not port.
-`Verifier.verify` runs `comp_decode` on the host (35× faster than a device scan) and `HashToPoint`
-on the device for uniform-length batches, so end-to-end is decode-bound (15.3–16.7 µs/op);
-`verify_core_torch` is the device-only entry point (0.60–0.61 µs/op).
+`Verifier.verify` runs the entire pipeline on the device — prefix decoding (`_comp_decode_kernel`),
+`HashToPoint` (for uniform-length batches), NTT multiplication, and the L2 norm check — reaching
+**0.90–0.92 µs/op** end-to-end for Falcon-512 (**2.9×** vs 16P CPU) and **2.18–2.22 µs/op** for
+Falcon-1024 (**2.3–2.4×** vs 16P CPU); `verify_core_torch` is the device-only entry point
+(**0.32 µs/op** / **1.14–1.19 µs/op**).
 
 SLH-DSA verification covers all twelve sets (SHAKE and SHA-2); signing is not implemented. LMS/HSS
 verification covers both approved SHA-256 families; the SP 800-208 SHAKE-256 sets are not
@@ -164,33 +166,36 @@ Representative device-side numbers; the baseline is measured on the same machine
 
 | workload | batch | this library | baseline |
 |---|---:|---:|---|
-| ML-KEM-768 decaps | 4096 | **125 ns/op** (GB10), **274 ns/op** (B390) | 6.8× vs liboqs 16T (GB10); **6.7× dev / 3.2× e2e** vs 16P (B390) |
-| ML-KEM-768 encaps | 4096 | **88 ns/op** (GB10), **191 ns/op** (B390) | 2.3× faster than cuPQC (GB10); **8.0× dev / 3.2× e2e** vs 16P (B390) |
-| ML-KEM-768 keygen | 4096 | 469 ns/op (GB10), 1.38 µs/op (B390) | 2.7× slower than cuPQC (GB10); 1.00× dev / 0.79× e2e vs 16P (B390) |
-| ML-DSA-44 verify | 4096 | **1.9 µs/op** (B390) | **1.6× dev / 1.1× e2e** vs liboqs 16P (barrier), 8.4× vs 1T |
-| ML-DSA-44 sign | 1024 | **34 µs/sig** (B390) | 1.3× vs liboqs 1T, 0.24× vs 16P |
-| SLH-DSA-SHAKE-128f verify | 4096 | **50.1 µs/op** (B390) | **3.4×** vs liboqs SHAKE-128f 16P, 24.4× vs 1T (SHA2-128f: **4.0×** 16P) |
-| Falcon-512 verify | 4096 | **0.60 µs/op** (B390) dev core, 16.7 µs e2e | **5.7×** dev / 0.20× e2e vs liboqs 16P, 38.3× dev vs 1T |
-| BabyBear NTT, 2^20 points | 1 | **0.90 ms** (B390; 0.85–1.6 ms range) | **5.9× dev / 1.2× e2e** vs 16 CPU processes, 58.2× dev vs 1T |
-| BLAKE3, 1 KiB messages | 65536 | **10.1 GB/s** (B390) | 7.5× vs 1T, 0.64× vs 16 processes |
+| ML-KEM-768 decaps | 4096 | **125 ns/op** (GB10), **273 ns/op** (B390) | 6.8× vs liboqs 16T (GB10); **6.7× dev / 3.3× e2e** vs 16P (B390) |
+| ML-KEM-768 encaps | 4096 | **88 ns/op** (GB10), **189–194 ns/op** (B390) | 2.3× faster than cuPQC (GB10); **7.8× dev / 3.2× e2e** vs 16P (B390) |
+| ML-KEM-768 keygen | 4096 | 469 ns/op (GB10), 1.46 µs/op (B390) | 2.7× slower than cuPQC (GB10); 0.95× dev / 0.77× e2e vs 16P (B390) |
+| ML-DSA-44 verify | 4096 | **2.0 µs/op** (B390) | **1.5× dev / 1.03× e2e** vs liboqs 16P (barrier), 8.0× vs 1T |
+| ML-DSA-44 sign | 1024 | **37.6 µs/sig** (B390) | 1.2× vs liboqs 1T, 0.22× vs 16P |
+| SLH-DSA-SHAKE-128f verify | 4096 | **51.7 µs/op** (B390) | **3.3×** vs liboqs SHAKE-128f 16P, 23.5× vs 1T (SHA2-128f: **3.9×** 16P) |
+| Falcon-512 verify | 4096 | **0.32 µs/op** (B390) dev core, **0.90 µs** e2e | **8.3×** dev / **2.9×** e2e vs liboqs 16P, 71.7× dev vs 1T |
+| Falcon-1024 verify | 4096 | **1.19 µs/op** (B390) dev core, **2.22 µs** e2e | **4.4×** dev / **2.3×** e2e vs liboqs 16P, 36.7× dev vs 1T |
+| BabyBear NTT, 2^20 points | 1 | **1.58–1.61 ms** (B390; 0.85–1.6 ms range) | **3.3–3.4× dev / 0.94× e2e** (up to 6.1× dev / 1.2× e2e) vs 16P |
+| BLAKE3, 1 KiB messages | 65536 | **9.9 GB/s** (B390) | 7.4× vs 1T, 0.62× vs 16 processes |
 | LMS/HSS (RFC 8554 case 2) | 4096 | **7.1 µs/op** (B390) | no liboqs baseline |
 
 GB10 = DGX Spark `sm_121`; B390 = Intel Arc B390 (Xe3-LPG). Device-side excludes H2D/D2H.
-Every B390 row is from `benchmarks/snapshot-20261127T150247Z.md` and the full same-window
-local GPU vs CPU matrix [benchmarks/local-gpu-vs-cpu-20261127.md](benchmarks/local-gpu-vs-cpu-20261127.md)
-(34-rival barrier 16P baseline in `benchmarks/cpu_baseline_barrier.json`); the clock moves these
+Every B390 row is from `benchmarks/snapshot-20261128T063642Z.md` and the full same-window
+local GPU vs CPU matrix [benchmarks/local-gpu-vs-cpu-20261128.md](benchmarks/local-gpu-vs-cpu-20261128.md)
+(36-rival barrier 16P baseline in `benchmarks/cpu_baseline_barrier.json`); the clock moves these
 by up to 2× between sessions, so treat the ratios as the durable part, not the absolutes.
 
 On the barrier 16P baseline (matched 1 KiB message sizes, one timed round per process behind a
 barrier), **eight primitive rows** beat sixteen CPU processes device-side: exact int8 GEMM
-**9.33×** (**3.81×** e2e), SHAKE-128 **7.77×** (**2.01×** e2e), SHAKE-256 **7.33×** (**2.07×** e2e),
-SHA-512 **6.47×** (**1.93×** e2e), NTT 2^20 **5.91×** (**1.16×** e2e; 3.8–7.3× across clock states),
-SHA3-512 **5.07×** (**2.08×** e2e), SHA3-256 **4.95×** (**1.41×** e2e), and SHA-256 **2.44×**
-(0.48× e2e due to H2D). At the scheme level, **ML-KEM-512/768/1024 encaps & decaps (1.5–8.6× dev,
-1.1–3.8× e2e)**, **ML-DSA-44/65/87 verify (1.6–2.0× dev, 1.1–1.5× e2e)**, **SLH-DSA SHAKE/SHA2-128f
-verify (3.4× / 4.0×)**, and **Falcon-512 core (5.7× dev, 0.20× e2e)** also beat sixteen processes.
-Everything else stays at or below 1.0× (ChaCha20-Poly1305 **0.96×**, BLAKE3 **0.64×**, ChaCha20
-**0.61×**, Poseidon2 **0.57×**, Poly1305 **0.30×**, AES-128-CTR **0.11×**). The before/after
+**8.3–9.3×** (**3.7×** e2e), SHAKE-128 **7.8×** (**2.0×** e2e), SHAKE-256 **7.4×** (**2.1×** e2e),
+SHA-512 **6.3–6.6×** (**2.0×** e2e), SHA3-512 **5.0–5.1×** (**2.1×** e2e), SHA3-256 **4.9–5.0×**
+(**1.4×** e2e), NTT 2^20 **3.3–3.4×** (up to 6.1× across clock states), and SHA-256 **2.4–2.5×**
+(0.49× e2e due to H2D). At the scheme level, **15 scheme operations beat sixteen CPU processes
+end-to-end**: **ML-KEM-512/768/1024 encaps & decaps (1.5–8.4× dev, 1.1–3.8× e2e)**,
+**ML-DSA-44/65/87 verify (1.5–2.0× dev, 1.0–1.4× e2e)**, **SLH-DSA SHAKE/SHA2-128f verify
+(3.3× / 3.9×)**, and **all four Falcon variants — Falcon-512/padded-512 (8.3× dev, 2.9× e2e) and
+Falcon-1024/padded-1024 (4.4–4.6× dev, 2.3–2.4× e2e)**.
+Everything else stays at or below 1.0× (ChaCha20-Poly1305 **0.92×**, BLAKE3 **0.62×**, ChaCha20
+**0.56×**, Poseidon2 **0.54×**, Poly1305 **0.30×**, AES-128-CTR **0.09×**). The before/after
 comparison against the superseded sum-of-minima baseline (1.25–4.25× CPU over-count, median 1.94×)
 is in [benchmarks/table-16p-20261127.md](benchmarks/table-16p-20261127.md). Full tables (including
 Dev vs E2E splits, batch-size breakeven curves, and per-kernel breakdowns):
@@ -206,7 +211,7 @@ so products need 46 bits and the NTT is cheaper. Details: [docs/design.md](docs/
 
 ## Correctness and testing
 
-**1221 tests**, six layers:
+**1232 tests**, six layers:
 
 - **pure maths** — Toeplitz identity, fp16 exactness bound, NTT algebra for both domains;
 - **kernels vs numpy** — every fused kernel byte-equal to its unfused equivalent;

@@ -69,8 +69,11 @@ so generating their source is cheaper than carrying a `tl.static_range` over eve
 | `w1_pack_kernel` | `mldsa/kernels.py` | ML-DSA | `(b, k, cdiv(polyw1_bytes, BC))` | `Verifier._verify_device` |
 | `thash_kernel` | `slhdsa/kernels.py` | SLH-DSA | `(cdiv(rows, BLOCK),)` | `slhdsa/verify.py` |
 | `lms_chain_kernel` | `lms/kernels.py` | LMS / HSS | `(cdiv(rows, BLOCK),)` | `lms.verify.Verifier` |
-| `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 32),)` | `hash_to_point_batch_torch` |
-| `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*512, 4096),)` | `Verifier.verify_core_torch` |
+| `_pack_sig_words_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 64), cdiv(W, 16))` | `Verifier.verify`, `comp_decode_batch_torch` |
+| `_comp_decode_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 128),)` | `Verifier.verify`, `comp_decode_batch_torch` |
+| `_pad_nonce_msg_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, 32), cdiv(PADDED_LEN, 64))` | `Verifier.verify` (uniform message lengths) |
+| `_hash_to_point_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B, BLK),)` | `hash_to_point_batch_torch`, `Verifier.verify` |
+| `_mul_ntt_kernel` | `falcon/kernels.py` | Falcon | `(cdiv(B*N, 4096),)` | `Verifier.verify_core_torch` |
 | `_check_kernel` | `falcon/kernels.py` | Falcon | `(B,)` | `Verifier.verify_core_torch` |
 
 ---
@@ -521,20 +524,56 @@ work for `w = 8`), and the 3-byte-unaligned value words are assembled with word 
 
 ## Falcon (FIPS 206 draft) (`triton_crypto/falcon/`)
 
-`primitives/ntt` handles the `q = 12289, N = 512` forward and inverse transforms with no new
-kernel; the three Falcon-specific launches live in `falcon/kernels.py`.
+`primitives/ntt` handles the `q = 12289, N = 512` (Falcon-512) and `N = 1024` (Falcon-1024) forward
+and inverse transforms with no new NTT kernel; all six Falcon-specific launches live in
+`falcon/kernels.py` so the entire verification pipeline (prefix decode, `HashToPoint`, NTT product,
+and L2 norm check) stays on the device.
 
-### `_hash_to_point_kernel(SAMPLES, OUT, OK, B, N, NSAMP, Q, BLK)` — `falcon/kernels.py`
+### `_pack_sig_words_kernel(FLAT_SIGS, SIG_OFFS, BODY_LENS, WORDS_T, B, BODY_SKIP, W, BLK_B, BLK_W)` — `falcon/kernels.py`
 
-Falcon's `HashToPoint` tail: from `n + 205` candidate 16-bit big-endian samples, keeps values
-`< 5q`, reduces mod `q`, and compacts the first `n` survivors **in order** via an exclusive prefix
-sum (`0.47 µs/sig` at B=4096 vs ~7 µs in NumPy; `docs/benchmarks.md` §3.5).
+Packs variable-length signature bodies from a single flat byte upload into transposed `[W, B]`
+big-endian `uint32` words (zero-padded past `BODY_LENS[b]`). Transposing to `[W, B]` makes the
+subsequent bit-reservoir refills in `_comp_decode_kernel` coalesced across lanes.
 
 | tensor | shape | dtype | meaning |
 |---|---|---|---|
-| `SAMPLES` | `[B, NSAMP]` | `int32` | big-endian 16-bit candidates assembled from SHAKE256 |
-| `OUT` | `[B, n]` | `int32` | first `n` accepted coefficients, in order |
-| `OK` | `[B]` | `bool` | false if a row had fewer than `n` survivors |
+| `FLAT_SIGS` | `[total_bytes]` | `uint8` | concatenated signatures (`b"".join(signatures)`) |
+| `SIG_OFFS`, `BODY_LENS` | `[B]` | `int32` | per-signature start offset and body length |
+| `WORDS_T` | `[W, B]` | `uint32` | transposed big-endian word buffer (`W <= ceil(3*N/4)`) |
+
+### `_comp_decode_kernel(WORDS_T, LENS, OUT, OK, B, W, N, MAX_MAG, PADDED_BODY_LEN, ALLOW_PADDED, BLK)` — `falcon/kernels.py`
+
+Device-side Falcon prefix-code decoder (`BLK = 128`, one SIMD lane per signature). Each lane keeps
+a 64-bit register bit reservoir (`acc`, `acc_len` in `[0, 55]`), refilling one `uint32` word from
+`WORDS_T` whenever `acc_len < 24` (~32% of steps) and computing unary run lengths with a 4-stage
+branchless 16-bit CLZ (zero lookup tables). Enforces `-0`, `|s2| <= 2047`, trailing unused bit
+zeros, and exact consumption (or zero-tail validation when `ALLOW_PADDED=True`). Runs in
+`0.086–0.142 µs/sig` on Arc B390 (`130–230×` faster than host NumPy).
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `WORDS_T` | `[W, B]` | `uint32` | transposed big-endian signature body words |
+| `LENS` | `[B]` | `int32` | body length in bytes |
+| `OUT` | `[B, N]` | `int32` | decoded signed `s2` coefficients |
+| `OK` | `[B]` | `int8` | 1 if the encoding and tail constraints are valid |
+
+### `_pad_nonce_msg_kernel(FLAT_SIGS, SIG_OFFS, MSGS, OUT, B, NONCE_LEN, MSG_LEN, PADDED_LEN, DOMAIN_BYTE, BLK_B, BLK_C)` — `falcon/kernels.py`
+
+Assembles and SHAKE256-pads (`pad10*1` + `0x1F`) `nonce || msg` directly on the device from
+`FLAT_SIGS` (nonce at `sig_off + 1`) and uniform-length `MSGS`, eliminating host row-copy loops.
+
+### `_hash_to_point_kernel(STREAM, OUT, OK, B, N, NSAMP, COLS, Q, BLK)` — `falcon/kernels.py`
+
+Falcon's `HashToPoint` tail: reads big-endian 16-bit candidates directly from the SHAKE256 byte
+stream (`n + 205` for Falcon-512 with `COLS = 1024`; `n + 287` for Falcon-1024 with `COLS = 2048`),
+keeps values `< 5q`, reduces mod `q`, and compacts the first `n` survivors **in order** via an
+exclusive prefix sum.
+
+| tensor | shape | dtype | meaning |
+|---|---|---|---|
+| `STREAM` | `[B, NSAMP * 2]` | `uint8` | raw SHAKE256 output bytes |
+| `OUT` | `[B, N]` | `int32` | first `N` accepted coefficients, in order |
+| `OK` | `[B]` | `int8` | 1 if the row produced at least `N` survivors |
 
 ### `_mul_ntt_kernel(A, B, OUT, P, Q, N, BLK)` and `_check_kernel(PROD, C, S2, SQN, OK, P, L2BOUND, Q, N)` — `falcon/kernels.py`
 
@@ -547,7 +586,7 @@ Pointwise product `s2_hat * h_hat mod q` and L2 norm check `‖(c − s2·h, s2)
 | `PROD` | `[B, N]` | `int32` | `INTT(NTT(s2) * NTT(h))` |
 | `C` | `[B, N]` | `int32` | `HashToPoint(nonce ‖ m)` |
 | `S2` | `[B, N]` | `int32` | decoded signature coefficients, signed |
-| `SQN`, `OK` | `[B]` | `int64`, `int8` | squared norm (exact in int64, `< 2^33`) and verdict |
+| `SQN`, `OK` | `[B]` | `int64`, `int8` | squared norm (exact in int64, `< 2^36`) and verdict |
 
 Normalises `(prod - c) % Q` with explicit `where(t < 0, t + Q, t)` because Triton's signed `%`
 truncates toward zero.

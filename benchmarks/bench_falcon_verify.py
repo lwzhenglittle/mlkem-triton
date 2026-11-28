@@ -1,23 +1,22 @@
 #!/usr/bin/env python
-"""Falcon-512 verification throughput: device core, end-to-end, and the liboqs rival.
+"""Falcon-512 and Falcon-1024 verification throughput: device core, end-to-end, and liboqs rival.
 
     python benchmarks/bench_falcon_verify.py                 # Falcon-512, B = 64..4096
-    python benchmarks/bench_falcon_verify.py --ps falcon-padded-512
+    python benchmarks/bench_falcon_verify.py --ps falcon-1024
+    python benchmarks/bench_falcon_verify.py --ps falcon-padded-1024
     python benchmarks/bench_falcon_verify.py --profile       # where the device time goes
 
-The corpus comes from liboqs 0.16.0 (`pqclean_falcon-512`), so the CPU baseline and the GPU
-verifier consume exactly the same signatures.
+The corpus comes from liboqs 0.16.0 (`pqclean_falcon-{512,1024}`), so the CPU baseline and the
+GPU verifier consume exactly the same signatures.
 
 Two numbers are printed for every batch, and they answer different questions:
 
     dev/op   the device core only: NTT(s2), the pointwise product, the inverse NTT and the
-             norm check, on a corpus that was decoded and hashed already. This is the part
-             that has a throughput story.
-    e2e/op   `Verifier.verify`, which also pays for the signature decoder and SHAKE256 on the
-             host -- 24 us and 9 us per signature at B = 4096. It is printed because hiding
-             it would make the table lie about what a caller experiences.
+             norm check, on device-resident `(c, s2)` tensors.
+    e2e/op   `Verifier.verify`, which runs flat H2D packing, device `comp_decode`, device
+             `HashToPoint`, and the NTT/norm core end-to-end.
 
-The rival comes from `benchmarks/cpu_baseline.json` (run `benchmarks/bench_cpu.py` first).
+The rival comes from `benchmarks/cpu_baseline_barrier.json` (run `benchmarks/bench_16p_barrier.py`).
 """
 
 from __future__ import annotations
@@ -28,21 +27,40 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from triton_crypto import devices
 from triton_crypto.falcon import (
     FALCON_512,
+    FALCON_1024,
     FALCON_PADDED_512,
+    FALCON_PADDED_1024,
     Verifier,
     ref,
 )
-from triton_crypto.falcon.verify import comp_decode_batch
+from triton_crypto.falcon.verify import comp_decode_batch, comp_decode_batch_torch
 
-PARAMS = {"falcon-512": FALCON_512, "falcon-padded-512": FALCON_PADDED_512}
-TAGS = {"falcon-512": "falcon_512", "falcon-padded-512": "falcon_padded_512"}
-CPU_KEY = {"falcon-512": "falcon-512-verify", "falcon-padded-512": "falcon-padded-512-verify"}
+PARAMS = {
+    "falcon-512": FALCON_512,
+    "falcon-padded-512": FALCON_PADDED_512,
+    "falcon-1024": FALCON_1024,
+    "falcon-padded-1024": FALCON_PADDED_1024,
+}
+TAGS = {
+    "falcon-512": "falcon_512",
+    "falcon-padded-512": "falcon_padded_512",
+    "falcon-1024": "falcon_1024",
+    "falcon-padded-1024": "falcon_padded_1024",
+}
+CPU_KEY = {
+    "falcon-512": "falcon-512-verify",
+    "falcon-padded-512": "falcon-padded-512-verify",
+    "falcon-1024": "falcon-1024-verify",
+    "falcon-padded-1024": "falcon-padded-1024-verify",
+}
 LIBOQS_BENCH = ROOT / "third_party" / "liboqs" / "build-bench" / "lib" / "liboqs.so"
 LIBOQS_FALCON = ROOT / "third_party" / "liboqs" / "build-falcon" / "lib" / "liboqs.so"
 LIBOQS = LIBOQS_BENCH if LIBOQS_BENCH.exists() else LIBOQS_FALCON
@@ -75,7 +93,7 @@ def corpus(ps: str, n: int):
             raise RuntimeError("liboqs sign failed")
         msgs.append(msg)
         sigs.append(bytes(sig[: siglen.value]))
-    return bytes(pk[: FALCON_512.pk_len]), msgs, sigs
+    return bytes(pk[: PARAMS[ps].pk_len]), msgs, sigs
 
 
 def best(fn, reps: int, dev=None) -> float:
@@ -110,8 +128,9 @@ def main() -> int:
     print(f"scheme : {args.ps}  (n={params.n}, q={params.q}, l2bound={params.l2bound})")
     print(f"corpus : from liboqs 0.16.0, largest batch {max(batches)}")
 
+    padded = "padded" in args.ps
     pk, msgs, sigs = corpus(args.ps, max(batches))
-    verifier = Verifier(pk, params, dev, padded=args.ps.endswith("padded-512"))
+    verifier = Verifier(pk, params, dev, padded=padded)
 
     cpu = None
     cpu_path = CPU_JSON_BARRIER if CPU_JSON_BARRIER.exists() else CPU_JSON
@@ -126,19 +145,24 @@ def main() -> int:
         f"{'e2e ms':>9} {'e2e us/op':>10}   valid"
     )
     for n in batches:
+        import torch
+
         m, s = msgs[:n], sigs[:n]
-        s2, _keep = comp_decode_batch(
-            [x[1 + params.nonce_len :] for x in s], params, padded=args.ps.endswith("padded-512")
-        )
+        s2, _keep = comp_decode_batch([x[1 + params.nonce_len :] for x in s], params, padded=padded)
         c = ref.hash_to_point_batch([x[1 : 1 + params.nonce_len] for x in s], m, params)
+        c_d = torch.from_numpy(c.astype(np.int32).copy()).to(dev)
+        s2_d = torch.from_numpy(s2.astype(np.int32).copy()).to(dev)
         # warm-up (compiles the kernels) and a validity check before timing
-        ok, _ = verifier.verify_core_torch(c, s2)
+        ok, _ = verifier.verify_core_torch(c_d, s2_d)
         valid = int(ok.cpu().numpy().sum())
         if valid != n:
             print(f"  WARNING: only {valid}/{n} accepted -- timing a wrong path is useless")
-        t_dev = best(lambda c=c, s2=s2: verifier.verify_core_torch(c, s2), args.reps, dev)
+        ok_e2e = verifier.verify(m, s)
+        if int(ok_e2e.sum()) != n:
+            print(f"  WARNING: e2e accepted {int(ok_e2e.sum())}/{n}")
+        t_dev = best(lambda c=c_d, s2=s2_d: verifier.verify_core_torch(c, s2), args.reps, dev)
         last_dev_per_op = t_dev / n  # reused by the summary line, so both quote one measurement
-        t_e2e = best(lambda m=m, s=s: verifier.verify(m, s), max(3, args.reps // 3), dev)
+        t_e2e = best(lambda m=m, s=s: verifier.verify(m, s), max(5, args.reps // 2), dev)
         last_e2e_per_op = t_e2e / n
         print(
             f"{n:6d} {t_dev * 1e3:9.3f} {t_dev / n * 1e6:10.2f} {n / t_dev / 1e6:9.2f} "
@@ -178,14 +202,20 @@ def main() -> int:
 
         dom = _falcon_domain(params)
         s2_mod = torch.as_tensor(s2 % params.q, dtype=torch.int32, device=dev)
+        bodies = [x[1 + params.nonce_len :] for x in s]
+        t_dec = best(
+            lambda: comp_decode_batch_torch(bodies, params, padded=padded, device=dev),
+            args.reps,
+            dev,
+        )
         t_ntt = best(lambda: ntt_torch(s2_mod, dom), args.reps, dev)
         hat = ntt_torch(s2_mod, dom)
         t_intt = best(lambda: intt_torch(hat, dom), args.reps, dev)
-        t_all = best(lambda: verifier.verify_core_torch(c, s2), args.reps, dev)
+        t_all = best(lambda: verifier.verify_core_torch(c_d, s2_d), args.reps, dev)
         print(
-            f"\nper-stage, B={n}: NTT {t_ntt / n * 1e6:.2f} us, INTT {t_intt / n * 1e6:.2f} us, "
-            f"whole core {t_all / n * 1e6:.2f} us "
-            f"(transforms are {(t_ntt + t_intt) / t_all * 100:.0f}% of it)"
+            f"\nper-stage, B={n}: GPU comp_decode {t_dec / n * 1e6:.2f} us, "
+            f"NTT {t_ntt / n * 1e6:.2f} us, INTT {t_intt / n * 1e6:.2f} us, "
+            f"whole core {t_all / n * 1e6:.2f} us, e2e {t_e2e * 1e6:.2f} us"
         )
     return 0
 

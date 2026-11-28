@@ -535,6 +535,20 @@ def families(msgsize: int = MSG) -> dict[str, dict]:
             "build": "build-falcon",
             "unit": "op/s",
         },
+        "falcon-1024-verify": {
+            "kind": "oqs",
+            "tag": "falcon_1024",
+            "n": 4_000,
+            "build": "build-falcon",
+            "unit": "op/s",
+        },
+        "falcon-padded-1024-verify": {
+            "kind": "oqs",
+            "tag": "falcon_padded_1024",
+            "n": 4_000,
+            "build": "build-falcon",
+            "unit": "op/s",
+        },
         # SLH-DSA (FIPS 205): separate SHA2 and SHAKE families so GPU vs CPU stays like-for-like.
         # `slhdsa-128f-verify` is kept as the legacy SHA2-128f alias for older comparison scripts.
         "slhdsa-128f-verify": {

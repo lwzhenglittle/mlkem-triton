@@ -408,8 +408,18 @@ CPU_BASELINE = Path(__file__).resolve().parent / "cpu_baseline.json"
 CPU_BASELINE_BARRIER = Path(__file__).resolve().parent / "cpu_baseline_barrier.json"
 
 
+def _cpu_model() -> str:
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor()
+
+
 def load_cpu(path: Path | None = None) -> dict | None:
-    """The CPU baseline, if it exists and was taken on this machine."""
+    """The CPU baseline, if it exists and was taken on this machine (or same CPU in a container)."""
     if path is None:
         path = CPU_BASELINE_BARRIER if CPU_BASELINE_BARRIER.exists() else CPU_BASELINE
     try:
@@ -417,10 +427,12 @@ def load_cpu(path: Path | None = None) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
     meta = data.get("meta", {})
-    if meta.get("host") != platform.node():
+    same_host = meta.get("host") == platform.node()
+    same_cpu = bool(meta.get("cpu")) and meta.get("cpu") == _cpu_model()
+    if not (same_host or same_cpu):
         print(
-            f"# ignoring {path.name}: measured on {meta.get('host')!r}, this is "
-            f"{platform.node()!r} -- rerun benchmarks/bench_cpu.py",
+            f"# ignoring {path.name}: measured on {meta.get('host')!r} ({meta.get('cpu')!r}), "
+            f"this is {platform.node()!r} -- rerun benchmarks/bench_cpu.py",
             file=sys.stderr,
         )
         return None

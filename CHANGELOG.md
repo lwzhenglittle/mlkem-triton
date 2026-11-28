@@ -11,11 +11,11 @@
   - `primitives/gemm.py`: exact `int8 × int8 → int32` GEMM (`gemm_int8_torch`, `3.7–4.0 TMAC/s`, `9.0–9.3×` vs 16P CPU at `1024³`) and bit-plane `GF(2^8)` matrix multiply (`gf2_8_matmul_torch`, `33.5 GMAC/s` at `1024³`).
   - `primitives/blake3.py`: multi-chunk BLAKE3 tree hash (`blake3_hash_torch`, `9.7–10.1 GB/s`), verified against official Rust BLAKE3 KAT vectors (`data/vectors/blake3/kat.json`).
   - `primitives/ntt/large.py`: multi-pass `LargeNTT` up to `2^20` points over BabyBear with fused radix-4 forward (`_stage4_kernel`), fused 2×2 inverse (`_inv2x2_kernel`), and `mul_fused_torch` (`0.85–1.6 ms` forward, `2.41 ms` negacyclic product).
-- **Falcon-512 verification (`triton_crypto.falcon`, FIPS 206 draft)**: `Verifier` (Falcon-512 and Falcon-padded-512), device-side `HashToPoint` (uniform lengths), reusing `primitives.ntt` (`q = 12289, N = 512`). Device core `0.60–0.61 µs/op` (`5.6–5.7×` 16P CPU); end-to-end `15.3–16.7 µs/op` (host prefix-decode bound).
-- **Offline deterministic Falcon KAT corpus**: `data/vectors/falcon/kat.json` (40 liboqs-generated Falcon-512 / Falcon-padded-512 vectors) exercised on both CPU and GPU without requiring a local `liboqs` build.
+- **Falcon-512 and Falcon-1024 verification (`triton_crypto.falcon`, FIPS 206 draft)**: `Verifier` (auto-detecting Falcon-512 / Falcon-1024, supporting both unpadded and padded formats), fully on-device end-to-end pipeline (`_pack_sig_words_kernel` → 64-bit bit-reservoir + branchless-CLZ `_comp_decode_kernel`, `_pad_nonce_msg_kernel` + rolled multi-block `sponge` + `_hash_to_point_kernel`, reusing `primitives.ntt` for `N = 512 / 1024`). On Arc B390 (`B = 4096`), Falcon-512 reaches **0.32 µs/op** dev core (`8.3×` 16P) / **0.90–0.92 µs/op** e2e (**`2.9×` 16P**, down from `15.35 µs`); Falcon-1024 reaches **1.14–1.19 µs/op** dev core (`4.4–4.6×` 16P) / **2.18–2.22 µs/op** e2e (**`2.3–2.4×` 16P**).
+- **Offline deterministic Falcon KAT corpus**: `data/vectors/falcon/kat.json` (72 liboqs-generated vectors across Falcon-512, Falcon-padded-512, Falcon-1024, and Falcon-padded-1024) exercised on both CPU and GPU without requiring a local `liboqs` build.
 - **Unified barrier benchmarking & local GPU vs CPU matrix**:
-  - `benchmarks/bench_16p_barrier.py`: barrier-synchronized 1T / 16P CPU baselines (34 rivals covering ML-KEM 512/768/1024, ML-DSA 44/65/87 verify+sign, SLH-DSA SHAKE & SHA2, Falcon-512, all symmetric/hash/ZK primitives, and exact `gemm-int8`), with power/clock-state refusal guards.
-  - `benchmarks/bench_local_full.py` & `benchmarks/local-gpu-vs-cpu-20261127.{md,json}`: single-window Arc B390 vs Core Ultra X7 358H matrix reporting **Device-only + End-to-End** ratios and 4-workload batch-size breakeven curves.
+  - `benchmarks/bench_16p_barrier.py`: barrier-synchronized 1T / 16P CPU baselines (36 rivals covering ML-KEM 512/768/1024, ML-DSA 44/65/87 verify+sign, SLH-DSA SHAKE & SHA2, Falcon 512/1024 unpadded+padded, all symmetric/hash/ZK primitives, and exact `gemm-int8`), with power/clock-state refusal guards.
+  - `benchmarks/bench_local_full.py` & `benchmarks/local-gpu-vs-cpu-20261128.{md,json}`: single-window Arc B390 vs Core Ultra X7 358H matrix reporting **Device-only + End-to-End** ratios and 5-workload batch-size breakeven curves (including Falcon-512).
   - `benchmarks/snapshot.py`: single-window snapshot runner with JSON metadata; legacy 2026-11-26 snapshots archived under `benchmarks/archive/`.
 - **Executable contracts & packaging**:
   - `tests/test_primitives_contract.py`, `tests/test_docs_api.py`, `tests/test_triton_behaviour.py`, `tests/test_cpu_only.py`, and `tests/test_bench_harness.py`.
@@ -39,11 +39,10 @@
   - Split SLH-DSA CPU rivals into matched `slhdsa-shake-128f-verify` and `slhdsa-sha2-128f-verify` entries.
   - Added scalar-path guard (`lanes >= 4`) for Plonky3 Poseidon2 rival, fixed radix-4 pass-count traffic reporting, and fixed 2^20 NTT product-vs-transform unit mismatch (`3.96×` / `5.53×` fused).
   - Removed tracked Cargo build artifacts from `benchmarks/blake3_ref/target/` and switched SLH-DSA benchmark liboqs discovery to environment/relative lookup.
-- **API edges & warnings**: eliminated the last non-writable NumPy `UserWarning` in `primitives/aes.py`, guarded empty batches (`B == 0`) in `falcon.verify_core_torch` / `mldsa.Verifier` / `mldsa.Signer` / `lms.Verifier`, and removed hardcoded `device="xpu"` in `tests/test_falcon_gpu.py`.
+- **API edges & warnings**: eliminated the last non-writable NumPy `UserWarning` in `primitives/aes.py`, fixed padded-mode error masking in host `falcon.comp_decode_batch`, rolled multi-block `sponge` squeeze loops in `primitives/sponge.py` (supporting 20-block Falcon-1024 XOF streams), guarded empty batches (`B == 0`) in `falcon.verify_core_torch` / `mldsa.Verifier` / `mldsa.Signer` / `lms.Verifier`, and removed hardcoded `device="xpu"` in `tests/test_falcon_gpu.py`.
 
 ### Not adopted (measured)
 
-- **Device-side Falcon `comp_decode`**: 2.6 ms/sig on GPU vs 13.5–75 µs on host (35–190× slower due to divergent prefix-code gathers); kept on host while `HashToPoint` moved to GPU (16× faster).
 - **Barrett reduction for BabyBear NTT**: 1.02× (inside noise; LLVM already strength-reduces constexpr `% Q`).
 - **Bitsliced GPU AES**: AES-NI / VAES reaches 101 GB/s across 16P CPU; a predicted 20–40 GB/s GPU port still loses by 2.5–5×.
 

@@ -396,29 +396,29 @@
     },
     "falcon-512-verify": {
       "unit": "op/s",
-      "one_thread": 43855.66412404193,
-      "one_thread_median": 43855.66412404193,
-      "procs16": 293661.93528802897,
-      "procs16_median": 293661.93528802897,
-      "procs16_steady": 361272.8728948052,
+      "one_thread": 43884.593809281665,
+      "one_thread_median": 43734.363120382724,
+      "procs16": 379681.02918333694,
+      "procs16_median": 377108.96051043505,
+      "procs16_steady": 473743.8056750075,
       "msgsize": 1024,
-      "scale": 6.696100518679452,
+      "scale": 8.651806846689642,
       "procs": 16,
-      "rounds": 2,
-      "measured_at": "2026-11-27T22:55:48+0800"
+      "rounds": 3,
+      "measured_at": "2026-11-28T14:32:00+0800"
     },
     "falcon-padded-512-verify": {
       "unit": "op/s",
-      "one_thread": 44006.52596978809,
-      "one_thread_median": 44006.52596978809,
-      "procs16": 289193.2449471218,
-      "procs16_median": 289193.2449471218,
-      "procs16_steady": 364155.676458153,
+      "one_thread": 43967.178039898135,
+      "one_thread_median": 43745.530606827364,
+      "procs16": 377012.4116162426,
+      "procs16_median": 373498.05235438846,
+      "procs16_steady": 470360.75421263324,
       "msgsize": 1024,
-      "scale": 6.571599065685448,
+      "scale": 8.574860348647386,
       "procs": 16,
-      "rounds": 2,
-      "measured_at": "2026-11-27T22:55:58+0800"
+      "rounds": 3,
+      "measured_at": "2026-11-28T14:32:12+0800"
     },
     "slhdsa-128f-verify": {
       "unit": "op/s",
@@ -458,6 +458,32 @@
       "procs": 16,
       "rounds": 2,
       "measured_at": "2026-11-27T22:58:05+0800"
+    },
+    "falcon-1024-verify": {
+      "unit": "op/s",
+      "one_thread": 22842.295887686796,
+      "one_thread_median": 22763.415470199758,
+      "procs16": 192611.79496343422,
+      "procs16_median": 189517.22317270204,
+      "procs16_steady": 244516.36998324102,
+      "msgsize": 1024,
+      "scale": 8.432243234676868,
+      "procs": 16,
+      "rounds": 3,
+      "measured_at": "2026-11-28T14:32:23+0800"
+    },
+    "falcon-padded-1024-verify": {
+      "unit": "op/s",
+      "one_thread": 22797.034501187485,
+      "one_thread_median": 22527.50115258697,
+      "procs16": 192407.72524355128,
+      "procs16_median": 146307.55875696818,
+      "procs16_steady": 243288.75699541494,
+      "msgsize": 1024,
+      "scale": 8.44003307682536,
+      "procs": 16,
+      "rounds": 3,
+      "measured_at": "2026-11-28T14:32:36+0800"
     }
   }
 }

@@ -16,7 +16,7 @@ Measures the local GPU against `benchmarks/cpu_baseline_barrier.json` in one con
             ML-KEM-768 decaps, ML-DSA-44 verify, SHA3-256 (1 KiB), ChaCha20 (1 KiB).
 
 Usage:
-    python benchmarks/bench_local_full.py --out benchmarks/local-gpu-vs-cpu-20261127.md
+    python benchmarks/bench_local_full.py --out benchmarks/local-gpu-vs-cpu-20261128.md
 """
 
 from __future__ import annotations
@@ -49,7 +49,12 @@ from bench_primitive import bench_copy
 from bench_primitive import measure as measure_prim
 
 from triton_crypto import devices
-from triton_crypto.falcon import FALCON_512, FALCON_PADDED_512
+from triton_crypto.falcon import (
+    FALCON_512,
+    FALCON_1024,
+    FALCON_PADDED_512,
+    FALCON_PADDED_1024,
+)
 from triton_crypto.falcon import Verifier as FalconVerifier
 from triton_crypto.falcon import ref as falcon_ref
 from triton_crypto.falcon.verify import comp_decode_batch
@@ -325,7 +330,7 @@ def _bench_schemes(dev, rivals: dict, oqs_so: Path) -> list[dict]:
             note="mprime e2e≈dev",
         )
 
-    # 4. Falcon-512 & Falcon-padded-512
+    # 4. Falcon-512, Falcon-padded-512, Falcon-1024, Falcon-padded-1024
     B_fal = 4096
     for label, tag_oqs, params, padded, rival_key in (
         ("Falcon-512", "falcon_512", FALCON_512, False, "falcon-512-verify"),
@@ -336,6 +341,14 @@ def _bench_schemes(dev, rivals: dict, oqs_so: Path) -> list[dict]:
             True,
             "falcon-padded-512-verify",
         ),
+        ("Falcon-1024", "falcon_1024", FALCON_1024, False, "falcon-1024-verify"),
+        (
+            "Falcon-padded-1024",
+            "falcon_padded_1024",
+            FALCON_PADDED_1024,
+            True,
+            "falcon-padded-1024-verify",
+        ),
     ):
         pk, msgs, sigs = _oqs_sig_corpus(oqs_so, tag_oqs, params.pk_len, B_fal, 32)
         v = FalconVerifier(pk, params, dev, padded=padded)
@@ -345,10 +358,14 @@ def _bench_schemes(dev, rivals: dict, oqs_so: Path) -> list[dict]:
         c = falcon_ref.hash_to_point_batch(
             [x[1 : 1 + params.nonce_len] for x in sigs], msgs, params
         )
-        ok, _ = v.verify_core_torch(c, s2)
+        c_d = torch.from_numpy(c.astype(np.int32).copy()).to(dev)
+        s2_d = torch.from_numpy(s2.astype(np.int32).copy()).to(dev)
+        ok, _ = v.verify_core_torch(c_d, s2_d)
         assert int(ok.cpu().numpy().sum()) == B_fal
-        t_dev, _ = _time_fn(lambda c=c, s2=s2, v=v: v.verify_core_torch(c, s2), dev, reps=9)
-        t_e2e, _ = _time_fn(lambda ms=msgs, sg=sigs, v=v: v.verify(ms, sg), dev, reps=5, warmup=2)
+        ok_e2e = v.verify(msgs, sigs)
+        assert int(ok_e2e.sum()) == B_fal
+        t_dev, _ = _time_fn(lambda c=c_d, s2=s2_d, v=v: v.verify_core_torch(c, s2), dev, reps=9)
+        t_e2e, _ = _time_fn(lambda ms=msgs, sg=sigs, v=v: v.verify(ms, sg), dev, reps=9, warmup=3)
         add_row(label, "verify", B_fal, t_dev / B_fal * 1e6, t_e2e / B_fal * 1e6, rival_key)
 
     # 5. LMS / HSS (RFC 8554 case 0; no liboqs rival -> Python oracle context)
@@ -596,7 +613,34 @@ def _bench_breakeven(dev, rivals: dict, oqs_so: Path) -> dict[str, list[dict]]:
         )
     out["ML-DSA-44 verify"] = rows_dsa
 
-    # 3. SHA3-256 (1 KiB) & 4. ChaCha20 (1 KiB)
+    # 3. Falcon-512 verify
+    pk_f, msgs_f, sigs_f = _oqs_sig_corpus(oqs_so, "falcon_512", FALCON_512.pk_len, 4096, 32)
+    ver_f = FalconVerifier(pk_f, FALCON_512, dev, padded=False)
+    s2_f, _ = comp_decode_batch([x[1 + FALCON_512.nonce_len :] for x in sigs_f], FALCON_512, False)
+    c_f = falcon_ref.hash_to_point_batch(
+        [x[1 : 1 + FALCON_512.nonce_len] for x in sigs_f], msgs_f, FALCON_512
+    )
+    rv_f = rivals["falcon-512-verify"]
+    rows_f = []
+    for B in (16, 64, 256, 1024, 4096):
+        c_d = torch.from_numpy(c_f[:B].astype(np.int32).copy()).to(dev)
+        s2_d = torch.from_numpy(s2_f[:B].astype(np.int32).copy()).to(dev)
+        t_dev, _ = _time_fn(lambda cd=c_d, sd=s2_d: ver_f.verify_core_torch(cd, sd), dev, reps=9)
+        t_e2e, _ = _time_fn(lambda B=B: ver_f.verify(msgs_f[:B], sigs_f[:B]), dev, reps=9)
+        rows_f.append(
+            {
+                "batch": B,
+                "dev_us": t_dev / B * 1e6,
+                "e2e_us": t_e2e / B * 1e6,
+                "dev_vs_1t": (B / t_dev) / rv_f["one_thread"],
+                "dev_vs_16p": (B / t_dev) / rv_f["procs16"],
+                "e2e_vs_1t": (B / t_e2e) / rv_f["one_thread"],
+                "e2e_vs_16p": (B / t_e2e) / rv_f["procs16"],
+            }
+        )
+    out["Falcon-512 verify"] = rows_f
+
+    # 4. SHA3-256 (1 KiB) & 5. ChaCha20 (1 KiB)
     for label, prim_name, rival_key in (
         ("SHA3-256 (1 KiB)", "sha3-256", "sha3-256"),
         ("ChaCha20 (1 KiB)", "chacha20", "chacha20"),
@@ -703,7 +747,7 @@ def _render_md(
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--baseline", type=Path, default=BENCH / "cpu_baseline_barrier.json")
-    ap.add_argument("--out", type=Path, default=BENCH / "local-gpu-vs-cpu-20261127.md")
+    ap.add_argument("--out", type=Path, default=BENCH / "local-gpu-vs-cpu-20261128.md")
     ap.add_argument("--device", default=None)
     args = ap.parse_args()
 

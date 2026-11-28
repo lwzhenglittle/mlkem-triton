@@ -33,11 +33,11 @@ lives in [docs/patterns.md](patterns.md).
 
 All three tables below come from a single continuous window on `lwzheng-TB14-AOSC`
 (`Intel Core Ultra X7 358H`, 16 logical CPUs, `performance` profile, `4.7 GHz` peak vs
-`Intel Arc B390 GPU`, `torch 2.15.0+xpu`, `triton 3.9.0`, measured copy bandwidth **218.3–219.6 GB/s**):
+`Intel Arc B390 GPU`, `torch 2.15.0+xpu`, `triton 3.9.0`, measured copy bandwidth **219.0 GB/s**):
 
-- Full unified local matrix: [benchmarks/local-gpu-vs-cpu-20261127.md](../benchmarks/local-gpu-vs-cpu-20261127.md) (`.json` sibling)
-- Standard snapshot: [benchmarks/snapshot-20261127T150247Z.md](../benchmarks/snapshot-20261127T150247Z.md)
-- CPU rival baseline (34 rivals, barrier-measured 1T and 16P): [benchmarks/cpu_baseline_barrier.json](../benchmarks/cpu_baseline_barrier.json)
+- Full unified local matrix: [benchmarks/local-gpu-vs-cpu-20261128.md](../benchmarks/local-gpu-vs-cpu-20261128.md) (`.json` sibling)
+- Standard snapshot: [benchmarks/snapshot-20261128T063642Z.md](../benchmarks/snapshot-20261128T063642Z.md)
+- CPU rival baseline (36 rivals, barrier-measured 1T and 16P): [benchmarks/cpu_baseline_barrier.json](../benchmarks/cpu_baseline_barrier.json)
 
 Both **GPU dev** (device-resident input/output, synced) and **GPU e2e** (Host NumPy → H2D → kernels → D2H → Host NumPy) are shown side-by-side against the same CPU baseline so callers can distinguish raw accelerator throughput from actual end-to-end gain.
 
@@ -45,64 +45,65 @@ Both **GPU dev** (device-resident input/output, synced) and **GPU e2e** (Host Nu
 
 | Scheme | Op | B | GPU dev (µs/op) | GPU e2e (µs/op) | CPU 1T (µs/op) | CPU 16P (µs/op) | dev vs 1T | dev vs 16P | e2e vs 1T | e2e vs 16P |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| ML-KEM-512 | keygen | 4096 | 1.855 | 2.117 | 5.393 | 0.895 | 2.91× | 0.48× | 2.55× | 0.42× |
-| ML-KEM-512 | encaps | 4096 | 0.659 | 0.912 | 6.011 | 1.006 | 9.12× | **1.53×** | 6.59× | **1.10×** |
-| ML-KEM-512 | decaps | 4096 | 0.775 | 1.051 | 7.165 | 1.195 | 9.25× | **1.54×** | 6.82× | **1.14×** |
-| ML-KEM-768 | keygen | 4096 | 1.382 | 1.741 | 8.159 | 1.382 | 5.90× | 1.00× | 4.69× | 0.79× |
-| ML-KEM-768 | encaps | 4096 | **0.191** | **0.481** | 8.688 | 1.521 | 45.6× | **7.99×** | 18.0× | **3.16×** |
-| ML-KEM-768 | decaps | 4096 | **0.274** | **0.564**\* | 10.43 | 1.827 | 38.1× | **6.68×** | 18.5× | **3.24×**\* |
-| ML-KEM-1024 | keygen | 4096 | 2.123 | 2.566 | 11.07 | 1.855 | 5.22× | 0.87× | 4.32× | 0.72× |
-| ML-KEM-1024 | encaps | 4096 | **0.241** | **0.541** | 11.95 | 2.068 | 49.5× | **8.57×** | 22.1× | **3.82×** |
-| ML-KEM-1024 | decaps | 4096 | **0.359** | **0.683**\* | 14.35 | 2.489 | 40.0× | **6.93×** | 21.0× | **3.64×**\* |
-| ML-DSA-44 | verify | 4096 | 1.859 | 2.677 | 15.65 | 2.904 | 8.42× | **1.56×** | 5.85× | **1.08×** |
-| ML-DSA-44 | sign | 1024 | 34.18 | 35.38 | 45.01 | 8.370 | 1.32× | 0.24× | 1.27× | 0.24× |
-| ML-DSA-65 | verify | 4096 | 2.479 | 3.524 | 25.44 | 4.853 | 10.3× | **1.96×** | 7.22× | **1.38×** |
-| ML-DSA-65 | sign | 1024 | 48.97 | 50.14 | 71.85 | 13.24 | 1.47× | 0.27× | 1.43× | 0.26× |
-| ML-DSA-87 | verify | 4096 | 3.707 | 4.983 | 38.74 | 7.365 | 10.5× | **1.99×** | 7.77× | **1.48×** |
-| ML-DSA-87 | sign | 1024 | 47.98 | 49.29 | 85.44 | 16.09 | 1.78× | 0.34× | 1.73× | 0.33× |
-| SLH-DSA-SHAKE-128f | verify | 4096 | 49.93 | 49.93 | 1216.1 | 168.3 | 24.4× | **3.37×** | 24.4× | **3.37×** |
-| SLH-DSA-SHA2-128f | verify | 4096 | 28.69 | 28.69 | 934.8 | 113.4 | 32.6× | **3.95×** | 32.6× | **3.95×** |
-| Falcon-512 | verify | 4096 | **0.613** | 15.35 | 22.80 | 3.405 | 37.2× | **5.55×** | 1.49× | 0.22× |
-| Falcon-padded-512 | verify | 4096 | **0.690** | 15.69 | 22.72 | 3.458 | 32.9× | **5.01×** | 1.45× | 0.22× |
-| LMS/HSS (RFC 8554 case 0) | verify | 4096 | 9.967 | 9.967 | n/a | n/a | n/a | n/a | n/a | n/a |
+| ML-KEM-512 | keygen | 4096 | 1.947 | 2.275 | 5.393 | 0.895 | 2.77× | 0.46× | 2.37× | 0.39× |
+| ML-KEM-512 | encaps | 4096 | 0.673 | 0.944 | 6.011 | 1.006 | 8.94× | **1.49×** | 6.37× | **1.07×** |
+| ML-KEM-512 | decaps | 4096 | 0.782 | 1.094 | 7.165 | 1.195 | 9.16× | **1.53×** | 6.55× | **1.09×** |
+| ML-KEM-768 | keygen | 4096 | 1.458 | 1.805 | 8.159 | 1.382 | 5.59× | 0.95× | 4.52× | 0.77× |
+| ML-KEM-768 | encaps | 4096 | **0.194** | **0.471** | 8.688 | 1.521 | 44.7× | **7.83×** | 18.4× | **3.23×** |
+| ML-KEM-768 | decaps | 4096 | **0.273** | **0.563** | 10.43 | 1.827 | 38.2× | **6.68×** | 18.5× | **3.25×** |
+| ML-KEM-1024 | keygen | 4096 | 2.218 | 2.654 | 11.07 | 1.855 | 4.99× | 0.84× | 4.17× | 0.70× |
+| ML-KEM-1024 | encaps | 4096 | **0.246** | **0.551** | 11.95 | 2.068 | 48.5× | **8.39×** | 21.7× | **3.76×** |
+| ML-KEM-1024 | decaps | 4096 | **0.363** | **0.694** | 14.35 | 2.489 | 39.6× | **6.86×** | 20.7× | **3.58×** |
+| ML-DSA-44 | verify | 4096 | 1.966 | 2.827 | 15.65 | 2.904 | 7.96× | **1.48×** | 5.54× | **1.03×** |
+| ML-DSA-44 | sign | 1024 | 37.57 | 37.54 | 45.01 | 8.370 | 1.20× | 0.22× | 1.20× | 0.22× |
+| ML-DSA-65 | verify | 4096 | 2.614 | 3.692 | 25.44 | 4.853 | 9.73× | **1.86×** | 6.89× | **1.31×** |
+| ML-DSA-65 | sign | 1024 | 51.22 | 52.49 | 71.85 | 13.24 | 1.40× | 0.26× | 1.37× | 0.25× |
+| ML-DSA-87 | verify | 4096 | 3.756 | 5.118 | 38.74 | 7.365 | 10.3× | **1.96×** | 7.57× | **1.44×** |
+| ML-DSA-87 | sign | 1024 | 51.36 | 53.11 | 85.44 | 16.09 | 1.66× | 0.31× | 1.61× | 0.30× |
+| SLH-DSA-SHAKE-128f | verify | 4096 | 51.67 | 51.67 | 1216.1 | 168.3 | 23.5× | **3.26×** | 23.5× | **3.26×** |
+| SLH-DSA-SHA2-128f | verify | 4096 | 29.41 | 29.41 | 934.8 | 113.4 | 31.8× | **3.86×** | 31.8× | **3.86×** |
+| Falcon-512 | verify | 4096 | **0.318** | **0.915** | 22.79 | 2.634 | 71.7× | **8.29×** | 24.9× | **2.88×** |
+| Falcon-padded-512 | verify | 4096 | **0.321** | **0.913** | 22.74 | 2.652 | 70.9× | **8.26×** | 24.9× | **2.90×** |
+| Falcon-1024 | verify | 4096 | **1.194** | **2.215** | 43.78 | 5.192 | 36.7× | **4.35×** | 19.8× | **2.34×** |
+| Falcon-padded-1024 | verify | 4096 | **1.135** | **2.183** | 43.87 | 5.197 | 38.6× | **4.58×** | 20.1× | **2.38×** |
+| LMS/HSS (RFC 8554 case 0) | verify | 4096 | 10.57 | 10.57 | n/a | n/a | n/a | n/a | n/a | n/a |
 
-\* ML-KEM-768/1024 decaps steady-state E2E is **0.564 / 0.683 µs/op** (`3.24× / 3.64×` vs 16P, confirmed in Part C and prior runs); occasional host staging allocation spikes in Part A measured `1.157 / 1.098 µs/op` (`1.58× / 2.27×`). LMS/HSS has no liboqs C rival (the in-repo Python hashlib reference is `3 795 µs/op`).
+LMS/HSS has no liboqs C rival (the in-repo Python `hashlib` reference is `3 866 µs/op`).
 
 **Key takeaways across schemes:**
-- **End-to-end winners against 16 CPU cores (11 scheme operations)**: ML-KEM-512/768/1024 encaps & decaps (`1.10×–3.82×` e2e, `1.53×–8.57×` dev), ML-DSA-44/65/87 verify (`1.08×–1.48×` e2e, `1.56×–1.99×` dev), and SLH-DSA SHAKE-128f / SHA2-128f verify (`3.37× / 3.95×`).
-- **Device-core winner, host-decode bottleneck**: Falcon-512 / Falcon-padded-512 beat 16P CPU by **5.0–5.6×** on the device core (`0.61 µs`), but drop to **0.22×** end-to-end because host-side prefix decoding (`comp_decode`) takes ~13.5 µs/sig.
-- **CPU wins against 16P**: ML-KEM keygen (`0.48×–1.00×` dev, `0.42×–0.79×` e2e) and ML-DSA sign (`0.24×–0.34×` vs 16P, though still `1.3×–1.8×` faster than 1 CPU thread).
+- **End-to-end winners against 16 CPU cores (15 scheme operations)**: ML-KEM-512/768/1024 encaps & decaps (`1.07×–3.76×` e2e, `1.49×–8.39×` dev), ML-DSA-44/65/87 verify (`1.03×–1.44×` e2e, `1.48×–1.96×` dev), SLH-DSA SHAKE-128f / SHA2-128f verify (`3.26× / 3.86×`), and **all four Falcon variants** — Falcon-512 / Falcon-padded-512 (`2.88×–2.90×` e2e, `8.26×–8.29×` dev) and Falcon-1024 / Falcon-padded-1024 (`2.34×–2.38×` e2e, `4.35×–4.58×` dev).
+- **CPU wins against 16P**: ML-KEM keygen (`0.46×–0.95×` dev, `0.39×–0.77×` e2e) and ML-DSA sign (`0.22×–0.31×` vs 16P, though still `1.2×–1.7×` faster than 1 CPU thread).
 
 ### 1.2 All 11 scheme-agnostic primitives (Dev + E2E vs 1T / 16P)
 
-`B = 65536`, `size = 1024 B` (except `copy` 256 MiB, `keccak` 2¹⁸ states, `gemm-int8` 1024³, `ntt-2^20` single 2²⁰ transform). Copy bandwidth in the same window: **218.3 GB/s** (`local-gpu-vs-cpu-20261127.md`; **219.6 GB/s** in `snapshot-20261127T150247Z.md`).
+`B = 65536`, `size = 1024 B` (except `copy` 256 MiB, `keccak` 2¹⁸ states, `gemm-int8` 1024³, `ntt-2^20` single 2²⁰ transform). Copy bandwidth in the same window: **219.0 GB/s** (`local-gpu-vs-cpu-20261128.md`).
 
 | Primitive | What | dev ms | e2e ms | GB/s | %copy | dev vs 1T | dev vs 16P | e2e vs 1T | e2e vs 16P |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `copy` | read+write | 2.459 | n/a | 218.3 | 100% | n/a | n/a | n/a | n/a |
-| `keccak` | 24 rounds, rolled | 1.245 | n/a | 84.2 | 39% | n/a | n/a | n/a | n/a |
-| `sha3-256` | rate 136, 8 blocks | 2.324 | 8.239 | 31.6 | 14% | 50.8× | **4.99×** | 14.3× | **1.41×** |
-| `sha3-512` | rate 72, 15 blocks | 4.311 | 10.526 | 17.4 | 8% | 51.9× | **5.07×** | 21.3× | **2.08×** |
-| `shake128` | rate 168, 7 blocks | 2.102 | 8.108 | 37.7 | 17% | 53.3× | **7.77×** | 13.8× | **2.01×** |
-| `shake256` | rate 136, 8 blocks | 2.318 | 8.280 | 31.7 | 15% | 51.2× | **7.40×** | 14.3× | **2.07×** |
-| `sha256` | 1024 B/msg, 256-bit | 0.828 | 4.303 | 81.0 | 37% | 25.8× | **2.51×** | 4.98× | 0.48× |
-| `sha512` | 1024 B/msg, 512-bit | 1.488 | 5.007 | 45.1 | 21% | 50.1× | **6.48×** | 14.9× | **1.93×** |
-| `ntt-mlkem` | q=3329, 7 layers | 2.755 | n/a | 48.7 | 22% | n/a | n/a | n/a | n/a |
-| `ntt-mldsa` | q=8380417, 8 layers + Mont. | 9.058 | n/a | 14.8 | 7% | n/a | n/a | n/a | n/a |
-| `ntt-babybear` | q=2^31−2^27+1, 8 layers + Mont. | 9.070 | n/a | 14.8 | 7% | n/a | n/a | n/a | n/a |
-| `chacha20` | RFC 8439, 20 rounds | 4.775 | 12.480 | 14.1 | 6% | 3.29× | 0.60× | 1.26× | 0.23× |
-| `poseidon2` | BabyBear/16, 8 full + 13 partial | 2.598 | 3.267 | 3.2 | 1% | 2.71× | 0.55× | 2.16× | 0.44× |
-| `poly1305` | RFC 8439, 5×26-bit limbs | 5.739 | 5.938 | 11.7 | 5% | 1.97× | 0.30× | 1.91× | 0.29× |
-| `chacha20-poly1305` | AEAD seal, no AAD | 14.742 | 23.036 | 9.1 | 4% | 5.77× | 0.94× | 3.69× | 0.60× |
-| `aes128-ctr` | AES-128-CTR, T-table (gather) | 6.881 | 14.447 | 9.8 | 4% | 0.83× | 0.10× | 0.39× | 0.05× |
-| `gemm-int8` | int8 × int8 → int32, exact (1024³) | 0.291 | 0.689 | 21.6 | 10% | 55.5× | **9.03×** | 23.4× | **3.81×** |
-| `blake3` | BLAKE3, unkeyed, 32-byte out | 6.743 | 7.196 | 10.0 | 5% | 7.39× | 0.63× | 6.93× | 0.59× |
-| `ntt-2^20` | BabyBear 2^20, 10 passes (radix-4) | 0.877 | 4.581 | 95.6 | 44% | 59.6× | **6.05×** | 11.4× | **1.16×** |
+| `copy` | read+write | 2.452 | n/a | 219.0 | 100% | n/a | n/a | n/a | n/a |
+| `keccak` | 24 rounds, rolled | 1.250 | n/a | 83.9 | 38% | n/a | n/a | n/a | n/a |
+| `sha3-256` | rate 136, 8 blocks | 2.328 | 8.159 | 31.5 | 14% | 50.7× | **4.99×** | 14.5× | **1.42×** |
+| `sha3-512` | rate 72, 15 blocks | 4.319 | 10.332 | 17.4 | 8% | 51.8× | **5.06×** | 21.7× | **2.12×** |
+| `shake128` | rate 168, 7 blocks | 2.103 | 8.340 | 37.6 | 17% | 53.3× | **7.77×** | 13.4× | **1.96×** |
+| `shake256` | rate 136, 8 blocks | 2.320 | 8.332 | 31.6 | 14% | 51.2× | **7.39×** | 14.3× | **2.06×** |
+| `sha256` | 1024 B/msg, 256-bit | 0.830 | 4.249 | 80.9 | 37% | 25.8× | **2.50×** | 5.04× | 0.49× |
+| `sha512` | 1024 B/msg, 512-bit | 1.460 | 4.942 | 46.0 | 21% | 51.0× | **6.60×** | 15.1× | **1.95×** |
+| `ntt-mlkem` | q=3329, 7 layers | 2.751 | n/a | 48.8 | 22% | n/a | n/a | n/a | n/a |
+| `ntt-mldsa` | q=8380417, 8 layers + Mont. | 9.506 | n/a | 14.1 | 6% | n/a | n/a | n/a | n/a |
+| `ntt-babybear` | q=2^31−2^27+1, 8 layers + Mont. | 9.669 | n/a | 13.9 | 6% | n/a | n/a | n/a | n/a |
+| `chacha20` | RFC 8439, 20 rounds | 5.243 | 12.519 | 12.8 | 6% | 2.99× | 0.55× | 1.25× | 0.23× |
+| `poseidon2` | BabyBear/16, 8 full + 13 partial | 2.619 | 3.402 | 3.2 | 1% | 2.69× | 0.54× | 2.07× | 0.42× |
+| `poly1305` | RFC 8439, 5×26-bit limbs | 5.643 | 5.918 | 11.9 | 5% | 2.01× | 0.30× | 1.91× | 0.29× |
+| `chacha20-poly1305` | AEAD seal, no AAD | 15.081 | 23.054 | 8.9 | 4% | 5.64× | 0.92× | 3.69× | 0.60× |
+| `aes128-ctr` | AES-128-CTR, T-table (gather) | 7.678 | 15.300 | 8.7 | 4% | 0.74× | 0.09× | 0.37× | 0.04× |
+| `gemm-int8` | int8 × int8 → int32, exact (1024³) | 0.283 | 0.714 | 22.2 | 10% | 57.1× | **9.28×** | 22.6× | **3.68×** |
+| `blake3` | BLAKE3, unkeyed, 32-byte out | 6.726 | 7.129 | 10.0 | 5% | 7.41× | 0.63× | 6.99× | 0.59× |
+| `ntt-2^20` | BabyBear 2^20, 10 passes (radix-4) | 1.575 | 5.638 | 53.3 | 24% | 33.2× | **3.37×** | 9.28× | 0.94× |
 
 **What the Dev vs E2E split reveals:**
-- **Eight primitives win device-side against 16P CPU**: `gemm-int8` (**9.03×**; **9.33×** in the sibling snapshot), `shake128` (**7.77×**), `shake256` (**7.40×**), `sha512` (**6.48×**), `ntt-2^20` (**6.05×**), `sha3-512` (**5.07×**), `sha3-256` (**4.99×**), and `sha256` (**2.51×**).
-- **Seven of those eight still win end-to-end** even after paying Host NumPy → Device → Host round trips (`1.16×–3.81×` vs 16P).
-- **`sha256` flips from 2.51× (dev) to 0.48× (e2e)**: transferring 64 MiB over H2D takes ~3.5 ms, dwarfing the 0.83 ms kernel. SHA-256 on GPU pays off only when data is already device-resident (e.g. SLH-DSA/LMS chains or multi-stage GPU pipelines).
+- **Eight primitives win device-side against 16P CPU**: `gemm-int8` (**9.28×**), `shake128` (**7.77×**), `shake256` (**7.39×**), `sha512` (**6.60×**), `sha3-512` (**5.06×**), `sha3-256` (**4.99×**), `ntt-2^20` (**3.37×**; up to **6.05×** dev / **1.16×** e2e at higher iGPU clocks), and `sha256` (**2.50×**).
+- **Six of those eight win end-to-end consistently** (`1.42×–3.68×` vs 16P), and `ntt-2^20` sits right around parity (`0.94×–1.16×` e2e depending on clock state).
+- **`sha256` flips from 2.50× (dev) to 0.49× (e2e)**: transferring 64 MiB over H2D takes ~3.4 ms, dwarfing the 0.83 ms kernel. SHA-256 on GPU pays off only when data is already device-resident (e.g. SLH-DSA/LMS chains or multi-stage GPU pipelines).
 
 ### 1.3 Batch-size breakeven curves (when GPU beats CPU)
 
@@ -110,22 +111,23 @@ From `benchmarks/bench_local_full.py` Part C (Arc B390 vs X7 358H barrier 1T / 1
 
 | Workload | Breakeven `dev ≥ 1T` | Breakeven `dev ≥ 16P` | Breakeven `e2e ≥ 1T` | Breakeven `e2e ≥ 16P` | Peak `e2e vs 16P` |
 |---|---:|---:|---:|---:|---:|
-| ML-KEM-768 decaps | **B = 64** (1.13×) | **B = 1024** (2.16×) | **B = 64** (1.00×) | **B = 1024** (1.55×) | **3.24×** (B=4096) |
-| ML-DSA-44 verify | **B = 64** (1.77×) | **B = 1024** (1.41×) | **B = 64** (1.45×) | **B = 1024** (1.04×) | **1.06×** (B=4096) |
-| SHA3-256 (1 KiB) | **B = 256** (2.64×) | **B = 1024** (1.03×) | **B = 256** (1.81×) | **B = 4096** (1.08×) | **1.41×** (B=65536) |
-| ChaCha20 (1 KiB) | **B = 1024** (2.54×) | **B = 16384**\* (1.48×) | **B = 1024** (1.45×) | never (max 0.53×) | 0.53× (B=16384) |
+| ML-KEM-768 decaps | **B = 64** (1.36×) | **B = 1024** (3.06×) | **B = 64** (1.12×) | **B = 1024** (1.91×) | **3.25×** (B=4096) |
+| ML-DSA-44 verify | **B = 64** (1.91×) | **B = 1024** (1.40×) | **B = 64** (1.40×) | **B = 1024** (1.03×) | **1.03×** (B=4096) |
+| Falcon-512 verify | **B = 16** (1.76×) | **B = 256** (3.55×) | **B = 64** (1.08×) | **B = 1024** (2.05×) | **2.93×** (B=4096) |
+| SHA3-256 (1 KiB) | **B = 256** (2.63×) | **B = 1024** (1.02×) | **B = 256** (1.80×) | **B = 4096** (1.05×) | **1.39×** (B=65536) |
+| ChaCha20 (1 KiB) | **B = 1024** (2.49×) | **B = 16384**\* (1.47×) | **B = 1024** (1.34×) | never (max 0.49×) | 0.49× (B=16384) |
 
-\* At `B = 16384` (16 MiB keystream), ChaCha20 fits inside Arc B390's 16 MiB LLC and briefly peaks at `34.1 GB/s` (`1.48×` 16P dev-only) before spilling LLC at `B = 65536` (`14.1 GB/s`, `0.61×`); end-to-end never exceeds `0.53×`.
+\* At `B = 16384` (16 MiB keystream), ChaCha20 fits inside Arc B390's 16 MiB LLC and briefly peaks at `34.1 GB/s` (`1.47×` 16P dev-only) before spilling LLC at `B = 65536` (`12.8 GB/s`, `0.55×`); end-to-end never exceeds `0.49×`.
 
-Detailed ML-KEM-768 decaps and SHA3-256 sweep points (full 4-workload tables in [benchmarks/local-gpu-vs-cpu-20261127.md](../benchmarks/local-gpu-vs-cpu-20261127.md)):
+Detailed ML-KEM-768 decaps, Falcon-512 verify, and SHA3-256 sweep points (full 5-workload tables in [benchmarks/local-gpu-vs-cpu-20261128.md](../benchmarks/local-gpu-vs-cpu-20261128.md)):
 
-| B | ML-KEM-768 dev/e2e (µs) | ML-KEM-768 e2e vs 16P | ML-DSA-44 dev/e2e (µs) | ML-DSA-44 e2e vs 16P | SHA3-256 dev/e2e (µs) | SHA3-256 e2e vs 16P |
+| B | ML-KEM-768 dev/e2e (µs) | ML-KEM-768 e2e vs 16P | Falcon-512 dev/e2e (µs) | Falcon-512 e2e vs 16P | SHA3-256 dev/e2e (µs) | SHA3-256 e2e vs 16P |
 |---:|---:|---:|---:|---:|---:|---:|
-| 16 | 37.58 / 41.80 | 0.04× | 33.49 / 42.79 | 0.07× | 10.94 / 14.52 | 0.01× |
-| 64 | 9.267 / 10.40 | 0.18× | 8.857 / 10.76 | 0.27× | 2.740 / 3.702 | 0.05× |
-| 256 | 2.014 / 2.638 | 0.69× | 3.137 / 4.291 | 0.68× | 0.683 / 0.994 | 0.18× |
-| 1024 | 0.845 / 1.179 | **1.55×** | 2.058 / 2.780 | **1.04×** | 0.173 / 0.317 | 0.56× |
-| 4096 | 0.275 / 0.564 | **3.24×** | 1.858 / 2.728 | **1.06×** | 0.054 / 0.165 | **1.08×** |
+| 16 | 38.11 / 42.68 | 0.04× | 12.95 / 94.59 | 0.03× | 11.07 / 14.40 | 0.01× |
+| 64 | 7.672 / 9.319 | 0.20× | 3.454 / 21.08 | 0.12× | 2.741 / 3.829 | 0.05× |
+| 256 | 2.001 / 2.956 | 0.62× | 0.742 / 3.375 | 0.78× | 0.685 / 1.000 | 0.18× |
+| 1024 | 0.598 / 0.957 | **1.91×** | 0.449 / 1.284 | **2.05×** | 0.174 / 0.321 | 0.55× |
+| 4096 | 0.273 / 0.563 | **3.25×** | 0.319 / 0.898 | **2.93×** | 0.054 / 0.168 | **1.05×** |
 
 ---
 
@@ -279,22 +281,24 @@ Two architectural optimisations drove these numbers: (1) fusing `PK.seed ‖ ADR
 
 Each LM-OTS chain runs up to 255 sequential SHA-256 compressions; sorting rows by starting step and exiting per block achieves ~1 Ghash/s of 32-bit SHA-256 compression (~3× SLH-DSA's 64-bit Keccak rate).
 
-### 3.5 Falcon (FIPS 206 draft): verification core vs host decode
+### 3.5 Falcon (FIPS 206 draft): Falcon-512 & Falcon-1024 end-to-end on GPU
 
-In the same window (`B = 4096`, liboqs `pqclean_falcon-512` corpus):
-- **`Falcon-512`**: device core **`0.60–0.61 µs/op`** (**`37.2–38.3×` 1T, `5.55–5.72×` 16P**); end-to-end **`15.3–16.7 µs/op`** (`1.36–1.49×` 1T, **`0.20–0.22×` 16P**).
-- **`Falcon-padded-512`**: device core **`0.69 µs/op`** (**`32.9×` 1T, `5.01×` 16P**); end-to-end **`15.7 µs/op`** (`1.45×` 1T, **`0.22×` 16P**).
+In the same window (`B = 4096`, liboqs `pqclean_falcon-{512,1024}` corpus, barrier 16P CPU baseline):
+- **`Falcon-512`**: device core **`0.318 µs/op`** (**`71.7×` 1T, `8.29×` 16P**); end-to-end **`0.90–0.92 µs/op`** (**`24.9–25.4×` 1T, `2.88–2.94×` 16P**).
+- **`Falcon-padded-512`**: device core **`0.321 µs/op`** (**`70.9×` 1T, `8.26×` 16P**); end-to-end **`0.913 µs/op`** (**`24.9×` 1T, `2.90×` 16P**).
+- **`Falcon-1024`**: device core **`1.194 µs/op`** (**`36.7×` 1T, `4.35×` 16P**); end-to-end **`2.20–2.22 µs/op`** (**`19.8–19.9×` 1T, `2.34–2.36×` 16P**).
+- **`Falcon-padded-1024`**: device core **`1.135 µs/op`** (**`38.6×` 1T, `4.58×` 16P**); end-to-end **`2.183 µs/op`** (**`20.1×` 1T, `2.38×` 16P**).
 
-End-to-end stage breakdown at B=4096:
+End-to-end stage breakdown at `B = 4096` (measured with `benchmarks/bench_falcon_verify.py --profile`):
 
-| Stage | Where | µs/sig | Share of e2e |
+| Stage | Where | Falcon-512 (µs/sig) | Falcon-1024 (µs/sig) |
 |---|---|---:|---:|
-| Device core (`NTT(s2)`, pointwise, `INTT`, L2 check) | GPU | **0.60–0.61** | ~4% |
-| `HashToPoint` (SHAKE256 + prefix-sum filter) | GPU (uniform length) | **0.6** | ~4% |
-| Prefix signature decode (`comp_decode_batch`) | Host NumPy | **13.5** | ~81% |
-| Python/H2D/D2H glue | Host | ~1–2 | ~11% |
+| Prefix signature decode (`_pack_sig_words_kernel` + `_comp_decode_kernel`, incl. flat pack & H2D) | GPU | **0.20** (0.086 dev kernel) | **0.35** (0.115 dev kernel) |
+| `HashToPoint` (`_pad_nonce_msg_kernel` + rolled `sponge` + `_hash_to_point_kernel`) | GPU (uniform length) | **~0.35** | **~0.65** |
+| Device core (`NTT(s2)` + pointwise + `INTT` + L2 norm check) | GPU | **0.31–0.32** (NTT 0.14, INTT 0.11) | **1.19** (NTT 0.64, INTT 0.34) |
+| Full end-to-end (`Verifier.verify`) | GPU + flat H2D | **0.90–0.92** (**2.9× 16P**) | **2.20–2.22** (**2.35× 16P**) |
 
-**Why decode stays on the host:** moving `HashToPoint` to GPU was a **16× win** (`9.3 → 0.6 µs`), because `[BLK, 720]` prefix-sum compaction is coalesced. By contrast, a GPU `comp_decode` kernel was implemented, measured at **2.6 ms/sig** (**35× slower** than the early 75 µs host decoder and ~190× slower than the tuned 13.5 µs NumPy scan), and reverted — a variable-length prefix code turns every coefficient into a divergent per-lane gather.
+**How `comp_decode` flipped from a 35× loss to a 168×–232× win:** an early GPU `comp_decode` attempt ran 3-byte uncoalesced gathers plus global CLZ lookup tables per coefficient and measured **2.6 ms/sig** (~190× slower than the 13.5 µs host NumPy scan). Replacing it with (1) a single flat `b"".join(signatures)` upload, (2) `_pack_sig_words_kernel` transposing bodies into `[W, B]` big-endian `uint32` words, (3) a **64-bit register bit reservoir** (`acc`, `acc_len`) that refills one coalesced `uint32` word only ~32% of steps, (4) a 4-stage **branchless 16-bit CLZ** with zero lookup tables, and (5) keeping `c_t` and `s2_t` device-resident through `verify_core_torch` cut Falcon-512 end-to-end verification from **15.35 µs → 0.90 µs** (**17× faster**, flipping `0.22×` → **`2.88–2.94×` vs 16P CPU**). For Falcon-1024, rolling multi-block SHAKE256 squeezes in `primitives/sponge.py` enables the 20-block (`2624 B`) `HashToPoint` stream cleanly with one copy of the 24-round loop.
 
 ---
 

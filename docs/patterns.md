@@ -7,7 +7,7 @@ carries, modular arithmetic, the matrix unit, irregular memory access — and th
 would be a table saying which patterns are easy and which are hard.
 
 This is that table, as of 1.1.0. Every device number is from `benchmarks/snapshot.py` (one
-window, `benchmarks/snapshot-20261127T150247Z.md`) and `benchmarks/local-gpu-vs-cpu-20261127.md`;
+window, `benchmarks/snapshot-20261128T063642Z.md`) and `benchmarks/local-gpu-vs-cpu-20261128.md`;
 every CPU number is from `benchmarks/cpu_baseline_barrier.json` (OpenSSL / liboqs / Plonky3 /
 exact CPU GEMM, same machine, 16 concurrent processes measured with a barrier at matched 1 KiB
 message sizes). Sections in `docs/benchmarks.md` are cited where the detail lives.
@@ -34,19 +34,19 @@ that is set by three factors together.**
 
 | primitive | device | CPU 1T | CPU 16P (barrier) | vs 16P | instruction | SIMD width | chain |
 |---|---:|---:|---:|---:|---|---|---|
-| SHA3-256 | 31.3 GB/s | 0.62 GB/s | 6.32 GB/s | **4.95x** | none | 4 lanes | 24 rounds |
-| SHA-256 | 78.8 GB/s | 3.14 GB/s | 32.3 GB/s | **2.44x** | **SHA-NI** | serial | 64 rounds |
-| SHA-512 | 45.0 GB/s | 0.90 GB/s | 6.96 GB/s | **6.47x** | none here | serial | 80 rounds |
-| ChaCha20 | 14.3 GB/s | 4.28 GB/s | 23.3 GB/s | 0.61x | none | 8-16 lanes | short |
-| Poly1305 | 12.0 GB/s | 5.92 GB/s | 39.4 GB/s | 0.30x | **PCLMUL** | 26-bit limbs | short |
-| AES-128-CTR | 10.9 GB/s | 11.8 GB/s | 101 GB/s | 0.11x | **AES-NI** | VAES 8-16 | short |
-| BLAKE3 | 10.1 GB/s | 1.35 GB/s | 15.9 GB/s | 0.64x | none | **16 lanes** | short |
-| Poseidon2 | 3.3 GB/s | 9.31M/s | 46.0M/s | 0.57x | none | Plonky3 asm | long |
-| 2^20 NTT | 0.90 ms (0.85-1.64 ms, radix-4) | 19.1/s | 188/s | **5.91x** | none | memory-bound | n/a |
-| exact int8 GEMM | 3.82 TMAC/s (1024^3) | 66.5 GMAC/s | 409 GMAC/s | **9.33x** | FMA/AVX2 | matrix unit | n/a |
+| SHA3-256 | 30.9 GB/s | 0.62 GB/s | 6.32 GB/s | **4.89x** | none | 4 lanes | 24 rounds |
+| SHA-256 | 78.6 GB/s | 3.14 GB/s | 32.3 GB/s | **2.43x** | **SHA-NI** | serial | 64 rounds |
+| SHA-512 | 44.1 GB/s | 0.90 GB/s | 6.96 GB/s | **6.34x** | none here | serial | 80 rounds |
+| ChaCha20 | 13.0 GB/s | 4.28 GB/s | 23.3 GB/s | 0.56x | none | 8-16 lanes | short |
+| Poly1305 | 11.8 GB/s | 5.92 GB/s | 39.4 GB/s | 0.30x | **PCLMUL** | 26-bit limbs | short |
+| AES-128-CTR | 9.4 GB/s | 11.8 GB/s | 101 GB/s | 0.09x | **AES-NI** | VAES 8-16 | short |
+| BLAKE3 | 9.9 GB/s | 1.35 GB/s | 15.9 GB/s | 0.62x | none | **16 lanes** | short |
+| Poseidon2 | 3.2 GB/s | 9.31M/s | 46.0M/s | 0.54x | none | Plonky3 asm | long |
+| 2^20 NTT | 1.61 ms (0.85-1.64 ms, radix-4) | 19.1/s | 188/s | **3.30x** | none | memory-bound | n/a |
+| exact int8 GEMM | 3.38 TMAC/s (1024^3) | 66.5 GMAC/s | 409 GMAC/s | **8.28x** | FMA/AVX2 | matrix unit | n/a |
 
-(Device and CPU columns are from `benchmarks/snapshot-20261127T150247Z.md` and
-`benchmarks/cpu_baseline_barrier.json`; across clock states, the 2^20 NTT spans `3.83–7.28x`.
+(Device and CPU columns are from `benchmarks/snapshot-20261128T063642Z.md` and
+`benchmarks/cpu_baseline_barrier.json`; across clock states, the 2^20 NTT spans `3.3–7.3x`.
 Poseidon2, the NTT and GEMM are counted in permutations, transforms and MACs, not bytes.
 See `docs/benchmarks.md` §1.2 for the companion Host→Device→Host E2E column — notably `sha256`
 flips from `2.51x` device-only to `0.48x` end-to-end when paying a single 64 MiB H2D copy.)
@@ -90,7 +90,7 @@ Two corollaries that still hold:
 |---|---:|---|
 | SHA3-256 / SHAKE128 / SHAKE256 | **5.15-8.10x** | no Keccak instruction, 4 usable lanes, 24 dependent rounds |
 | SHA-256 | **2.80x** | SHA-NI is real but slower than the device's rolled schedule |
-| Falcon-512 verification (core) | **5.76x** | the CPU has no way to batch thousands of independent 512-point transforms |
+| Falcon-512 / Falcon-1024 verification | **8.3x / 4.4x dev (2.9x / 2.3x e2e)** | batched NTT + transposed bit-reservoir decoder + GPU `HashToPoint` beats 16P CPU end-to-end |
 | SHA3-512 / SHA-512 | **7.73x / 6.94x** | same as SHA3-256 (wide lanes) |
 | ML-DSA-44 verification | **1.6x** | batched NTT + sponge beats 16 barrier-measured liboqs processes |
 
@@ -105,17 +105,17 @@ an integrated GPU with a 16-core hybrid CPU beside it.
   correct from inside the same launch. Four sessions of bisection: the compression, one block
   step through a global buffer and a sixteen-launch chain all worked in isolation; the one line
   that differed was the shift. See `docs/benchmarks.md` §21.
-- **Falcon signature decoding on the device.** Tried because `comp_decode` is 96% of Falcon's
-  end-to-end cost. One lane per signature, 512 sequential steps (a prefix code cannot be
-  bit-gathered across a batch). **Measured 2.6 ms/signature against the host's 75 us — 35x
-  slower.** The host numpy version processes all signatures in lockstep against contiguous
-  memory; the device version turns every coefficient into a data-dependent gather. Reverted;
-  `docs/benchmarks.md` §16 records it.
-
-  The contrast with `HashToPoint`, which *did* move to the device (9.3 -> 0.6 us/signature), is
-  the useful part: a contiguous `[BLK, 720]` tile with a prefix-sum and a scatter is fast
-  (0.47 us per row), while the same number of gathered *bytes* at data-dependent addresses is
-  35x slower. Same problem size, opposite verdict — the access pattern, not the arithmetic.
+- **Falcon signature decoding on the device — failed first, then landed 168×–232× faster than host.**
+  The first attempt did 3-byte uncoalesced gathers plus global CLZ lookup tables per coefficient
+  and measured **2.6 ms/signature** (35× slower than the early 75 µs host decoder). Redesigning
+  the access pattern fixed it completely: `_pack_sig_words_kernel` transposes variable-length
+  bodies into `[W, B]` big-endian `uint32` words, and `_comp_decode_kernel` keeps a 64-bit
+  register bit reservoir per lane (refilling one coalesced word only ~32% of steps) plus a
+  4-stage branchless 16-bit CLZ with zero lookup tables. Result: **0.086–0.142 µs/signature** on
+  device, flipping Falcon-512 end-to-end from `15.35 µs` (`0.22×` 16P) to **`0.90–0.92 µs`**
+  (**`2.9×` 16P**) and Falcon-1024 to **`2.18–2.22 µs`** (**`2.3–2.4×` 16P**; see
+  `docs/benchmarks.md` §3.5). Same algorithm, opposite verdict — the access pattern decides
+  everything.
 - **Large-N NTT (2^20) — landed and tuned, and it is the one row that wins.** `ntt/large.py` is
   correct (agrees with `NTTDomain` where both fit, round trip exact) and takes **1.0-1.8 ms:
   70x one CPU core and 5.3x sixteen processes** at the fast clock. Four fixes took it from 10.8 ms
