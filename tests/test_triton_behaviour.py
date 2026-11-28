@@ -18,6 +18,8 @@ import torch
 import triton
 import triton.language as tl
 
+from triton_crypto.devices import resolve_device
+
 
 @triton.jit
 def _sort1d(X, OUT, N: tl.constexpr, DESC: tl.constexpr):
@@ -43,7 +45,7 @@ def _sort2d_axis0(X, OUT, B: tl.constexpr, N: tl.constexpr):
 
 @pytest.mark.parametrize("descending", [False, True])
 def test_one_dimensional_sort_is_correct(descending):
-    dev = torch.device("xpu")
+    dev = resolve_device()
     data = np.random.default_rng(0).integers(0, 1000, 256).astype(np.int32)
     out = torch.zeros(256, dtype=torch.int32, device=dev)
     _sort1d[(1,)](torch.as_tensor(data, device=dev), out, N=256, DESC=descending)
@@ -55,7 +57,7 @@ def test_one_dimensional_sort_is_correct(descending):
 
 
 def test_two_dimensional_sort_along_the_last_axis_is_correct():
-    dev = torch.device("xpu")
+    dev = resolve_device()
     data = np.random.default_rng(1).integers(0, 1000, (8, 64)).astype(np.int32)
     out = torch.zeros((8, 64), dtype=torch.int32, device=dev)
     _sort2d_last[(1,)](torch.as_tensor(data, device=dev), out, B=8, N=64)
@@ -66,7 +68,7 @@ def test_two_dimensional_sort_along_the_last_axis_is_correct():
 def test_two_dimensional_sort_along_axis_zero_is_refused_loudly():
     """The original note said "silently wrong"; on this build it does not compile, which is the
     better failure mode and the one worth pinning."""
-    dev = torch.device("xpu")
+    dev = resolve_device()
     data = np.zeros((8, 64), dtype=np.int32)
     out = torch.zeros((8, 64), dtype=torch.int32, device=dev)
     with pytest.raises(Exception):  # noqa: B017 - the point is that it raises at all
@@ -87,7 +89,7 @@ def test_percent_on_a_negative_int_is_the_truncated_remainder():
     This is why every modular subtraction in this repository is written as a conditional add
     rather than as `(a - b) % q`.
     """
-    dev = torch.device("xpu")
+    dev = resolve_device()
     q = 12289
     data = np.array([-1, -q, -q - 1, 5, 0], dtype=np.int32)
     out = torch.zeros(len(data), dtype=torch.int32, device=dev)
@@ -103,7 +105,7 @@ def test_percent_on_a_negative_int_is_the_truncated_remainder():
 def test_expand_produces_a_non_contiguous_view():
     """`patterns.md` trap 3: a kernel that indexes an `expand`ed tensor linearly reads past the
     first row, which is what broke Falcon's pointwise product."""
-    dev = torch.device("xpu")
+    dev = resolve_device()
     base = torch.arange(8, dtype=torch.int32, device=dev)[None, :]
     expanded = base.expand(4, 8)
     assert expanded.shape == (4, 8)
@@ -123,7 +125,7 @@ def _tuple_in_runtime_loop(X, OUT, ITERS):
 def test_a_runtime_loop_cannot_carry_a_tuple():
     """`patterns.md` trap 5: it fails loudly, which is why BLAKE3's chaining value had to live in a
     buffer between launches rather than in a tuple."""
-    dev = torch.device("xpu")
+    dev = resolve_device()
     src = torch.zeros(1, dtype=torch.int32, device=dev)
     out = torch.zeros(1, dtype=torch.int32, device=dev)
     with pytest.raises(Exception):  # noqa: B017 - a CompilationError today
@@ -143,7 +145,7 @@ def test_shifting_a_32_bit_value_by_32_gives_zero_and_only_warns():
     The backend accepts it, emits a `UserWarning` that a test log filters out, and produces zeros.
     In BLAKE3 that silently zeroed a kernel's results for four sessions.
     """
-    dev = torch.device("xpu")
+    dev = resolve_device()
     import warnings
 
     src = torch.ones(8, dtype=torch.uint32, device=dev).view(torch.int32)
@@ -154,7 +156,14 @@ def test_shifting_a_32_bit_value_by_32_gives_zero_and_only_warns():
         warnings.simplefilter("always")
         _shift_by_width[(1,)](src, out, N=8)
         torch.accelerator.synchronize()
-    assert out.cpu().numpy().tolist() == [0] * 8
+    got = out.cpu().numpy().tolist()
+    # Undefined behaviour: Intel Xe folds the shift to 0; NVIDIA NVPTX lowers `undef` to
+    # backend-dependent garbage (neither returns the mathematical high-word 0 reliably across
+    # backends, and neither raises a compile error).
+    if dev.type == "xpu":
+        assert got == [0] * 8
+    else:
+        assert got != [1] * 8
     # The warning is emitted at *compile* time, and Triton caches compiled kernels on disk -- so a
     # second run of this suite sees no warning at all. That is part of the trap: the only evidence
     # is printed once, on a build nobody re-runs, and gone afterwards.

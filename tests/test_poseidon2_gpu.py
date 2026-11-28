@@ -52,9 +52,11 @@ def test_single_state_round_trip():
 def test_out_buffer_is_used():
     import torch
 
+    from triton_crypto.devices import resolve_device
+
     rng = np.random.default_rng(11)
     x = rng.integers(0, BABYBEAR_POSEIDON2_16.q, (64, 16))
-    out = torch.empty((64, 16), dtype=torch.int32, device="xpu")
+    out = torch.empty((64, 16), dtype=torch.int32, device=resolve_device())
     got = poseidon2_permute_torch(x, out=out)
     assert got.data_ptr() == out.data_ptr()
     assert np.array_equal(got.cpu().numpy().astype(np.int64), poseidon2_permute_np(x))

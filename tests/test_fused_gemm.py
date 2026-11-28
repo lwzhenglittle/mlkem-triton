@@ -289,6 +289,7 @@ def test_the_epilogue_mask_keeps_the_pipelined_kernel_safe():
     proves little -- and no bigger, because a test that wedges the device takes the rest of the
     process with it.
     """
+    from triton_crypto import devices
     from triton_crypto.mlkem.kernels.fused_gemm import fused_enc_gemm
 
     M, B, du, dv = 1024, 256, 10, 4
@@ -300,5 +301,5 @@ def test_the_epilogue_mask_keeps_the_pipelined_kernel_safe():
     for i in range(3):
         cnt = torch.zeros(B, device=DEV, dtype=torch.int32)
         assert fused_enc_gemm(W, Y, E, (ref1, ref2), cnt, B, du, dv) is True
-        torch.xpu.synchronize()
+        devices.sync(DEV)
         assert torch.equal(cnt, want), f"repeat {i} disagreed with the reference"

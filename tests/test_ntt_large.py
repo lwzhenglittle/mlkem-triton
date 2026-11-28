@@ -96,11 +96,13 @@ def test_the_numpy_input_entry_points_agree_with_the_tensor_ones():
     matches what it holds."""
     import torch
 
+    from triton_crypto.devices import resolve_device
+
     logn = 12
     t = LargeNTT(1 << logn, Q)
     rng = np.random.default_rng(logn + 500)
     a = rng.integers(0, Q, 1 << logn)
-    x = torch.as_tensor(a, dtype=torch.int32, device="xpu")
+    x = torch.as_tensor(a, dtype=torch.int32, device=resolve_device())
     assert np.array_equal(
         t.forward_torch(a).cpu().numpy().astype(np.int64),
         t.forward_tensor_torch(x, x.device).cpu().numpy().astype(np.int64),
@@ -143,9 +145,11 @@ def test_the_input_tensor_is_not_modified(radix):
     """
     import torch
 
+    from triton_crypto.devices import resolve_device
+
     t = LargeNTT(1 << 12, Q, radix=radix)
     a = np.random.default_rng(radix).integers(0, Q, 1 << 12)
-    x = torch.as_tensor(a, dtype=torch.int32, device="xpu")
+    x = torch.as_tensor(a, dtype=torch.int32, device=resolve_device())
     before = x.cpu().numpy().copy()
     first = t.forward_tensor_torch(x, dev=x.device).cpu().numpy().astype(np.int64)
     second = t.forward_tensor_torch(x, dev=x.device).cpu().numpy().astype(np.int64)
@@ -163,8 +167,10 @@ def test_rejects_wrong_shapes_before_touching_the_device():
     """
     import torch
 
+    from triton_crypto.devices import resolve_device
+
     t = LargeNTT(64, Q)
-    dev = torch.device("xpu")
+    dev = resolve_device()
     with pytest.raises(ValueError, match=r"b must be 1-D of length 64"):
         t.mul_torch(np.zeros(64, dtype=np.int64), np.zeros(32, dtype=np.int64))
     with pytest.raises(ValueError, match=r"a must be 1-D of length 64"):

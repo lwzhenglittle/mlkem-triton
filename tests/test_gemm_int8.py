@@ -67,10 +67,12 @@ def test_reference_checks_shape_and_range():
 def test_out_buffer_is_used():
     import torch
 
+    from triton_crypto.devices import resolve_device
+
     rng = np.random.default_rng(11)
     a = rng.integers(-8, 8, (32, 32), dtype=np.int8)
     b = rng.integers(-8, 8, (32, 32), dtype=np.int8)
-    out = torch.empty((32, 32), dtype=torch.int32, device="xpu")
+    out = torch.empty((32, 32), dtype=torch.int32, device=resolve_device())
     got = gemm_int8_torch(a, b, out=out)
     assert got.data_ptr() == out.data_ptr()
     assert np.array_equal(got.cpu().numpy().astype(np.int64), gemm_int8_np(a, b))

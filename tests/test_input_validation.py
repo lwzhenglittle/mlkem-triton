@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from triton_crypto.devices import resolve_device
 from triton_crypto.primitives import aes, blake3, gemm, poly1305, poseidon2
 
 
@@ -133,7 +134,7 @@ def test_device_entry_points_accept_device_tensors():
     b = np.ones((8, 8), np.int8)
     want = gemm.gemm_int8_np(a, b)
     assert np.array_equal(gemm.gemm_int8_torch(a, b).cpu().numpy(), want)
-    dev = torch.device("xpu")
+    dev = resolve_device()
     got = (
         gemm.gemm_int8_torch(torch.as_tensor(a, device=dev), torch.as_tensor(b, device=dev))
         .cpu()
@@ -150,7 +151,7 @@ def test_device_entry_points_do_not_modify_their_inputs(api):
     """
     import torch
 
-    dev = torch.device("xpu")
+    dev = resolve_device()
     if api == "blake3":
         msgs = np.zeros((4, 64), np.uint8)
         before = msgs.copy()
@@ -188,7 +189,7 @@ def test_blake3_accepts_a_device_tensor():
     rng = np.random.default_rng(9)
     msgs = rng.integers(0, 256, (3, 300), dtype=np.uint8)
     want = blake3.blake3_hash_torch(msgs).cpu().numpy()
-    dev = torch.device("xpu")
+    dev = resolve_device()
     assert np.array_equal(
         blake3.blake3_hash_torch(torch.as_tensor(msgs, device=dev)).cpu().numpy(), want
     )
@@ -206,7 +207,7 @@ def test_mul_torch_accepts_device_operands():
     q = 2013265921
     t = LargeNTT(1 << 10, q)
     a = np.random.default_rng(10).integers(0, q, 1 << 10)
-    dev = torch.device("xpu")
+    dev = resolve_device()
     ta = torch.as_tensor(a, dtype=torch.int32, device=dev)
     assert np.array_equal(t.mul_torch(ta, ta).cpu().numpy().astype(np.int64), t.mul_np(a, a))
     # and the host path still works
@@ -224,7 +225,7 @@ def test_chacha20_accepts_device_tensors(api):
 
     from triton_crypto.primitives import chacha20
 
-    dev = torch.device("xpu")
+    dev = resolve_device()
     keys = np.zeros((2, 32), np.uint8)
     nonces = np.zeros((2, 12), np.uint8)
     if api == "chacha20_keystream":

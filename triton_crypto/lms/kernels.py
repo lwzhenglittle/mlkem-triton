@@ -29,11 +29,6 @@ def gen_source(nw: int = 8) -> str:
         "import triton.language as tl",
         "",
         "@triton.jit",
-        "def _bs32(x):",
-        "    x = x.to(tl.uint32)",
-        "    return ((x & 0xFF) << 24) | ((x & 0xFF00) << 8) | ((x >> 8) & 0xFF00) | ((x >> 24) & 0xFF)",
-        "",
-        "@triton.jit",
         "def _r(x, r):",
         "    x = x.to(tl.uint32)",
         "    return (x >> r) | (x << (32 - r))",
@@ -48,15 +43,17 @@ def gen_source(nw: int = 8) -> str:
         "    cidx = tl.load(CIDX + row, mask=m, other=0).to(tl.uint32)",
         "    qw = tl.load(QW + row, mask=m, other=0).to(tl.uint32)",
     ]
+    # VALUE and IW arrive as native-endian uint32 SHA-256 words (byte-swapped in `chains()`).
+    # Keeping byte-swapping out of the generated kernel avoids an LLVM/NVPTX instruction-selection
+    # crash (`Cannot select: v2i32 = bswap`) triggered when SLP vectorises adjacent `_bs32` loads.
     for k in range(4):
         L.append(
-            f"    iw{k} = _bs32(tl.load(IW + row * 4 + {k}, mask=m, other=0).to(tl.uint32,"
-            f" bitcast=True))"
+            f"    iw{k} = tl.load(IW + row * 4 + {k}, mask=m, other=0).to(tl.uint32, bitcast=True)"
         )
     for k in range(nw):
         L.append(
-            f"    v{k} = _bs32(tl.load(VALUE + row * {nw} + {k}, mask=m, other=0).to(tl.uint32,"
-            f" bitcast=True))"
+            f"    v{k} = tl.load(VALUE + row * {nw} + {k}, mask=m, other=0).to(tl.uint32,"
+            f" bitcast=True)"
         )
     L.append("    zero_v = tl.zeros((BLOCK,), dtype=tl.uint32)")
     L.append("    j = start")
@@ -113,10 +110,7 @@ def gen_source(nw: int = 8) -> str:
         L.append(f"        v{k} = tl.where(active, a{k} + iv{k}, v{k})")  # feed-forward
     L.append("        j = j + 1")
     for k in range(nw):
-        L.append(
-            f"    tl.store(VALUE + row * {nw} + {k}, _bs32(v{k}).to(tl.int32, bitcast=True),"
-            f" mask=m)"
-        )
+        L.append(f"    tl.store(VALUE + row * {nw} + {k}, v{k}.to(tl.int32, bitcast=True), mask=m)")
     return "\n".join(L) + "\n"
 
 
@@ -126,6 +120,12 @@ def _compile(nw: int = 8):
     mod = compile_generated(gen_source(nw), "lms_chain")
     KERNELS[nw] = mod.lms_chain_kernel
     return mod.lms_chain_kernel
+
+
+def _bswap32_tensor(t):
+    import torch
+
+    return t.view(torch.uint8).reshape(-1, 4).flip(-1).contiguous().view(torch.int32).reshape_as(t)
 
 
 def chains(value, ident_words, q_words, cidx, start, w: int, nw: int = 8, block: int = 128):
@@ -138,9 +138,11 @@ def chains(value, ident_words, q_words, cidx, start, w: int, nw: int = 8, block:
 
     rows = value.shape[0]
     kern = _compile(nw)
+    be_val = _bswap32_tensor(value)
+    be_iw = _bswap32_tensor(ident_words)
     kern[(triton.cdiv(rows, block),)](
-        value,
-        ident_words,
+        be_val,
+        be_iw,
         q_words,
         cidx,
         start,
@@ -152,6 +154,7 @@ def chains(value, ident_words, q_words, cidx, start, w: int, nw: int = 8, block:
         BLOCK=block,
         num_warps=4,
     )
+    value.copy_(_bswap32_tensor(be_val))
 
 
 _IV_CACHE: dict = {}
